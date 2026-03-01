@@ -135,6 +135,88 @@ Use `Shift+Q` to quit lazygit without triggering a directory change.
 
 The `lg` function is sourced alongside `wt` — no extra setup needed. If lazygit isn't installed, calling `lg` prints a warning and exits.
 
+### Neovim
+
+The `lg` shell wrapper doesn't help when lazygit runs inside Neovim — the terminal's `cd` can't reach Neovim's working directory. To get auto-cd working in Neovim, pass `LAZYGIT_NEW_DIR_FILE` via your plugin's `env` option and read it back on `TermClose`.
+
+<details>
+<summary>snacks.nvim (folke/snacks.nvim)</summary>
+
+```lua
+{ "<leader>lg", function()
+  local snacks = require("snacks")
+  local newdir_file = vim.fn.expand("~/.lazygit/newdir")
+  vim.fn.mkdir(vim.fn.expand("~/.lazygit"), "p")
+
+  local win = snacks.lazygit({
+    env = { LAZYGIT_NEW_DIR_FILE = newdir_file },
+  })
+
+  win:on("TermClose", function()
+    vim.schedule(function()
+      local f = io.open(newdir_file, "r")
+      if not f then return end
+      local dir = f:read("*a"):gsub("%s+$", "")
+      f:close()
+      os.remove(newdir_file)
+      if dir ~= "" and dir ~= vim.fn.getcwd() then
+        vim.cmd("cd " .. vim.fn.fnameescape(dir))
+      end
+    end)
+  end, { buf = true })
+end, desc = "Lazygit" },
+```
+
+</details>
+
+<details>
+<summary>lazygit.nvim (kdheepak/lazygit.nvim)</summary>
+
+`lazygit.nvim` supports this natively. Add to your config:
+
+```lua
+{
+  "kdheepak/lazygit.nvim",
+  config = function()
+    vim.g.lazygit_use_neovim_remote = 1
+  end,
+}
+```
+
+The plugin sets `LAZYGIT_NEW_DIR_FILE` automatically and calls `cd` on exit.
+
+</details>
+
+<details>
+<summary>toggleterm.nvim (akinsho/toggleterm.nvim)</summary>
+
+```lua
+local Terminal = require("toggleterm.terminal").Terminal
+
+local lazygit = Terminal:new({
+  cmd = "lazygit",
+  direction = "float",
+  env = { LAZYGIT_NEW_DIR_FILE = vim.fn.expand("~/.lazygit/newdir") },
+  on_close = function()
+    local newdir_file = vim.fn.expand("~/.lazygit/newdir")
+    local f = io.open(newdir_file, "r")
+    if not f then return end
+    local dir = f:read("*a"):gsub("%s+$", "")
+    f:close()
+    os.remove(newdir_file)
+    if dir ~= "" and dir ~= vim.fn.getcwd() then
+      vim.cmd("cd " .. vim.fn.fnameescape(dir))
+    end
+  end,
+})
+
+vim.keymap.set("n", "<leader>lg", function() lazygit:toggle() end, { desc = "Lazygit" })
+```
+
+</details>
+
+The pattern is the same for any terminal plugin: set `LAZYGIT_NEW_DIR_FILE` as an env var, read the file after lazygit exits, and call `cd`.
+
 ---
 
 ## Uninstall
