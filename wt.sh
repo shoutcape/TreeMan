@@ -15,9 +15,12 @@
 # Detect the default branch on origin (main or master).
 # Prints the branch name to stdout. Returns 1 if neither exists.
 _wt_detect_default_branch() {
-  if git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+  local refs
+  refs=$(git ls-remote --heads origin main master 2>/dev/null)
+
+  if echo "$refs" | grep -q 'refs/heads/main$'; then
     echo "main"
-  elif git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
+  elif echo "$refs" | grep -q 'refs/heads/master$'; then
     echo "Warning: no 'main' branch found on origin, using 'master'." >&2
     echo "master"
   else
@@ -31,7 +34,7 @@ _wt_detect_default_branch() {
 # Returns 1 if the install command fails.
 _wt_install_deps() {
   local dir="$1"
-  local lockfile rest binary args label
+  local lockfile rest binary args
 
   # lockfile : binary : args
   # NOTE: No field may contain a colon character.
@@ -51,7 +54,11 @@ _wt_install_deps() {
     if [[ -f "$dir/$lockfile" ]]; then
       if command -v "$binary" >/dev/null 2>&1; then
         echo "Detected $lockfile — running $binary $args..."
-        (cd "$dir" && eval "$binary $args")
+        # Run in a POSIX sh subshell for portable word-splitting of $args.
+        # Zsh doesn't word-split by default, so we delegate to sh where
+        # "go mod download" correctly becomes: go mod download (3 words).
+        # Safe: $binary and $args are hardcoded literals from the deps array.
+        (cd "$dir" && sh -c '"$1" $2' _ "$binary" "$args")
         return $?
       else
         echo "Warning: $lockfile found but $binary is not installed, skipping." >&2
@@ -76,12 +83,13 @@ _wt_copy_env_files() {
   local dest="$2"
   local copied=0
 
-  for f in "$src"/.env*; do
+  # Use find instead of a glob to avoid zsh NOMATCH errors when no .env* files exist
+  while IFS= read -r f; do
     [ -f "$f" ] || continue
     cp "$f" "$dest/"
     echo "  Copied $(basename "$f")"
     copied=$((copied + 1))
-  done
+  done < <(find "$src" -maxdepth 1 -name '.env*' -type f 2>/dev/null)
 
   if [ "$copied" -gt 0 ]; then
     echo "Copied $copied env file(s) from main worktree."
@@ -97,6 +105,12 @@ wt() {
 
   if [[ -z "$branch" ]]; then
     echo "Usage: wt <branch-name>" >&2
+    return 1
+  fi
+
+  # Reject branch names with characters that git doesn't allow
+  if [[ "$branch" =~ [[:space:]~\^:?\*\[\\] ]]; then
+    echo "Error: branch name contains invalid characters." >&2
     return 1
   fi
 
@@ -129,6 +143,12 @@ wt() {
   local branch_slug="${branch//\//-}"
   local worktree_path
   worktree_path="$(dirname "$main_root")/${repo_name}.${branch_slug}"
+
+  # Guard against existing directory
+  if [[ -d "$worktree_path" ]]; then
+    echo "Error: directory '$worktree_path' already exists." >&2
+    return 1
+  fi
 
   # Create the worktree + branch
   echo "Creating worktree at $worktree_path (branch: $branch)..."
