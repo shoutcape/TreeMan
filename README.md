@@ -122,6 +122,21 @@ git wt feature/my-thing
 
 ---
 
+## Lazygit integration
+
+TreeMan includes an `lg` wrapper function for [lazygit](https://github.com/jesseduffield/lazygit). When you switch worktrees inside lazygit, `lg` automatically `cd`s your shell to the new worktree directory on exit.
+
+```bash
+lg          # launch lazygit with auto-cd
+lg --help   # all lazygit flags work as normal
+```
+
+Use `Shift+Q` to quit lazygit without triggering a directory change.
+
+The `lg` function is sourced alongside `wt` — no extra setup needed. If lazygit isn't installed, calling `lg` prints a warning and exits.
+
+---
+
 ## Uninstall
 
 ```bash

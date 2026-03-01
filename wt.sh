@@ -166,3 +166,28 @@ wt() {
   echo "Worktree ready:"
   echo "  cd \"$worktree_path\""
 }
+
+# ---------------------------------------------------------------------------
+# Lazygit wrapper — auto-cd after worktree switch
+# ---------------------------------------------------------------------------
+
+lg() {
+  if ! command -v lazygit >/dev/null 2>&1; then
+    echo "Warning: lazygit is not installed." >&2
+    return 1
+  fi
+
+  local newdir_file="$HOME/.lazygit/newdir"
+  mkdir -p "$HOME/.lazygit"
+
+  LAZYGIT_NEW_DIR_FILE="$newdir_file" lazygit "$@"
+
+  if [[ -f "$newdir_file" ]]; then
+    local target
+    target=$(<"$newdir_file")
+    rm -f "$newdir_file"
+    if [[ -n "$target" && "$target" != "$(pwd)" ]]; then
+      cd "$target" || return 1
+    fi
+  fi
+}
