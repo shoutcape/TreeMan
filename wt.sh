@@ -152,12 +152,7 @@ wt() {
 
   # Create the worktree + branch
   echo "Creating worktree at $worktree_path (branch: $branch)..."
-  git worktree add -b "$branch" "$worktree_path" "origin/$default_branch" || return 1
-
-  # Unset upstream tracking so the branch behaves like a regular new branch.
-  # Without this, git auto-tracks origin/<default_branch> which causes 'git push'
-  # to target main instead of the new branch.
-  git -C "$worktree_path" branch --unset-upstream "$branch" 2>/dev/null
+  HUSKY=0 git worktree add --no-track -b "$branch" "$worktree_path" "origin/$default_branch" || return 1
 
   # Copy env files from main worktree (before dep install, as some hooks may need them)
   _wt_copy_env_files "$main_root" "$worktree_path"
