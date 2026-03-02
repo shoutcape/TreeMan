@@ -24,11 +24,11 @@ Worktree ready:
 ### `wts` — switch
 
 ```
-┌──────────────── worktrees ────────────────┐
-│ switch >                                  │
-│ Github/my-project                  [main] │
+┌──────────────── worktrees ────────────────────────────┐
+│ switch >                                              │
+│ Github/my-project  [main]                             │
 │ Github/my-project.feature-my-thing [feature/my-thing] │
-└───────────────────────────────────────────┘
+└───────────────────────────────────────────────────────┘
 ```
 
 ---
