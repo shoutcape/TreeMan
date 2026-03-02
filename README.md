@@ -1,31 +1,48 @@
 # TreeMan
 
-A single shell function that creates a git worktree, a new branch based off the latest `main`, and auto-installs dependencies — in one command.
+Shell functions for git worktree workflows — create new worktrees with automatic dependency installation, and switch between them with an interactive picker.
 
 No runtime required. No config files. Works with bash and zsh.
 
 ```bash
-wt feature/my-thing
+wt feature/my-thing        # create a new worktree + branch
+wts                        # switch between worktrees (fzf picker)
 ```
+
+### `wt` — create
 
 ```
 Fetching latest main from origin...
 Creating worktree at ~/Github/my-project.feature-my-thing (branch: feature/my-thing)...
+Copied .env, .env.local
 Detected pnpm-lock.yaml — running pnpm install...
 
 Worktree ready:
   cd /home/user/Github/my-project.feature-my-thing
 ```
 
+### `wts` — switch
+
+```
+┌──────────────── worktrees ────────────────┐
+│ switch >                                  │
+│ Github/my-project                  [main] │
+│ Github/my-project.feature-my-thing [feature/my-thing] │
+└───────────────────────────────────────────┘
+```
+
 ---
 
 ## How it works
+
+### `wt` — worktree creation
 
 1. **Validates** you're inside a git repo with a branch name argument
 2. **Detects the default branch** — checks for `origin/main`, falls back to `origin/master`
 3. **Fetches** the latest from origin so the new branch is always up to date
 4. **Creates** a new branch and worktree at `../<repo>.<branch-slug>` (sibling of your main repo)
-5. **Installs dependencies** by detecting the project's lockfile:
+5. **Copies `.env*` files** from the main worktree so the new worktree has the same environment
+6. **Installs dependencies** by detecting the project's lockfile:
    | Lockfile | Command |
    |---|---|
    | `pnpm-lock.yaml` | `pnpm install` |
@@ -33,9 +50,17 @@ Worktree ready:
    | `package-lock.json` | `npm install` |
    | `go.mod` | `go mod download` |
    | `requirements.txt` / `pyproject.toml` | notifies you to activate venv manually |
-6. **Prints the path** to `cd` into
+7. **Prints the path** to `cd` into
 
 Works correctly even when run from inside an existing worktree — always targets the main worktree root.
+
+### `wts` — worktree switching
+
+1. **Lists** all worktrees via `git worktree list`
+2. **Opens an fzf picker** showing shortened paths (last two path components) and branch names with color highlighting
+3. **`cd`s** into the selected worktree
+
+An optional query argument pre-filters the list (e.g. `wts feat`). If the query matches exactly one worktree, it's selected automatically.
 
 ---
 
@@ -55,6 +80,7 @@ Slashes in branch names become dashes in the directory name:
 
 - `git`
 - `bash` or `zsh`
+- [`fzf`](https://github.com/junegunn/fzf) (for `wts` only)
 - The package manager your project uses (only needed when a lockfile is detected)
 
 ---
@@ -112,12 +138,14 @@ git config --global alias.wt '!wt'
 ## Usage
 
 ```bash
-# From inside any git repo:
+# Create a new worktree + branch:
 wt <branch-name>
-
-# Both of these work once the alias is set up:
 wt feature/my-thing
-git wt feature/my-thing
+git wt feature/my-thing     # git alias
+
+# Switch between worktrees (fzf picker):
+wts                         # opens interactive picker
+wts feat                    # pre-filters the list
 ```
 
 ---
