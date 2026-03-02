@@ -73,6 +73,13 @@ print_step "Registering 'git wt' alias..."
 git config --global alias.wt '!wt'
 print_done
 
+# --- Check optional dependencies --------------------------------------------
+
+if ! command -v fzf >/dev/null 2>&1; then
+  print_warn "fzf is not installed. The 'wts' command (interactive worktree switcher) requires it."
+  echo "    Install it from: https://github.com/junegunn/fzf"
+fi
+
 # --- Final message -----------------------------------------------------------
 
 echo ""
@@ -82,5 +89,6 @@ echo "Reload your shell to start using it:"
 echo "  source $SHELL_RC"
 echo ""
 echo "Usage:"
-echo "  wt <branch-name>"
-echo "  git wt <branch-name>"
+echo "  wt  <branch-name>   Create a new worktree + branch"
+echo "  wts [query]          Switch between worktrees (requires fzf)"
+echo "  git wt <branch-name> "
