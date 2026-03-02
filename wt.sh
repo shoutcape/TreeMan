@@ -1,12 +1,14 @@
-# TreeMan — wt
-# Git worktree + branch creation with automatic dependency installation.
+# TreeMan — wt & wts
+# Git worktree + branch creation with automatic dependency installation,
+# and interactive worktree switching via fzf.
 #
 # Usage:
-#   wt <branch-name>
+#   wt  <branch-name>      Create a new worktree + branch
+#   wts [query]             Switch between worktrees (fzf picker)
 #   git wt <branch-name>   (after: git config --global alias.wt '!wt')
 #
 # Supports: bash, zsh
-# Dependencies: git, and whichever package manager your project uses
+# Dependencies: git, fzf (for wts), and whichever package manager your project uses
 
 # ---------------------------------------------------------------------------
 # Helpers (prefixed with _ to avoid polluting the user's namespace)
@@ -165,6 +167,78 @@ wt() {
   echo ""
   echo "Worktree ready:"
   echo "  cd \"$worktree_path\""
+}
+
+# ---------------------------------------------------------------------------
+# Worktree switcher — interactive fzf picker
+# ---------------------------------------------------------------------------
+
+wts() {
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "Error: fzf is required for wts. Install it from https://github.com/junegunn/fzf" >&2
+    return 1
+  fi
+
+  local lines
+  lines=$(git worktree list 2>/dev/null)
+  if [ -z "$lines" ]; then
+    echo "Not in a git repository or no worktrees found."
+    return 1
+  fi
+
+  local count
+  count=$(echo "$lines" | wc -l | tr -d ' ')
+  if [ "$count" -eq 1 ]; then
+    echo "Only one worktree exists — nothing to switch to."
+    return 0
+  fi
+
+  local current_dir
+  current_dir=$(pwd)
+
+  # Show only the last two path components in fzf for readability,
+  # but keep a parallel array of full paths for cd.
+  # Add color: path in white, branch in cyan.
+  local display full_paths
+  display=$(echo "$lines" | awk '{
+    path = $1
+    n = split(path, parts, "/")
+    short = (n >= 2) ? parts[n-1] "/" parts[n] : parts[n]
+    printf "%-40s  \033[36m%s\033[0m\n", short, $3
+  }')
+  # Extract full paths in original order for lookup after selection
+  full_paths=$(echo "$lines" | awk '{print $1}')
+
+  local selection
+  selection=$(echo "$display" | fzf \
+    --ansi \
+    --border-label=" worktrees " \
+    --prompt="switch > " \
+    --query="${1:-}" \
+    --select-1 \
+    --exit-0)
+
+  if [ -z "$selection" ]; then
+    return 0
+  fi
+
+  # Find the selected line number and map back to the full path.
+  # Strip ANSI codes from display lines before matching, since fzf --ansi
+  # returns plain text.
+  local line_num
+  line_num=$(echo "$display" | sed $'s/\033\\[[0-9;]*m//g' | grep -nxF "$selection" | head -1 | cut -d: -f1)
+  local dest
+  dest=$(echo "$full_paths" | sed -n "${line_num}p")
+
+  if [ "$dest" = "$current_dir" ]; then
+    echo "Already in this worktree."
+    return 0
+  fi
+
+  cd "$dest" || return 1
+  local short="${dest%/}"
+  short="${short##*/}"
+  echo "cd → …/$short"
 }
 
 # ---------------------------------------------------------------------------
