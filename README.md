@@ -11,6 +11,8 @@ wts                        # switch between worktrees (fzf picker)
 
 ### `wt` — create
 
+<video src="https://github.com/user-attachments/assets/7491c0eb-896f-4046-b46b-1c3db01619c3" width="400"></video>
+
 ```
 Fetching latest main from origin...
 Creating worktree at ~/Github/my-project.feature-my-thing (branch: feature/my-thing)...
@@ -22,6 +24,9 @@ Worktree ready:
 ```
 
 ### `wts` — switch
+
+
+<video src="https://github.com/user-attachments/assets/ebb762c0-f530-4f35-aa3e-4b2c04c1f75b" width="300"></video>
 
 ```
 ┌──────────────── worktrees ────────────────────────────┐
