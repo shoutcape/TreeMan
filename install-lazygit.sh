@@ -105,6 +105,10 @@ ENTRY="  - key: 'W' # TreeMan
 # ---------------------------------------------------------------------------
 
 if ! grep -q '^customCommands:' "$config_file"; then
+  # Strip empty YAML document literal ({}) before appending
+  tmp=$(mktemp)
+  grep -v '^{}$' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
+
   # Case A: No customCommands key — append the full block
   cat >> "$config_file" << EOF
 
