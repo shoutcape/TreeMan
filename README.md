@@ -194,16 +194,18 @@ TreeMan can add custom keybindings to lazygit for creating and deleting worktree
 
 **Install:**
 
-```bash
-bash install-lazygit.sh
-```
+`install.sh` automatically detects if lazygit is installed and idempotently injects the keybindings. Running it twice is safe.
 
-Requires `lazygit` to be installed and TreeMan's `install.sh` to have been run first. The script auto-detects the lazygit config location on macOS and Linux and injects the keybindings idempotently — running it twice is safe.
+```bash
+curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
+```
 
 **Uninstall:**
 
+The unified uninstaller natively detects and removes the injected lazygit configuration.
+
 ```bash
-bash uninstall-lazygit.sh
+curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash -s uninstall
 ```
 
 ---
@@ -318,8 +320,6 @@ Or manually:
 
 ### Uninstall lazygit keybindings
 
-```bash
-bash uninstall-lazygit.sh
-```
+The lazygit configuration is automatically removed if you run the standard uninstall command (`bash -s uninstall`).
 
 Or manually remove all lines marked with `# TreeMan` from your lazygit `config.yml` (find its location with `lazygit -cd`).
