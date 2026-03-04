@@ -18,7 +18,7 @@ remove_from_rc() {
   fi
   if grep -qF "$SOURCE_MARKER" "$rc_file" 2>/dev/null; then
     print_step "Removing TreeMan from $rc_file..."
-    grep -v -A1 "^$SOURCE_MARKER$" "$rc_file" | grep -v "^--$" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
+    awk -v marker="$SOURCE_MARKER" '$0 == marker { skip = 1; next } skip { skip = 0; next } { print }' "$rc_file" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
     print_done
   fi
 }
