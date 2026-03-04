@@ -340,9 +340,8 @@ wtd() {
   }
 
   echo "Deleting branch '$branch'..."
-  git branch -d "$branch" 2>/dev/null || {
-    echo "Warning: branch '$branch' could not be deleted (may have unmerged changes)." >&2
-    echo "  Use 'git branch -D $branch' to force delete." >&2
+  git branch -D "$branch" 2>/dev/null || {
+    echo "Warning: branch '$branch' could not be deleted." >&2
   }
 
   echo "Done — worktree and branch removed."
