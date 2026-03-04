@@ -127,30 +127,6 @@ Reload your shell when done:
 source ~/.zshrc   # or ~/.bashrc
 ```
 
-### Oh-my-zsh plugin
-
-```bash
-git clone https://github.com/shoutcape/TreeMan ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/TreeMan
-```
-
-Add `TreeMan` to your plugins in `~/.zshrc`:
-
-```zsh
-plugins=(... TreeMan)
-```
-
-### zinit
-
-```zsh
-zinit light shoutcape/TreeMan
-```
-
-### antigen
-
-```zsh
-antigen bundle shoutcape/TreeMan
-```
-
 ### Manual
 
 Copy the contents of [`wt.sh`](./wt.sh) into your `~/.zshrc` or `~/.bashrc`, then run:
@@ -232,26 +208,29 @@ The `lg` shell wrapper doesn't help when lazygit runs inside Neovim — the term
 
 ```lua
 { "<leader>lg", function()
-  local snacks = require("snacks")
   local newdir_file = vim.fn.expand("~/.lazygit/newdir")
   vim.fn.mkdir(vim.fn.expand("~/.lazygit"), "p")
 
-  local win = snacks.lazygit({
+  snacks.lazygit({
     env = { LAZYGIT_NEW_DIR_FILE = newdir_file },
   })
 
-  win:on("TermClose", function()
-    vim.schedule(function()
-      local f = io.open(newdir_file, "r")
-      if not f then return end
-      local dir = f:read("*a"):gsub("%s+$", "")
-      f:close()
-      os.remove(newdir_file)
-      if dir ~= "" and dir ~= vim.fn.getcwd() then
-        vim.cmd("cd " .. vim.fn.fnameescape(dir))
-      end
-    end)
-  end, { buf = true })
+  vim.api.nvim_create_autocmd("TermClose", {
+    pattern = "*lazygit*",
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        local f = io.open(newdir_file, "r")
+        if not f then return end
+        local dir = f:read("*a"):gsub("%s+$", "")
+        f:close()
+        os.remove(newdir_file)
+        if dir ~= "" and dir ~= vim.fn.getcwd() then
+          vim.cmd("cd " .. vim.fn.fnameescape(dir))
+        end
+      end)
+    end
+  })
 end, desc = "Lazygit" },
 ```
 
@@ -272,34 +251,6 @@ end, desc = "Lazygit" },
 ```
 
 The plugin sets `LAZYGIT_NEW_DIR_FILE` automatically and calls `cd` on exit.
-
-</details>
-
-<details>
-<summary>toggleterm.nvim (akinsho/toggleterm.nvim)</summary>
-
-```lua
-local Terminal = require("toggleterm.terminal").Terminal
-
-local lazygit = Terminal:new({
-  cmd = "lazygit",
-  direction = "float",
-  env = { LAZYGIT_NEW_DIR_FILE = vim.fn.expand("~/.lazygit/newdir") },
-  on_close = function()
-    local newdir_file = vim.fn.expand("~/.lazygit/newdir")
-    local f = io.open(newdir_file, "r")
-    if not f then return end
-    local dir = f:read("*a"):gsub("%s+$", "")
-    f:close()
-    os.remove(newdir_file)
-    if dir ~= "" and dir ~= vim.fn.getcwd() then
-      vim.cmd("cd " .. vim.fn.fnameescape(dir))
-    end
-  end,
-})
-
-vim.keymap.set("n", "<leader>lg", function() lazygit:toggle() end, { desc = "Lazygit" })
-```
 
 </details>
 
