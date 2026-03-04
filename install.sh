@@ -51,6 +51,58 @@ if [[ "$1" == "uninstall" ]] || [[ "$1" == "--uninstall" ]]; then
 
   echo ""
   echo "TreeMan uninstalled."
+  
+  if command -v lazygit >/dev/null 2>&1; then
+    config_dir=$(lazygit -cd 2>/dev/null)
+    if [[ -n "$config_dir" ]]; then
+      config_file="$config_dir/config.yml"
+      if [[ -f "$config_file" ]] && grep -q "$SOURCE_MARKER" "$config_file" 2>/dev/null; then
+        print_step "Removing lazygit integration..."
+        tmp=$(mktemp)
+        awk -v marker="$SOURCE_MARKER" '
+          BEGIN { skipping = 0 }
+          index($0, marker) { skipping = 1; next }
+          skipping {
+            if (/^  - / || /^[a-zA-Z]/) { skipping = 0 }
+            else { next }
+          }
+          { print }
+        ' "$config_file" > "$tmp"
+
+        awk '
+          {
+            lines[NR] = $0
+            original[NR] = $0
+            suppress[NR] = 0
+          }
+          END {
+            for (i = 1; i <= NR; i++) {
+              if (lines[i] ~ /^customCommands:$/) {
+                j = i + 1
+                while (j <= NR && lines[j] ~ /^[[:space:]]*$/) j++
+                if (j > NR || lines[j] ~ /^[a-zA-Z]/) {
+                  for (k = i; k < j; k++) suppress[k] = 1
+                  if (i > 1 && lines[i-1] ~ /# TreeMan/) {
+                    suppress[i-1] = 1
+                    if (i > 2 && lines[i-2] ~ /^[[:space:]]*$/) suppress[i-2] = 1
+                  }
+                }
+              }
+            }
+            for (i = 1; i <= NR; i++) {
+              if (!suppress[i]) print lines[i]
+            }
+          }
+        ' "$tmp" > "${tmp}.2"
+
+        awk 'NF { last = NR } { lines[NR] = $0 } END { for (i = 1; i <= last; i++) print lines[i] }' "${tmp}.2" > "${tmp}.3"
+        { cat "${tmp}.3"; echo; } > "$config_file"
+        rm -f "$tmp" "${tmp}.2" "${tmp}.3" 2>/dev/null
+        print_done
+      fi
+    fi
+  fi
+
   echo "Reload your shell to complete removal:"
   echo "  exec \$SHELL"
   exit 0
@@ -122,6 +174,88 @@ if ! command -v fzf >/dev/null 2>&1; then
   echo "    Install it from: https://github.com/junegunn/fzf"
 fi
 
+# --- Lazygit integration -----------------------------------------------------
+
+if command -v lazygit >/dev/null 2>&1; then
+  print_step "Checking lazygit integration..."
+  config_dir=$(lazygit -cd 2>/dev/null) || true
+  if [[ -n "$config_dir" ]]; then
+    config_file="$config_dir/config.yml"
+    
+    # Create config file if it doesn't exist
+    if [ ! -f "$config_file" ]; then
+      mkdir -p "$config_dir"
+      touch "$config_file"
+      print_done
+    fi
+
+    if grep -q "$SOURCE_MARKER" "$config_file" 2>/dev/null; then
+      print_warn "TreeMan lazygit integration is already installed. Skipping."
+    else
+      print_step "Installing lazygit integration..."
+      ENTRY="  - key: 'W' # TreeMan
+    description: 'Create new worktree (TreeMan)'
+    context: 'localBranches'
+    output: logWithPty
+    command: \"bash -c 'source ~/.treeman/wt.sh && wt {{.Form.BranchName | quote}}'\"
+    loadingText: 'Creating worktree...'
+    prompts:
+      - type: 'input'
+        title: 'New branch name:'
+        key: 'BranchName'
+  - key: 'D' # TreeMan
+    description: 'Delete worktree and branch (TreeMan)'
+    context: 'worktrees'
+    output: logWithPty
+    command: \"bash -c '[ {{.SelectedWorktree.IsMain}} = true ] && echo \\\"Error: cannot delete the main worktree.\\\" && exit 1; git worktree remove {{.SelectedWorktree.Path | quote}} && git branch -D {{.SelectedWorktree.Branch | quote}}'\"
+    loadingText: 'Removing worktree...'
+    prompts:
+      - type: 'confirm'
+        title: 'Delete worktree and branch?'
+        body: 'This will remove the worktree at {{.SelectedWorktree.Path}} and delete branch {{.SelectedWorktree.Branch}}. Continue?'
+  - key: 'D' # TreeMan
+    description: 'Delete worktree and branch (TreeMan)'
+    context: 'localBranches'
+    output: logWithPty
+    command: \"bash -c 'branch={{.SelectedLocalBranch.Name | quote}}; wt_path=\$(git worktree list --porcelain | grep -B2 \\\"branch refs/heads/\$branch\\\" | head -1 | sed \\\"s/^worktree //\\\"); [ -n \\\"\$wt_path\\\" ] && git worktree remove \\\"\$wt_path\\\"; git branch -D \\\"\$branch\\\"'\"
+    loadingText: 'Removing worktree...'
+    prompts:
+      - type: 'confirm'
+        title: 'Delete worktree and branch?'
+        body: 'This will remove the worktree and delete branch {{.SelectedLocalBranch.Name}}. Continue?'"
+
+      if ! grep -q '^customCommands:' "$config_file"; then
+        tmp=$(mktemp)
+        grep -v '^{}$' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
+        cat >> "$config_file" << EOF
+
+# TreeMan — worktree keybindings (W: create, D: delete)
+customCommands:
+$ENTRY
+EOF
+      elif grep -q '^customCommands: \[\]' "$config_file"; then
+        tmp=$(mktemp)
+        awk -v entry="$ENTRY" '
+          /^customCommands: \[\]/ { print "customCommands:\n" entry; next }
+          { print }
+        ' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
+      else
+        tmp=$(mktemp)
+        awk -v entry="$ENTRY" '
+          BEGIN { in_custom = 0; done = 0 }
+          /^customCommands:/ { in_custom = 1; print; next }
+          in_custom && !done && /^[a-zA-Z]/ { print entry "\n"; in_custom = 0; done = 1 }
+          { print }
+          END { if (in_custom && !done) { print "\n" entry } }
+        ' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
+      fi
+      print_done
+    fi
+  fi
+else
+  print_warn "lazygit is not installed. Skipping lazygit integration."
+fi
+
 # --- Final message -----------------------------------------------------------
 
 echo ""
@@ -133,4 +267,6 @@ echo ""
 echo "Usage:"
 echo "  wt  <branch-name>   Create a new worktree + branch"
 echo "  wts [query]          Switch between worktrees (requires fzf)"
+echo "  wtd [query]          Delete a worktree and its branch (requires fzf)"
 echo "  git wt <branch-name> "
+echo "  lg                   Run lazygit with auto-cd"
