@@ -7,6 +7,7 @@ No runtime required. No config files. Works with bash and zsh.
 ```bash
 wt feature/my-thing        # create a new worktree + branch
 wts                        # switch between worktrees (fzf picker)
+wtd                        # delete a worktree (interactive picker)
 ```
 
 ### `wt` — create
@@ -34,6 +35,18 @@ Worktree ready:
 │ Github/my-project  [main]                             │
 │ Github/my-project.feature-my-thing [feature/my-thing] │
 └───────────────────────────────────────────────────────┘
+```
+
+### `wtd` — delete
+
+```
+┌──────────────── worktrees ────────────────────────────┐
+│ delete >                                              │
+│ Github/my-project.feature-my-thing [feature/my-thing] │
+└───────────────────────────────────────────────────────┘
+```
+```
+Are you sure you want to delete this worktree and its branch? [y/N] y
 ```
 
 ---
@@ -66,6 +79,14 @@ Works correctly even when run from inside an existing worktree — always target
 3. **`cd`s** into the selected worktree
 
 An optional query argument pre-filters the list (e.g. `wts feat`). If the query matches exactly one worktree, it's selected automatically.
+
+### `wtd` — worktree deletion
+
+1. **Lists** all worktrees via `git worktree list` (protects the main worktree from deletion)
+2. **Opens an fzf picker** showing shortened paths and branch names
+3. **Prompts** for confirmation before taking any destructive action
+4. **Removes** the selected worktree using `git worktree remove --force`
+5. **Deletes** the associated branch using `git branch -D` (if branch matches the worktree name)
 
 ---
 
@@ -151,6 +172,10 @@ git wt feature/my-thing     # git alias
 # Switch between worktrees (fzf picker):
 wts                         # opens interactive picker
 wts feat                    # pre-filters the list
+
+# Delete a worktree (interactive picker):
+wtd                         # opens interactive picker for deletion
+wtd feat                    # pre-filters the list
 ```
 
 ---
