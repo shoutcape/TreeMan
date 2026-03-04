@@ -83,7 +83,7 @@ ENTRY="  - key: 'W' # TreeMan
     description: 'Delete worktree and branch (TreeMan)'
     context: 'worktrees'
     output: logWithPty
-    command: \"bash -c '[ {{.SelectedWorktree.IsMain}} = true ] && echo \\\"Error: cannot delete the main worktree.\\\" && exit 1; git worktree remove {{.SelectedWorktree.Path | quote}} && git branch -d {{.SelectedWorktree.Branch | quote}}'\"
+    command: \"bash -c '[ {{.SelectedWorktree.IsMain}} = true ] && echo \\\"Error: cannot delete the main worktree.\\\" && exit 1; git worktree remove {{.SelectedWorktree.Path | quote}} && git branch -D {{.SelectedWorktree.Branch | quote}}'\"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -93,7 +93,7 @@ ENTRY="  - key: 'W' # TreeMan
     description: 'Delete worktree and branch (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: \"bash -c 'branch={{.SelectedLocalBranch.Name | quote}}; wt_path=\$(git worktree list --porcelain | grep -B2 \\\"branch refs/heads/\$branch\\\" | head -1 | sed \\\"s/^worktree //\\\"); [ -n \\\"\$wt_path\\\" ] && git worktree remove \\\"\$wt_path\\\"; git branch -d \\\"\$branch\\\"'\"
+    command: \"bash -c 'branch={{.SelectedLocalBranch.Name | quote}}; wt_path=\$(git worktree list --porcelain | grep -B2 \\\"branch refs/heads/\$branch\\\" | head -1 | sed \\\"s/^worktree //\\\"); [ -n \\\"\$wt_path\\\" ] && git worktree remove \\\"\$wt_path\\\"; git branch -D \\\"\$branch\\\"'\"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
