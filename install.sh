@@ -14,6 +14,48 @@ print_step() { echo "==> $1"; }
 print_done() { echo "    done."; }
 print_warn() { echo "    warning: $1"; }
 
+if [[ "$1" == "uninstall" ]] || [[ "$1" == "--uninstall" ]]; then
+  SOURCE_MARKER="# TreeMan"
+
+  remove_from_rc() {
+    local rc_file="$1"
+    if [[ ! -f "$rc_file" ]]; then
+      return
+    fi
+    if grep -qF "$SOURCE_MARKER" "$rc_file" 2>/dev/null; then
+      print_step "Removing TreeMan from $rc_file..."
+      grep -v -A1 "^$SOURCE_MARKER$" "$rc_file" | grep -v "^--$" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
+      print_done
+    fi
+  }
+
+  remove_from_rc "$HOME/.zshrc"
+  remove_from_rc "$HOME/.bashrc"
+  remove_from_rc "$HOME/.bash_profile"
+
+  print_step "Removing 'git wt' alias..."
+  if git config --global --get alias.wt >/dev/null 2>&1; then
+    git config --global --unset alias.wt
+    print_done
+  else
+    print_warn "'git wt' alias not found, skipping."
+  fi
+
+  print_step "Removing $INSTALL_DIR..."
+  if [[ -d "$INSTALL_DIR" ]]; then
+    rm -rf "$INSTALL_DIR"
+    print_done
+  else
+    print_warn "$INSTALL_DIR not found, skipping."
+  fi
+
+  echo ""
+  echo "TreeMan uninstalled."
+  echo "Reload your shell to complete removal:"
+  echo "  exec \$SHELL"
+  exit 0
+fi
+
 # --- Detect shell config file ------------------------------------------------
 
 detect_shell_rc() {
