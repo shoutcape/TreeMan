@@ -1,10 +1,11 @@
-# TreeMan — wt & wts
+# TreeMan — wt, wts & wtd
 # Git worktree + branch creation with automatic dependency installation,
-# and interactive worktree switching via fzf.
+# interactive worktree switching via fzf, and worktree deletion.
 #
 # Usage:
 #   wt  <branch-name>      Create a new worktree + branch
 #   wts [query]             Switch between worktrees (fzf picker)
+#   wtd [query]             Delete a worktree and its branch (fzf picker)
 #   git wt <branch-name>   (after: git config --global alias.wt '!wt')
 #
 # Supports: bash, zsh
@@ -239,6 +240,112 @@ wts() {
   local short="${dest%/}"
   short="${short##*/}"
   echo "cd → …/$short"
+}
+
+# ---------------------------------------------------------------------------
+# Worktree deleter — interactive fzf picker with confirmation
+# ---------------------------------------------------------------------------
+
+wtd() {
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "Error: fzf is required for wtd. Install it from https://github.com/junegunn/fzf" >&2
+    return 1
+  fi
+
+  if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "Error: not inside a git repository." >&2
+    return 1
+  fi
+
+  local lines
+  lines=$(git worktree list 2>/dev/null)
+  if [ -z "$lines" ]; then
+    echo "No worktrees found."
+    return 1
+  fi
+
+  local count
+  count=$(echo "$lines" | wc -l | tr -d ' ')
+  if [ "$count" -eq 1 ]; then
+    echo "Only one worktree exists — nothing to delete."
+    return 0
+  fi
+
+  # Find the main worktree root so we can exclude it from deletion
+  local main_root
+  main_root=$(git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //')
+
+  # Build display list excluding the main worktree
+  local display full_paths branches
+  display=$(echo "$lines" | awk -v main="$main_root" '{
+    if ($1 == main) next
+    path = $1
+    n = split(path, parts, "/")
+    short = (n >= 2) ? parts[n-1] "/" parts[n] : parts[n]
+    printf "%-40s  \033[36m%s\033[0m\n", short, $3
+  }')
+  full_paths=$(echo "$lines" | awk -v main="$main_root" '$1 != main {print $1}')
+  branches=$(echo "$lines" | awk -v main="$main_root" '$1 != main {gsub(/[\[\]]/, "", $3); print $3}')
+
+  if [ -z "$display" ]; then
+    echo "No deletable worktrees — only the main worktree exists."
+    return 0
+  fi
+
+  local selection
+  selection=$(echo "$display" | fzf \
+    --ansi \
+    --border-label=" delete worktree " \
+    --prompt="delete > " \
+    --query="${1:-}" \
+    --select-1 \
+    --exit-0)
+
+  if [ -z "$selection" ]; then
+    return 0
+  fi
+
+  # Map selection back to full path and branch
+  local line_num
+  line_num=$(echo "$display" | sed $'s/\033\\[[0-9;]*m//g' | grep -nxF "$selection" | head -1 | cut -d: -f1)
+  local dest branch
+  dest=$(echo "$full_paths" | sed -n "${line_num}p")
+  branch=$(echo "$branches" | sed -n "${line_num}p")
+
+  # Confirm deletion
+  local short="${dest%/}"
+  short="${short##*/}"
+  echo "About to delete:"
+  echo "  Worktree: $dest"
+  echo "  Branch:   $branch"
+  echo ""
+  printf "Are you sure? [y/N] "
+  read -r confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Cancelled."
+    return 0
+  fi
+
+  # If currently inside the worktree being deleted, cd to main first
+  if [[ "$(pwd)" == "$dest"* ]]; then
+    echo "Currently inside this worktree — switching to main worktree..."
+    cd "$main_root" || return 1
+  fi
+
+  # Remove worktree and delete branch
+  echo "Removing worktree..."
+  git worktree remove "$dest" || {
+    echo "Error: failed to remove worktree. Use 'git worktree remove --force' to force." >&2
+    return 1
+  }
+
+  echo "Deleting branch '$branch'..."
+  git branch -d "$branch" 2>/dev/null || {
+    echo "Warning: branch '$branch' could not be deleted (may have unmerged changes)." >&2
+    echo "  Use 'git branch -D $branch' to force delete." >&2
+  }
+
+  echo "Done — worktree and branch removed."
 }
 
 # ---------------------------------------------------------------------------
