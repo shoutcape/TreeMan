@@ -157,6 +157,34 @@ wts feat                    # pre-filters the list
 
 ## Lazygit integration
 
+### Custom keybindings
+
+TreeMan can add custom keybindings to lazygit for creating and deleting worktrees without leaving the UI.
+
+| Key | Panel | Action |
+|---|---|---|
+| `W` | Branches | Create a new worktree + branch (prompts for branch name) |
+| `D` | Worktrees | Delete the selected worktree and its branch |
+| `D` | Branches | Delete the worktree associated with the selected branch and the branch itself |
+
+**Install:**
+
+```bash
+bash install-lazygit.sh
+```
+
+Requires `lazygit` to be installed and TreeMan's `install.sh` to have been run first. The script auto-detects the lazygit config location on macOS and Linux and injects the keybindings idempotently — running it twice is safe.
+
+**Uninstall:**
+
+```bash
+bash uninstall-lazygit.sh
+```
+
+---
+
+### `lg` wrapper
+
 TreeMan includes an `lg` wrapper function for [lazygit](https://github.com/jesseduffield/lazygit). When you switch worktrees inside lazygit, `lg` automatically `cd`s your shell to the new worktree directory on exit.
 
 ```bash
@@ -262,3 +290,11 @@ Or manually:
 - Remove the `# TreeMan` and `source` lines from your shell config
 - Run `git config --global --unset alias.wt`
 - Delete `~/.treeman/`
+
+### Uninstall lazygit keybindings
+
+```bash
+bash uninstall-lazygit.sh
+```
+
+Or manually remove all lines marked with `# TreeMan` from your lazygit `config.yml` (find its location with `lazygit -cd`).
