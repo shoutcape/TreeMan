@@ -205,7 +205,7 @@ curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh |
 The unified uninstaller natively detects and removes the injected lazygit configuration.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash -s uninstall
+curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
 ```
 
 ---
@@ -320,6 +320,6 @@ Or manually:
 
 ### Uninstall lazygit keybindings
 
-The lazygit configuration is automatically removed if you run the standard uninstall command (`bash -s uninstall`).
+The lazygit configuration is automatically removed if you run the standard uninstall command (`curl .../uninstall.sh | bash`).
 
 Or manually remove all lines marked with `# TreeMan` from your lazygit `config.yml` (find its location with `lazygit -cd`).
