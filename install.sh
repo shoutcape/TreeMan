@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # TreeMan installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/you/TreeMan/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
 
 set -e
 
-REPO_URL="https://raw.githubusercontent.com/shoutcape/TreeMan/main/wt.sh"
-INSTALL_DIR="$HOME/.treeman"
-WTP_FILE="$INSTALL_DIR/wt.sh"
+REPO_URL="${TREEMAN_REPO_URL:-https://raw.githubusercontent.com/shoutcape/TreeMan/main/wt.sh}"
+INSTALL_DIR="${TREEMAN_INSTALL_DIR:-$HOME/.treeman}"
+WT_SH_FILE="$INSTALL_DIR/wt.sh"
 
 # --- Helpers -----------------------------------------------------------------
 
 print_step() { echo "==> $1"; }
 print_done() { echo "    done."; }
 print_warn() { echo "    warning: $1"; }
-
-
 
 # --- Detect shell config file ------------------------------------------------
 
@@ -37,7 +35,15 @@ detect_shell_rc() {
   fi
 }
 
-SHELL_RC="$(detect_shell_rc)"
+SHELL_RC="${TREEMAN_SHELL_RC:-$(detect_shell_rc)}"
+
+detect_lazygit_config_dir() {
+  if [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
+    echo "$TREEMAN_LAZYGIT_CONFIG_DIR"
+  elif command -v lazygit >/dev/null 2>&1; then
+    lazygit -cd 2>/dev/null || true
+  fi
+}
 
 # --- Download wt.sh ----------------------------------------------------------
 
@@ -45,9 +51,9 @@ print_step "Installing TreeMan to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$REPO_URL" -o "$WTP_FILE"
+  curl -fsSL "$REPO_URL" -o "$WT_SH_FILE"
 elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$WTP_FILE" "$REPO_URL"
+  wget -qO "$WT_SH_FILE" "$REPO_URL"
 else
   echo "Error: curl or wget is required to install TreeMan." >&2
   exit 1
@@ -57,7 +63,7 @@ print_done
 
 # --- Add source line to shell config -----------------------------------------
 
-SOURCE_LINE="source \"$WTP_FILE\""
+SOURCE_LINE="source \"$WT_SH_FILE\""
 SOURCE_MARKER="# TreeMan"
 
 print_step "Adding TreeMan to $SHELL_RC..."
@@ -69,24 +75,18 @@ else
   print_done
 fi
 
-# --- Set up git alias --------------------------------------------------------
-
-print_step "Registering 'git wt' alias..."
-git config --global alias.wt '!wt'
-print_done
-
 # --- Check optional dependencies --------------------------------------------
 
 if ! command -v fzf >/dev/null 2>&1; then
-  print_warn "fzf is not installed. The 'wts' command (interactive worktree switcher) requires it."
+  print_warn "fzf is not installed. The 'wts' and 'wtd' commands require it."
   echo "    Install it from: https://github.com/junegunn/fzf"
 fi
 
 # --- Lazygit integration -----------------------------------------------------
 
-if command -v lazygit >/dev/null 2>&1; then
+if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
   print_step "Checking lazygit integration..."
-  config_dir=$(lazygit -cd 2>/dev/null) || true
+  config_dir=$(detect_lazygit_config_dir)
   if [[ -n "$config_dir" ]]; then
     config_file="$config_dir/config.yml"
     
@@ -105,7 +105,7 @@ if command -v lazygit >/dev/null 2>&1; then
     description: 'Create new worktree (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: \"bash -c 'source ~/.treeman/wt.sh && wt {{.Form.BranchName | quote}}'\"
+    command: 'bash -c ''source "$WT_SH_FILE" && wt {{.Form.BranchName | quote}}'''
     loadingText: 'Creating worktree...'
     prompts:
       - type: 'input'
@@ -115,7 +115,7 @@ if command -v lazygit >/dev/null 2>&1; then
     description: 'Delete worktree and branch (TreeMan)'
     context: 'worktrees'
     output: logWithPty
-    command: \"bash -c '[ {{.SelectedWorktree.IsMain}} = true ] && echo \\\"Error: cannot delete the main worktree.\\\" && exit 1; git worktree remove {{.SelectedWorktree.Path | quote}} && git branch -D {{.SelectedWorktree.Branch | quote}}'\"
+    command: 'bash -c ''source "$WT_SH_FILE" && _wt_lazygit_delete_worktree {{.SelectedWorktree.Path | quote}} {{.SelectedWorktree.Branch | quote}}'''
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -125,7 +125,7 @@ if command -v lazygit >/dev/null 2>&1; then
     description: 'Delete worktree and branch (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: \"bash -c 'branch={{.SelectedLocalBranch.Name | quote}}; wt_path=\$(git worktree list --porcelain | grep -B2 \\\"branch refs/heads/\$branch\\\" | head -1 | sed \\\"s/^worktree //\\\"); [ -n \\\"\$wt_path\\\" ] && git worktree remove \\\"\$wt_path\\\"; git branch -D \\\"\$branch\\\"'\"
+    command: 'bash -c ''source "$WT_SH_FILE" && _wt_lazygit_delete_branch {{.SelectedLocalBranch.Name | quote}}'''
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -176,5 +176,4 @@ echo "Usage:"
 echo "  wt  <branch-name>   Create a new worktree + branch"
 echo "  wts [query]          Switch between worktrees (requires fzf)"
 echo "  wtd [query]          Delete a worktree and its branch (requires fzf)"
-echo "  git wt <branch-name> "
 echo "  lg                   Run lazygit with auto-cd"

@@ -4,12 +4,20 @@
 
 set -e
 
-INSTALL_DIR="$HOME/.treeman"
+INSTALL_DIR="${TREEMAN_INSTALL_DIR:-$HOME/.treeman}"
 SOURCE_MARKER="# TreeMan"
 
 print_step() { echo "==> $1"; }
 print_done() { echo "    done."; }
 print_warn() { echo "    warning: $1"; }
+
+detect_lazygit_config_dir() {
+  if [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
+    echo "$TREEMAN_LAZYGIT_CONFIG_DIR"
+  elif command -v lazygit >/dev/null 2>&1; then
+    lazygit -cd 2>/dev/null || true
+  fi
+}
 
 remove_from_rc() {
   local rc_file="$1"
@@ -27,14 +35,6 @@ remove_from_rc "$HOME/.zshrc"
 remove_from_rc "$HOME/.bashrc"
 remove_from_rc "$HOME/.bash_profile"
 
-print_step "Removing 'git wt' alias..."
-if git config --global --get alias.wt >/dev/null 2>&1; then
-  git config --global --unset alias.wt
-  print_done
-else
-  print_warn "'git wt' alias not found, skipping."
-fi
-
 print_step "Removing $INSTALL_DIR..."
 if [[ -d "$INSTALL_DIR" ]]; then
   rm -rf "$INSTALL_DIR"
@@ -46,8 +46,8 @@ fi
 echo ""
 echo "TreeMan uninstalled."
 
-if command -v lazygit >/dev/null 2>&1; then
-  config_dir=$(lazygit -cd 2>/dev/null)
+if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
+  config_dir=$(detect_lazygit_config_dir)
   if [[ -n "$config_dir" ]]; then
     config_file="$config_dir/config.yml"
     if [[ -f "$config_file" ]] && grep -q "$SOURCE_MARKER" "$config_file" 2>/dev/null; then
