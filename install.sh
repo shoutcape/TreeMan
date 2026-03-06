@@ -101,11 +101,12 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
       print_warn "TreeMan lazygit integration is already installed. Skipping."
     else
       print_step "Installing lazygit integration..."
-      ENTRY="  - key: 'W' # TreeMan
+      ENTRY=$(cat <<EOF
+  - key: 'W' # TreeMan
     description: 'Create new worktree (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: 'bash -c ''source "$WT_SH_FILE" && wt {{.Form.BranchName | quote}}'''
+    command: "bash -lc 'source \"$WT_SH_FILE\" && wt \"\$1\"' treeman {{.Form.BranchName | quote}}"
     loadingText: 'Creating worktree...'
     prompts:
       - type: 'input'
@@ -115,22 +116,24 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Delete worktree and branch (TreeMan)'
     context: 'worktrees'
     output: logWithPty
-    command: 'bash -c ''source "$WT_SH_FILE" && _wt_lazygit_delete_worktree {{.SelectedWorktree.Path | quote}} {{.SelectedWorktree.Branch | quote}}'''
+    command: "bash -lc 'source \"$WT_SH_FILE\" && _wt_lazygit_delete_worktree \"\$1\" \"\$2\"' treeman {{.SelectedWorktree.Path | quote}} {{.SelectedWorktree.Branch | quote}}"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
         title: 'Delete worktree and branch?'
-        body: 'This will remove the worktree at {{.SelectedWorktree.Path}} and delete branch {{.SelectedWorktree.Branch}}. Continue?'
+        body: 'This will remove the worktree at {{.SelectedWorktree.Path}} and delete branch "{{.SelectedWorktree.Branch}}". Continue?'
   - key: 'D' # TreeMan
     description: 'Delete worktree and branch (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: 'bash -c ''source "$WT_SH_FILE" && _wt_lazygit_delete_branch {{.SelectedLocalBranch.Name | quote}}'''
+    command: "bash -lc 'source \"$WT_SH_FILE\" && _wt_lazygit_delete_branch \"\$1\"' treeman {{.SelectedLocalBranch.Name | quote}}"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
         title: 'Delete worktree and branch?'
-        body: 'This will remove the worktree and delete branch {{.SelectedLocalBranch.Name}}. Continue?'"
+        body: 'This will remove the worktree and delete branch "{{.SelectedLocalBranch.Name}}". Continue?'
+EOF
+)
 
       if ! grep -q '^customCommands:' "$config_file"; then
         tmp=$(mktemp)
