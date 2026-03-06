@@ -2,7 +2,7 @@
 
 Shell functions for git worktree workflows — create new worktrees with automatic dependency installation, and switch between them with an interactive picker.
 
-No runtime required. No config files. Works with bash and zsh.
+No runtime required. Single shell script. Works with bash and zsh.
 
 ```bash
 wt feature/my-thing        # create a new worktree + branch
@@ -85,8 +85,10 @@ An optional query argument pre-filters the list (e.g. `wts feat`). If the query 
 1. **Lists** all worktrees via `git worktree list` (protects the main worktree from deletion)
 2. **Opens an fzf picker** showing shortened paths and branch names
 3. **Prompts** for confirmation before taking any destructive action
-4. **Removes** the selected worktree using `git worktree remove --force`
-5. **Deletes** the associated branch using `git branch -D` (if branch matches the worktree name)
+4. **Removes** the selected worktree using `git worktree remove`
+5. **Deletes** the associated branch using `git branch -D`
+
+If Git refuses to remove a dirty worktree, you can force it manually with `git worktree remove --force`.
 
 ---
 
@@ -106,7 +108,7 @@ Slashes in branch names become dashes in the directory name:
 
 - `git`
 - `bash` or `zsh`
-- [`fzf`](https://github.com/junegunn/fzf) (for `wts` only)
+- [`fzf`](https://github.com/junegunn/fzf) (for `wts` and `wtd`)
 - The package manager your project uses (only needed when a lockfile is detected)
 
 ---
@@ -115,7 +117,7 @@ Slashes in branch names become dashes in the directory name:
 
 ### One-liner
 
-Downloads `wt.sh` to `~/.treeman/`, adds a source line to your shell config, and registers the `git wt` alias.
+Downloads `wt.sh` to `~/.treeman/`, adds a source line to your shell config, and optionally injects lazygit keybindings.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
@@ -129,11 +131,7 @@ source ~/.zshrc   # or ~/.bashrc
 
 ### Manual
 
-Copy the contents of [`wt.sh`](./wt.sh) into your `~/.zshrc` or `~/.bashrc`, then run:
-
-```bash
-git config --global alias.wt '!wt'
-```
+Copy the contents of [`wt.sh`](./wt.sh) into your `~/.zshrc` or `~/.bashrc`.
 
 ---
 
@@ -143,7 +141,6 @@ git config --global alias.wt '!wt'
 # Create a new worktree + branch:
 wt <branch-name>
 wt feature/my-thing
-git wt feature/my-thing     # git alias
 
 # Switch between worktrees (fzf picker):
 wts                         # opens interactive picker
@@ -266,7 +263,6 @@ curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh
 
 Or manually:
 - Remove the `# TreeMan` and `source` lines from your shell config
-- Run `git config --global --unset alias.wt`
 - Delete `~/.treeman/`
 
 ### Uninstall lazygit keybindings
