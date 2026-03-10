@@ -15,9 +15,25 @@
 # ---------------------------------------------------------------------------
 
 # Detect the default branch on origin (main or master).
+# Fast path: use local origin/HEAD metadata. Falls back to querying origin.
 # Prints the branch name to stdout. Returns 1 if neither exists.
 _wt_detect_default_branch() {
-  local refs
+  local origin_head refs
+
+  origin_head=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null) || origin_head=""
+  origin_head=${origin_head#origin/}
+
+  if [[ "$origin_head" == "main" ]]; then
+    echo "main"
+    return 0
+  fi
+
+  if [[ "$origin_head" == "master" ]]; then
+    echo "Warning: no 'main' branch found on origin, using 'master'." >&2
+    echo "master"
+    return 0
+  fi
+
   refs=$(git ls-remote --heads origin main master 2>/dev/null)
 
   if echo "$refs" | grep -q 'refs/heads/main$'; then
