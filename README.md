@@ -1,12 +1,14 @@
 <img width="2760" height="1504" alt="TreeMan_Logo_transparent" src="https://github.com/user-attachments/assets/4ac0bc00-c6f3-4e1d-9821-3ad8e15d4088" />
 
 
-Shell functions for git worktree workflows — create new worktrees with automatic dependency installation, and switch between them with an interactive picker.
+Shell functions for git worktree workflows — create new branch worktrees, jump straight into them, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
 
 No runtime required. Single shell script. Works with bash and zsh.
 
 ```bash
 wt feature/my-thing        # create a new worktree + branch
+wtpr 123                   # create a review worktree from PR #123
+wtmr                       # pick an open PR/MR with fzf, then create a review worktree
 wts                        # switch between worktrees (fzf picker)
 wtd                        # delete a worktree (interactive picker)
 ```
@@ -22,7 +24,36 @@ Copied .env, .env.local
 Detected pnpm-lock.yaml — running pnpm install...
 
 Worktree ready:
-  cd /home/user/Github/my-project.feature-my-thing
+  Auto-switched to: /home/user/Github/my-project.feature-my-thing
+  Path: /home/user/Github/my-project.feature-my-thing
+```
+
+### `wtpr` / `wtmr` — review
+
+`wtpr` and `wtmr` are identical commands. TreeMan uses PR and MR interchangeably for this workflow.
+
+```bash
+$ wtpr 123
+Fetching PR/MR #123 from origin...
+Creating review worktree at ~/Github/my-project.feature-login-fix (branch: feature/login-fix)...
+Detected pnpm-lock.yaml — running pnpm install...
+
+Review worktree ready:
+  PR/MR:  #123
+  Title:  Fix login redirect loop
+  Branch: feature/login-fix
+  Path:   /home/user/Github/my-project.feature-login-fix
+```
+
+If you omit the PR number, TreeMan uses `fzf` to let you choose from open PRs/MRs:
+
+- PR/MR number is highlighted first
+- branch name is shown next for quick scanning
+- title stays visible so related branches are easy to tell apart
+
+```bash
+wtpr
+wtmr
 ```
 
 ### `wts` — switch
@@ -69,9 +100,20 @@ Are you sure you want to delete this worktree and its branch? [y/N] y
    | `package-lock.json` | `npm install` |
    | `go.mod` | `go mod download` |
    | `requirements.txt` / `pyproject.toml` | notifies you to activate venv manually |
-7. **Prints the path** to `cd` into
+7. **Auto-`cd`s** into the new worktree and prints the path
 
 Works correctly even when run from inside an existing worktree — always targets the main worktree root.
+
+### `wtpr` / `wtmr` — review worktree creation
+
+1. **Resolves PR metadata** with `gh api` or lets you choose from open PRs with `fzf`
+2. **Fetches** the PR head via GitHub's `pull/<number>/head` ref on `origin`
+3. **Creates** a review worktree using the PR head branch name at `../<repo>.<branch-slug>`
+4. **Copies `.env*` files** from the main worktree
+5. **Installs dependencies** using the same lockfile detection as `wt`
+6. **Auto-`cd`s** into the new review worktree and prints review details including the PR/MR number, title, branch, and final path
+
+If the PR head branch already exists locally or already has a worktree, TreeMan fails safely instead of guessing.
 
 ### `wts` — worktree switching
 
@@ -103,13 +145,16 @@ Slashes in branch names become dashes in the directory name:
 | `~/Github/my-project` | `fix/bug-123` | `~/Github/my-project.fix-bug-123` |
 | `~/Github/my-project` | `hotfix` | `~/Github/my-project.hotfix` |
 
+Review worktrees created by `wtpr` / `wtmr` use the same branch-based naming.
+
 ---
 
 ## Requirements
 
 - `git`
 - `bash` or `zsh`
-- [`fzf`](https://github.com/junegunn/fzf) (for `wts` and `wtd`)
+- [`gh`](https://cli.github.com/) (for `wtpr` and `wtmr`; public repos can work without auth, private repos require it)
+- [`fzf`](https://github.com/junegunn/fzf) (for `wts`, `wtd`, and optional `wtpr` / `wtmr` picker mode)
 - The package manager your project uses (only needed when a lockfile is detected)
 
 ---
@@ -142,6 +187,14 @@ Copy the contents of [`wt.sh`](./wt.sh) into your `~/.zshrc` or `~/.bashrc`.
 # Create a new worktree + branch:
 wt <branch-name>
 wt feature/my-thing
+
+# Create a review worktree from a PR/MR number:
+wtpr <pr-number>
+wtmr <pr-number>
+
+# Or pick from open PRs/MRs with fzf:
+wtpr
+wtmr
 
 # Switch between worktrees (fzf picker):
 wts                         # opens interactive picker

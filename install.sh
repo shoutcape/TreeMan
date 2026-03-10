@@ -82,6 +82,11 @@ if ! command -v fzf >/dev/null 2>&1; then
   echo "    Install it from: https://github.com/junegunn/fzf"
 fi
 
+if ! command -v gh >/dev/null 2>&1; then
+  print_warn "gh is not installed. The 'wtpr' and 'wtmr' commands require it."
+  echo "    Install it from: https://cli.github.com/"
+fi
+
 # --- Lazygit integration -----------------------------------------------------
 
 if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
@@ -177,6 +182,8 @@ echo "  source $SHELL_RC"
 echo ""
 echo "Usage:"
 echo "  wt  <branch-name>   Create a new worktree + branch"
+echo "  wtpr [pr-number]    Create a review worktree from a PR"
+echo "  wtmr [pr-number]    Same as wtpr"
 echo "  wts [query]          Switch between worktrees (requires fzf)"
 echo "  wtd [query]          Delete a worktree and its branch (requires fzf)"
 echo "  lg                   Run lazygit with auto-cd"
