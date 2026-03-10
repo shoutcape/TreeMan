@@ -1,4 +1,5 @@
-# TreeMan
+<img width="2760" height="1504" alt="TreeMan_Logo_transparent" src="https://github.com/user-attachments/assets/4ac0bc00-c6f3-4e1d-9821-3ad8e15d4088" />
+
 
 Shell functions for git worktree workflows — create new worktrees with automatic dependency installation, and switch between them with an interactive picker.
 
