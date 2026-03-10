@@ -1,14 +1,17 @@
-# TreeMan — wt, wts & wtd
-# Git worktree + branch creation with automatic dependency installation,
-# interactive worktree switching via fzf, and worktree deletion.
+# TreeMan — wt, wtpr, wtmr, wts & wtd
+# Git worktree creation for branches and PRs/MRs, automatic dependency
+# installation, interactive switching via fzf, and worktree deletion.
 #
 # Usage:
-#   wt  <branch-name>      Create a new worktree + branch
-#   wts [query]            Switch between worktrees (fzf picker)
-#   wtd [query]            Delete a worktree and its branch (fzf picker)
+#   wt   <branch-name>     Create a new worktree + branch
+#   wtpr [pr-number]       Create a review worktree from a GitHub PR
+#   wtmr [pr-number]       Same as wtpr (PR/MR are interchangeable here)
+#   wts  [query]           Switch between worktrees (fzf picker)
+#   wtd  [query]           Delete a worktree and its branch (fzf picker)
 #
 # Supports: bash, zsh
-# Dependencies: git, fzf (for wts and wtd), and whichever package manager your project uses
+# Dependencies: git, gh (for wtpr/wtmr), fzf (for wts/wtd and optional wtpr/wtmr picker),
+# and whichever package manager your project uses
 
 # ---------------------------------------------------------------------------
 # Helpers (prefixed with _ to avoid polluting the user's namespace)
@@ -52,6 +55,70 @@ _wt_main_root() {
   git worktree list --porcelain | grep '^worktree ' | head -1 | sed 's/^worktree //'
 }
 
+# Convert a branch name to the slug used in worktree directory names.
+_wt_branch_slug() {
+  local branch="$1"
+  echo "${branch//\//-}"
+}
+
+# Build a sibling worktree path from the main root and branch name.
+_wt_worktree_path_for_branch() {
+  local main_root="$1"
+  local branch="$2"
+  local repo_name branch_slug
+
+  repo_name=$(basename "$main_root")
+  branch_slug=$(_wt_branch_slug "$branch")
+  echo "$(dirname "$main_root")/${repo_name}.${branch_slug}"
+}
+
+# Resolve the GitHub owner/repo slug from the origin remote URL.
+_wt_origin_repo_slug() {
+  local remote_url slug
+
+  if [[ -n "${_TREEMAN_GH_REPO:-}" ]]; then
+    echo "${_TREEMAN_GH_REPO%/}"
+    return 0
+  fi
+
+  remote_url=$(git remote get-url origin 2>/dev/null) || {
+    echo "Error: could not read origin remote URL." >&2
+    return 1
+  }
+
+  case "$remote_url" in
+    git@github.com:*.git)
+      slug=${remote_url#git@github.com:}
+      slug=${slug%.git}
+      ;;
+    git@github.com:*)
+      slug=${remote_url#git@github.com:}
+      ;;
+    https://github.com/*/*.git)
+      slug=${remote_url#https://github.com/}
+      slug=${slug%.git}
+      ;;
+    https://github.com/*/*)
+      slug=${remote_url#https://github.com/}
+      slug=${slug%/}
+      ;;
+    ssh://git@github.com/*/*.git)
+      slug=${remote_url#ssh://git@github.com/}
+      slug=${slug%.git}
+      ;;
+    ssh://git@github.com/*/*)
+      slug=${remote_url#ssh://git@github.com/}
+      slug=${slug%/}
+      ;;
+    *)
+      echo "Error: origin remote '$remote_url' is not a supported GitHub URL." >&2
+      return 1
+      ;;
+  esac
+
+  echo "$slug"
+}
+
 # Return git worktree list in normal format.
 _wt_worktree_lines() {
   git worktree list 2>/dev/null
@@ -90,8 +157,115 @@ _wt_full_paths() {
 _wt_selection_line_num() {
   local display="$1"
   local selection="$2"
+  local plain_selection
 
-  echo "$display" | sed $'s/\033\\[[0-9;]*m//g' | grep -nxF "$selection" | head -1 | cut -d: -f1
+  plain_selection=$(printf '%s\n' "$selection" | sed $'s/\033\\[[0-9;]*m//g')
+
+  echo "$display" | sed $'s/\033\\[[0-9;]*m//g' | grep -nxF "$plain_selection" | head -1 | cut -d: -f1
+}
+
+# Validate PR/MR number input.
+_wt_validate_pr_number() {
+  local pr_number="$1"
+
+  if [[ -z "$pr_number" || ! "$pr_number" =~ ^[0-9]+$ ]]; then
+    echo "Error: PR/MR number must be numeric." >&2
+    return 1
+  fi
+}
+
+# Resolve PR metadata via gh and print TSV: number, title, headRefName, owner
+_wt_pr_metadata() {
+  local pr_number="$1"
+  local repo_slug
+
+  repo_slug=$(_wt_origin_repo_slug) || return 1
+
+  gh api "repos/$repo_slug/pulls/$pr_number" \
+    --jq '[.number, .title, .head.ref, .head.repo.owner.login] | @tsv'
+}
+
+# List open PRs/MRs via gh as TSV: number, headRefName, title
+_wt_pr_list() {
+  local repo_slug
+
+  repo_slug=$(_wt_origin_repo_slug) || return 1
+
+  gh api "repos/$repo_slug/pulls?state=open&per_page=100" \
+    --jq '.[] | [.number, .head.ref, .title] | @tsv'
+}
+
+# Format gh TSV output into a readable fzf list.
+_wt_pr_picker_display() {
+  local rows="$1"
+  local number branch title
+
+  if [[ -z "$rows" ]]; then
+    return 0
+  fi
+
+  printf "%-8s %-32s %s\n" "PR/MR" "Branch" "Title"
+
+  while IFS=$'\t' read -r number branch title; do
+    [[ -n "$number" ]] || continue
+    printf "\033[33m#%-7s\033[0m \033[36m%-32s\033[0m %s\n" "$number" "$branch" "$title"
+  done <<EOF
+$rows
+EOF
+}
+
+# Prompt for an open PR/MR and print its number.
+_wt_pick_pr_number() {
+  local rows display selection line_num pr_number
+
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "Error: fzf is required to pick an open PR/MR. Pass a PR number or install fzf." >&2
+    return 1
+  fi
+
+  rows=$(_wt_pr_list) || {
+    echo "Error: failed to list open PRs/MRs with gh." >&2
+    return 1
+  }
+
+  if [[ -z "$rows" ]]; then
+    echo "No open PRs/MRs found." >&2
+    return 1
+  fi
+
+  display=$(_wt_pr_picker_display "$rows")
+  selection=$(echo "$display" | fzf \
+    --ansi \
+    --border-label=" open prs / mrs " \
+    --header-lines=1 \
+    --prompt="review > " \
+    --select-1 \
+    --exit-0)
+
+  if [[ -z "$selection" ]]; then
+    return 1
+  fi
+
+  line_num=$(_wt_selection_line_num "$display" "$selection")
+  pr_number=$(echo "$rows" | sed -n "${line_num}p" | cut -f1)
+
+  [[ -n "$pr_number" ]] || return 1
+  echo "$pr_number"
+}
+
+# Print success output for a PR/MR review worktree.
+_wt_print_review_ready() {
+  local pr_number="$1"
+  local pr_title="$2"
+  local head_ref="$3"
+  local worktree_path="$4"
+
+  echo ""
+  echo "Review worktree ready:"
+  echo "  PR/MR:  #$pr_number"
+  echo "  Title:  $pr_title"
+  echo "  Branch: $head_ref"
+  echo "  Path:   $worktree_path"
 }
 
 # Resolve a branch name to its worktree path, if present.
@@ -288,7 +462,7 @@ _wt_copy_env_files() {
 # ---------------------------------------------------------------------------
 
 wt() {
-  local branch="$1"
+  local branch="${1:-}"
 
   if [[ -z "$branch" ]]; then
     echo "Usage: wt <branch-name>" >&2
@@ -309,8 +483,6 @@ wt() {
   # Find the main worktree root (works even from inside an existing worktree)
   local main_root
   main_root=$(_wt_main_root)
-  local repo_name
-  repo_name=$(basename "$main_root")
 
   # Resolve the default branch
   local default_branch
@@ -327,9 +499,8 @@ wt() {
   git fetch origin "$default_branch" || return 1
 
   # Build the worktree path: <parent>/<repo>.<branch-with-/-as-->
-  local branch_slug="${branch//\//-}"
   local worktree_path
-  worktree_path="$(dirname "$main_root")/${repo_name}.${branch_slug}"
+  worktree_path=$(_wt_worktree_path_for_branch "$main_root" "$branch")
 
   # Guard against existing directory
   if [[ -d "$worktree_path" ]]; then
@@ -349,9 +520,97 @@ wt() {
   _wt_install_deps "$worktree_path" || echo "Warning: dependency installation failed." >&2
 
   # Done
+  cd "$worktree_path" || return 1
+
   echo ""
   echo "Worktree ready:"
-  echo "  cd \"$worktree_path\""
+  echo "  Auto-switched to: $worktree_path"
+  echo "  Path: $worktree_path"
+}
+
+_wt_review_pr() {
+  local trigger="$1"
+  local pr_number="$2"
+  local main_root metadata resolved_number pr_title head_ref owner worktree_path existing_worktree
+
+  if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "Error: not inside a git repository." >&2
+    return 1
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "Error: gh is required for $trigger. Install it from https://cli.github.com/" >&2
+    return 1
+  fi
+
+  if [[ -z "$pr_number" ]]; then
+    pr_number=$(_wt_pick_pr_number) || return 1
+  else
+    _wt_validate_pr_number "$pr_number" || {
+      echo "Usage: $trigger [pr-number]" >&2
+      return 1
+    }
+  fi
+
+  metadata=$(_wt_pr_metadata "$pr_number") || {
+    echo "Error: failed to resolve PR/MR #$pr_number with gh. Make sure the PR exists and that origin points at a GitHub repo you can access." >&2
+    return 1
+  }
+
+  IFS=$'\t' read -r resolved_number pr_title head_ref owner <<EOF
+$metadata
+EOF
+
+  if [[ -z "$resolved_number" || -z "$head_ref" ]]; then
+    echo "Error: incomplete PR/MR metadata returned by gh." >&2
+    return 1
+  fi
+
+  if ! _wt_validate_pr_number "$resolved_number" >/dev/null 2>&1; then
+    echo "Error: invalid PR/MR number returned by gh." >&2
+    return 1
+  fi
+
+  main_root=$(_wt_main_root)
+  worktree_path=$(_wt_worktree_path_for_branch "$main_root" "$head_ref")
+
+  if git show-ref --verify --quiet "refs/heads/$head_ref"; then
+    existing_worktree=$(_wt_find_worktree_for_branch "$head_ref") || existing_worktree=""
+    if [[ -n "$existing_worktree" ]]; then
+      echo "Error: branch '$head_ref' already has a worktree at '$existing_worktree'." >&2
+    else
+      echo "Error: PR/MR head branch '$head_ref' already exists locally." >&2
+    fi
+    return 1
+  fi
+
+  if [[ -d "$worktree_path" ]]; then
+    echo "Error: directory '$worktree_path' already exists for branch '$head_ref'." >&2
+    return 1
+  fi
+
+  echo "Fetching PR/MR #$resolved_number from origin..."
+  git fetch origin "pull/$resolved_number/head" || return 1
+
+  echo "Creating review worktree at $worktree_path (branch: $head_ref)..."
+  HUSKY=0 git worktree add --no-track -b "$head_ref" "$worktree_path" FETCH_HEAD || return 1
+
+  _wt_copy_env_files "$main_root" "$worktree_path"
+
+  echo "Detecting dependencies..."
+  _wt_install_deps "$worktree_path" || echo "Warning: dependency installation failed." >&2
+
+  cd "$worktree_path" || return 1
+
+  _wt_print_review_ready "$resolved_number" "$pr_title" "$head_ref" "$worktree_path"
+}
+
+wtpr() {
+  _wt_review_pr "wtpr" "${1:-}"
+}
+
+wtmr() {
+  _wt_review_pr "wtmr" "${1:-}"
 }
 
 # ---------------------------------------------------------------------------
