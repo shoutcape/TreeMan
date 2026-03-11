@@ -108,12 +108,13 @@ Works correctly even when run from inside an existing worktree — always target
 
 ### `wtpr` / `wtmr` — review worktree creation
 
-1. **Resolves PR metadata** with `gh api` or lets you choose from open PRs with `fzf`
-2. **Fetches** the PR head via GitHub's `pull/<number>/head` ref on `origin`
-3. **Creates** a review worktree using the PR head branch name at `../<repo>.<branch-slug>`
-4. **Copies `.env*` files** from the main worktree
-5. **Installs dependencies** using the same lockfile detection as `wt`
-6. **Auto-`cd`s** into the new review worktree and prints review details including the PR/MR number, title, branch, and final path
+1. **Detects the forge** — GitHub (`github.com`) or GitLab (any host containing `gitlab`, including self-hosted instances like `gitlab.company.com`)
+2. **Resolves PR/MR metadata** with `gh api` (GitHub) or `glab api` (GitLab), or lets you choose from open PRs/MRs with `fzf`
+3. **Fetches** the PR/MR head via `pull/<number>/head` (GitHub) or `merge-requests/<number>/head` (GitLab)
+4. **Creates** a review worktree using the PR/MR head branch name at `../<repo>.<branch-slug>`
+5. **Copies `.env*` files** from the main worktree
+6. **Installs dependencies** using the same lockfile detection as `wt`
+7. **Auto-`cd`s** into the new review worktree and prints review details including the PR/MR number, title, branch, and final path
 
 If the PR head branch already exists locally or already has a worktree, TreeMan fails safely instead of guessing.
 
@@ -151,11 +152,34 @@ Review worktrees created by `wtpr` / `wtmr` use the same branch-based naming.
 
 ---
 
+## Supported forges & remote URLs
+
+`wtpr` / `wtmr` auto-detect the forge from your `origin` remote URL:
+
+| Forge | Detection | CLI tool | Fetch ref |
+|---|---|---|---|
+| **GitHub** | Host is `github.com` | `gh` | `pull/<n>/head` |
+| **GitLab** | Host contains `gitlab` (e.g. `gitlab.com`, `gitlab.company.com`) | `glab` + `jq` | `merge-requests/<n>/head` |
+
+All common remote URL formats are supported:
+
+| Format | Example |
+|---|---|
+| SSH shorthand | `git@github.com:owner/repo.git` |
+| SSH shorthand (GitLab, nested groups) | `git@gitlab.company.com:group/subgroup/project.git` |
+| HTTPS | `https://github.com/owner/repo.git` |
+| SSH URL | `ssh://git@github.com/owner/repo.git` |
+
+GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
+
+---
+
 ## Requirements
 
 - `git`
 - `bash` or `zsh`
-- [`gh`](https://cli.github.com/) (for `wtpr` and `wtmr`; public repos can work without auth, private repos require it)
+- [`gh`](https://cli.github.com/) (for `wtpr` / `wtmr` with **GitHub** repos)
+- [`glab`](https://gitlab.com/gitlab-org/cli) + [`jq`](https://jqlang.github.io/jq/) (for `wtpr` / `wtmr` with **GitLab** repos, including self-hosted instances)
 - [`fzf`](https://github.com/junegunn/fzf) (for `wts`, `wtd`, and optional `wtpr` / `wtmr` picker mode)
 - The package manager your project uses (only needed when a lockfile is detected)
 

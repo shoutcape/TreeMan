@@ -4,13 +4,14 @@
 #
 # Usage:
 #   wt   <branch-name>     Create a new worktree + branch
-#   wtpr [pr-number]       Create a review worktree from a GitHub PR
+#   wtpr [pr-number]       Create a review worktree from a GitHub PR or GitLab MR
 #   wtmr [pr-number]       Same as wtpr (PR/MR are interchangeable here)
 #   wts  [query]           Switch between worktrees (fzf picker)
 #   wtd  [query]           Delete a worktree and its branch (fzf picker)
 #
 # Supports: bash, zsh
-# Dependencies: git, gh (for wtpr/wtmr), fzf (for wts/wtd and optional wtpr/wtmr picker),
+# Forges:   GitHub (gh CLI) and GitLab (glab CLI), including self-hosted instances
+# Dependencies: git, gh or glab (for wtpr/wtmr), fzf (for wts/wtd and optional wtpr/wtmr picker),
 # and whichever package manager your project uses
 
 # ---------------------------------------------------------------------------
@@ -72,51 +73,135 @@ _wt_worktree_path_for_branch() {
   echo "$(dirname "$main_root")/${repo_name}.${branch_slug}"
 }
 
-# Resolve the GitHub owner/repo slug from the origin remote URL.
-_wt_origin_repo_slug() {
-  local remote_url slug
+# Read the origin remote URL (cached per invocation via _TREEMAN_REMOTE_URL).
+_wt_origin_remote_url() {
+  if [[ -n "${_TREEMAN_REMOTE_URL:-}" ]]; then
+    echo "$_TREEMAN_REMOTE_URL"
+    return 0
+  fi
 
+  local url
+  url=$(git remote get-url origin 2>/dev/null) || {
+    echo "Error: could not read origin remote URL." >&2
+    return 1
+  }
+  echo "$url"
+}
+
+# Extract the hostname from a git remote URL.
+# Supports: git@host:path, ssh://git@host/path, https://host/path
+_wt_parse_remote_host() {
+  local url="$1"
+
+  case "$url" in
+    git@*:*)
+      # git@host:path  →  host
+      local after_at="${url#git@}"
+      echo "${after_at%%:*}"
+      ;;
+    ssh://git@*/*)
+      # ssh://git@host/path  or  ssh://git@host:port/path
+      local after_at="${url#ssh://git@}"
+      local host_port="${after_at%%/*}"
+      echo "${host_port%%:*}"        # strip optional :port
+      ;;
+    https://*/*)
+      local after_scheme="${url#https://}"
+      echo "${after_scheme%%/*}"
+      ;;
+    http://*/*)
+      local after_scheme="${url#http://}"
+      echo "${after_scheme%%/*}"
+      ;;
+    *)
+      echo "Error: cannot extract host from remote URL '$url'." >&2
+      return 1
+      ;;
+  esac
+}
+
+# Extract the repository path (owner/repo or group/subgroup/project) from a
+# git remote URL. Strips .git suffix and leading/trailing slashes.
+_wt_parse_remote_path() {
+  local url="$1"
+  local path
+
+  case "$url" in
+    git@*:*)
+      path="${url#*:}"
+      ;;
+    ssh://git@*/*)
+      # ssh://git@host/path  or  ssh://git@host:port/path
+      local after_at="${url#ssh://git@}"
+      local host_port="${after_at%%/*}"
+      path="${after_at#"$host_port"}"
+      path="${path#/}"
+      ;;
+    https://*/*)
+      local after_scheme="${url#https://}"
+      path="${after_scheme#*/}"
+      ;;
+    http://*/*)
+      local after_scheme="${url#http://}"
+      path="${after_scheme#*/}"
+      ;;
+    *)
+      echo "Error: cannot extract path from remote URL '$url'." >&2
+      return 1
+      ;;
+  esac
+
+  path="${path%.git}"
+  path="${path%/}"
+  path="${path#/}"
+  echo "$path"
+}
+
+# Detect forge type from the origin remote URL.
+# Prints "github" or "gitlab". Returns 1 for unsupported hosts.
+# Override with _TREEMAN_FORGE env var (for tests or edge cases).
+_wt_detect_forge() {
+  if [[ -n "${_TREEMAN_FORGE:-}" ]]; then
+    echo "$_TREEMAN_FORGE"
+    return 0
+  fi
+
+  local url host
+  url=$(_wt_origin_remote_url) || return 1
+  host=$(_wt_parse_remote_host "$url") || return 1
+
+  case "$host" in
+    github.com)
+      echo "github"
+      ;;
+    *gitlab*)
+      echo "gitlab"
+      ;;
+    *)
+      echo "Error: unsupported forge host '$host'. Expected github.com or a GitLab instance." >&2
+      return 1
+      ;;
+  esac
+}
+
+# Resolve the repository slug (owner/repo or group/subgroup/project) from
+# the origin remote URL. Works with any supported forge and URL format.
+_wt_origin_repo_slug() {
   if [[ -n "${_TREEMAN_GH_REPO:-}" ]]; then
     echo "${_TREEMAN_GH_REPO%/}"
     return 0
   fi
 
-  remote_url=$(git remote get-url origin 2>/dev/null) || {
-    echo "Error: could not read origin remote URL." >&2
-    return 1
-  }
+  local url
+  url=$(_wt_origin_remote_url) || return 1
+  _wt_parse_remote_path "$url"
+}
 
-  case "$remote_url" in
-    git@github.com:*.git)
-      slug=${remote_url#git@github.com:}
-      slug=${slug%.git}
-      ;;
-    git@github.com:*)
-      slug=${remote_url#git@github.com:}
-      ;;
-    https://github.com/*/*.git)
-      slug=${remote_url#https://github.com/}
-      slug=${slug%.git}
-      ;;
-    https://github.com/*/*)
-      slug=${remote_url#https://github.com/}
-      slug=${slug%/}
-      ;;
-    ssh://git@github.com/*/*.git)
-      slug=${remote_url#ssh://git@github.com/}
-      slug=${slug%.git}
-      ;;
-    ssh://git@github.com/*/*)
-      slug=${remote_url#ssh://git@github.com/}
-      slug=${slug%/}
-      ;;
-    *)
-      echo "Error: origin remote '$remote_url' is not a supported GitHub URL." >&2
-      return 1
-      ;;
-  esac
-
-  echo "$slug"
+# Return the origin hostname (for use with glab --hostname, etc.).
+_wt_origin_host() {
+  local url
+  url=$(_wt_origin_remote_url) || return 1
+  _wt_parse_remote_host "$url"
 }
 
 # Return git worktree list in normal format.
@@ -135,12 +220,13 @@ _wt_display_worktrees() {
   local lines="$1"
   local main_root="${2:-}"
 
+  # TreeMan palette: #C4915E warm brown (path), #B2B644 bright olive (branch)
   echo "$lines" | awk -v main="$main_root" '{
     if (main != "" && $1 == main) next
     path = $1
     n = split(path, parts, "/")
     short = (n >= 2) ? parts[n-1] "/" parts[n] : parts[n]
-    printf "%-40s  \033[36m%s\033[0m\n", short, $3
+    printf "\033[38;2;196;145;94m%-40s\033[0m  \033[38;2;178;182;68m%s\033[0m\n", short, $3
   }'
 }
 
@@ -174,25 +260,82 @@ _wt_validate_pr_number() {
   fi
 }
 
+# URL-encode a string (for GitLab project path in API URLs).
+# e.g. "group/subgroup/project" → "group%2Fsubgroup%2Fproject"
+# Uses printf to iterate bytes, portable across bash and zsh.
+_wt_urlencode() {
+  local str="$1"
+  local encoded=""
+  local c rest
+  rest="$str"
+  while [[ -n "$rest" ]]; do
+    c="${rest%"${rest#?}"}"   # first character
+    rest="${rest#?}"          # remainder
+    case "$c" in
+      [a-zA-Z0-9._~-]) encoded+="$c" ;;
+      *) encoded+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  echo "$encoded"
+}
+
 # Resolve PR metadata via gh and print TSV: number, title, headRefName, owner
 _wt_pr_metadata() {
   local pr_number="$1"
-  local repo_slug
+  local forge repo_slug host encoded_slug
 
+  forge=$(_wt_detect_forge) || return 1
   repo_slug=$(_wt_origin_repo_slug) || return 1
 
-  gh api "repos/$repo_slug/pulls/$pr_number" \
-    --jq '[.number, .title, .head.ref, .head.repo.owner.login] | @tsv'
+  case "$forge" in
+    github)
+      gh api "repos/$repo_slug/pulls/$pr_number" \
+        --jq '[.number, .title, .head.ref, .head.repo.owner.login] | @tsv'
+      ;;
+    gitlab)
+      host=$(_wt_origin_host) || return 1
+      encoded_slug=$(_wt_urlencode "$repo_slug")
+      glab api "projects/$encoded_slug/merge_requests/$pr_number" \
+        --hostname "$host" \
+        | _wt_jq_tsv '.iid, .title, .source_branch, .author.username'
+      ;;
+  esac
 }
 
-# List open PRs/MRs via gh as TSV: number, headRefName, title
+# List open PRs/MRs as TSV: number, headRefName, title
 _wt_pr_list() {
-  local repo_slug
+  local forge repo_slug host encoded_slug
 
+  forge=$(_wt_detect_forge) || return 1
   repo_slug=$(_wt_origin_repo_slug) || return 1
 
-  gh api "repos/$repo_slug/pulls?state=open&per_page=100" \
-    --jq '.[] | [.number, .head.ref, .title] | @tsv'
+  case "$forge" in
+    github)
+      gh api "repos/$repo_slug/pulls?state=open&per_page=100" \
+        --jq '.[] | [.number, .head.ref, .title] | @tsv'
+      ;;
+    gitlab)
+      host=$(_wt_origin_host) || return 1
+      encoded_slug=$(_wt_urlencode "$repo_slug")
+      glab api "projects/$encoded_slug/merge_requests?state=opened&per_page=100" \
+        --hostname "$host" \
+        | _wt_jq_array_tsv '.iid, .source_branch, .title'
+      ;;
+  esac
+}
+
+# jq helper: extract fields from a single JSON object as TSV.
+# Usage: echo '{"a":1,"b":"x"}' | _wt_jq_tsv '.a, .b'
+_wt_jq_tsv() {
+  local fields="$1"
+  jq -r "[$fields] | @tsv"
+}
+
+# jq helper: extract fields from a JSON array as TSV lines.
+# Usage: echo '[{"a":1},{"a":2}]' | _wt_jq_array_tsv '.a, .b'
+_wt_jq_array_tsv() {
+  local fields="$1"
+  jq -r ".[] | [$fields] | @tsv"
 }
 
 # Format gh TSV output into a readable fzf list.
@@ -204,11 +347,16 @@ _wt_pr_picker_display() {
     return 0
   fi
 
-  printf "%-8s %-32s %s\n" "PR/MR" "Branch" "Title"
+  # TreeMan palette: #F2EA72 golden yellow, #B2B644 bright olive, #C4915E warm brown
+  printf "\033[38;2;242;234;114m%-8s\033[0m \033[38;2;178;182;68m%-32s\033[0m \033[38;2;196;145;94m%s\033[0m\n" "PR/MR" "Branch" "Title"
 
   while IFS=$'\t' read -r number branch title; do
     [[ -n "$number" ]] || continue
-    printf "\033[33m#%-7s\033[0m \033[36m%-32s\033[0m %s\n" "$number" "$branch" "$title"
+    # Truncate branch to 32 chars to keep columns aligned
+    if [[ ${#branch} -gt 32 ]]; then
+      branch="${branch:0:31}…"
+    fi
+    printf "\033[38;2;242;234;114m#%-7s\033[0m \033[38;2;178;182;68m%-32s\033[0m \033[38;2;196;145;94m%s\033[0m\n" "$number" "$branch" "$title"
   done <<EOF
 $rows
 EOF
@@ -224,7 +372,7 @@ _wt_pick_pr_number() {
   fi
 
   rows=$(_wt_pr_list) || {
-    echo "Error: failed to list open PRs/MRs with gh." >&2
+    echo "Error: failed to list open PRs/MRs." >&2
     return 1
   }
 
@@ -532,16 +680,35 @@ _wt_review_pr() {
   local trigger="$1"
   local pr_number="$2"
   local main_root metadata resolved_number pr_title head_ref owner worktree_path existing_worktree
+  local forge cli_tool fetch_ref
 
   if ! git rev-parse --git-dir >/dev/null 2>&1; then
     echo "Error: not inside a git repository." >&2
     return 1
   fi
 
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "Error: gh is required for $trigger. Install it from https://cli.github.com/" >&2
-    return 1
-  fi
+  forge=$(_wt_detect_forge) || return 1
+
+  case "$forge" in
+    github)
+      cli_tool="gh"
+      if ! command -v gh >/dev/null 2>&1; then
+        echo "Error: gh is required for $trigger with GitHub repos. Install it from https://cli.github.com/" >&2
+        return 1
+      fi
+      ;;
+    gitlab)
+      cli_tool="glab"
+      if ! command -v glab >/dev/null 2>&1; then
+        echo "Error: glab is required for $trigger with GitLab repos. Install it from https://gitlab.com/gitlab-org/cli" >&2
+        return 1
+      fi
+      if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is required for $trigger with GitLab repos. Install it from https://jqlang.github.io/jq/" >&2
+        return 1
+      fi
+      ;;
+  esac
 
   if [[ -z "$pr_number" ]]; then
     pr_number=$(_wt_pick_pr_number) || return 1
@@ -553,7 +720,7 @@ _wt_review_pr() {
   fi
 
   metadata=$(_wt_pr_metadata "$pr_number") || {
-    echo "Error: failed to resolve PR/MR #$pr_number with gh. Make sure the PR exists and that origin points at a GitHub repo you can access." >&2
+    echo "Error: failed to resolve PR/MR #$pr_number with $cli_tool. Make sure the PR/MR exists and that origin points at a repo you can access." >&2
     return 1
   }
 
@@ -562,12 +729,12 @@ $metadata
 EOF
 
   if [[ -z "$resolved_number" || -z "$head_ref" ]]; then
-    echo "Error: incomplete PR/MR metadata returned by gh." >&2
+    echo "Error: incomplete PR/MR metadata returned by $cli_tool." >&2
     return 1
   fi
 
   if ! _wt_validate_pr_number "$resolved_number" >/dev/null 2>&1; then
-    echo "Error: invalid PR/MR number returned by gh." >&2
+    echo "Error: invalid PR/MR number returned by $cli_tool." >&2
     return 1
   fi
 
@@ -589,8 +756,14 @@ EOF
     return 1
   fi
 
+  # Forge-specific fetch ref
+  case "$forge" in
+    github) fetch_ref="pull/$resolved_number/head" ;;
+    gitlab) fetch_ref="merge-requests/$resolved_number/head" ;;
+  esac
+
   echo "Fetching PR/MR #$resolved_number from origin..."
-  git fetch origin "pull/$resolved_number/head" || return 1
+  git fetch origin "$fetch_ref" || return 1
 
   echo "Creating review worktree at $worktree_path (branch: $head_ref)..."
   HUSKY=0 git worktree add --no-track -b "$head_ref" "$worktree_path" FETCH_HEAD || return 1

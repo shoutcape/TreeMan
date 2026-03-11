@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 TMP_DIR=$(mktemp -d)
+# Resolve symlinks (macOS /var → /private/var) so paths match git worktree output
+TMP_DIR=$(cd "$TMP_DIR" && pwd -P)
 TEST_HOME="$TMP_DIR/home"
 LAZYGIT_CONFIG_DIR="$TMP_DIR/lazygit"
 MOCK_BIN="$TMP_DIR/bin"
@@ -55,6 +57,7 @@ export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$HOME/.config"
 export GIT_CONFIG_NOSYSTEM=1
 export _TREEMAN_GH_REPO="shoutcape/TreeMan"
+export _TREEMAN_FORGE="github"
 export GIT_AUTHOR_NAME="TreeMan Test"
 export GIT_AUTHOR_EMAIL="test@example.com"
 export GIT_COMMITTER_NAME="TreeMan Test"
@@ -184,6 +187,154 @@ assert_exists "$REVIEW_WT_BETA/review-beta.txt"
 [[ "$(pwd)" == "$REVIEW_WT_BETA" ]] || fail "Expected wtmr to cd into created review worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/review-beta || fail "Expected feature/review-beta branch"
 unset FZF_CHOICE
+
+# ---------------------------------------------------------------------------
+# URL parsing & forge detection tests
+# ---------------------------------------------------------------------------
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$expected" != "$actual" ]]; then
+    fail "$label: expected '$expected', got '$actual'"
+  fi
+}
+
+echo "==> URL parsing: _wt_parse_remote_host"
+assert_eq "github ssh shorthand"     "github.com"    "$(_wt_parse_remote_host 'git@github.com:owner/repo.git')"
+assert_eq "github https"             "github.com"    "$(_wt_parse_remote_host 'https://github.com/owner/repo.git')"
+assert_eq "github ssh://"            "github.com"    "$(_wt_parse_remote_host 'ssh://git@github.com/owner/repo.git')"
+assert_eq "gitlab.com ssh shorthand" "gitlab.com"    "$(_wt_parse_remote_host 'git@gitlab.com:group/project.git')"
+assert_eq "gitlab.com https"         "gitlab.com"    "$(_wt_parse_remote_host 'https://gitlab.com/group/project.git')"
+assert_eq "self-hosted gitlab ssh"   "gitlab.company.com" "$(_wt_parse_remote_host 'git@gitlab.company.com:acme/frontend/webapp.git')"
+assert_eq "self-hosted gitlab https" "gitlab.company.com" "$(_wt_parse_remote_host 'https://gitlab.company.com/acme/frontend/webapp.git')"
+assert_eq "ssh:// with port"         "gitlab.company.com" "$(_wt_parse_remote_host 'ssh://git@gitlab.company.com:2222/group/project.git')"
+
+echo "==> URL parsing: _wt_parse_remote_path"
+assert_eq "github ssh .git"          "owner/repo"    "$(_wt_parse_remote_path 'git@github.com:owner/repo.git')"
+assert_eq "github ssh no .git"       "owner/repo"    "$(_wt_parse_remote_path 'git@github.com:owner/repo')"
+assert_eq "github https .git"        "owner/repo"    "$(_wt_parse_remote_path 'https://github.com/owner/repo.git')"
+assert_eq "github https no .git"     "owner/repo"    "$(_wt_parse_remote_path 'https://github.com/owner/repo')"
+assert_eq "github ssh://"            "owner/repo"    "$(_wt_parse_remote_path 'ssh://git@github.com/owner/repo.git')"
+assert_eq "gitlab nested groups ssh" "acme/frontend/webapp" \
+  "$(_wt_parse_remote_path 'git@gitlab.company.com:acme/frontend/webapp.git')"
+assert_eq "gitlab nested groups https" "acme/frontend/webapp" \
+  "$(_wt_parse_remote_path 'https://gitlab.company.com/acme/frontend/webapp.git')"
+assert_eq "gitlab nested groups ssh://" "acme/frontend/webapp" \
+  "$(_wt_parse_remote_path 'ssh://git@gitlab.company.com/acme/frontend/webapp.git')"
+assert_eq "ssh:// with port" "group/project" \
+  "$(_wt_parse_remote_path 'ssh://git@gitlab.company.com:2222/group/project.git')"
+
+echo "==> forge detection: _wt_detect_forge"
+# Use _TREEMAN_REMOTE_URL to inject test URLs without a real remote
+_TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="git@github.com:owner/repo.git" \
+  assert_eq "github from ssh" "github" "$(_TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="git@github.com:owner/repo.git" _wt_detect_forge)"
+
+_TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="https://gitlab.com/group/project.git" \
+  assert_eq "gitlab.com from https" "gitlab" "$(_TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="https://gitlab.com/group/project.git" _wt_detect_forge)"
+
+_TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="git@gitlab.company.com:g/p.git" \
+  assert_eq "self-hosted gitlab from ssh" "gitlab" "$(_TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="git@gitlab.company.com:g/p.git" _wt_detect_forge)"
+
+if _TREEMAN_FORGE="" _TREEMAN_REMOTE_URL="git@bitbucket.org:o/r.git" _wt_detect_forge 2>/dev/null; then
+  fail "detect_forge should reject unsupported hosts"
+fi
+
+echo "==> URL encoding: _wt_urlencode"
+assert_eq "simple path" "owner%2Frepo" "$(_wt_urlencode 'owner/repo')"
+assert_eq "nested path" "acme%2Ffrontend%2Fwebapp" \
+  "$(_wt_urlencode 'acme/frontend/webapp')"
+
+echo "==> _wt_origin_repo_slug with _TREEMAN_GH_REPO override"
+assert_eq "override still works" "shoutcape/TreeMan" "$(_wt_origin_repo_slug)"
+
+echo "==> _wt_origin_repo_slug from remote URL (no override)"
+_old_gh_repo="${_TREEMAN_GH_REPO}"
+unset _TREEMAN_GH_REPO
+export _TREEMAN_REMOTE_URL="git@gitlab.company.com:acme/frontend/webapp.git"
+assert_eq "slug from gitlab ssh remote" "acme/frontend/webapp" "$(_wt_origin_repo_slug)"
+unset _TREEMAN_REMOTE_URL
+export _TREEMAN_GH_REPO="$_old_gh_repo"
+
+# ---------------------------------------------------------------------------
+# GitLab MR workflow tests
+# ---------------------------------------------------------------------------
+
+echo "==> GitLab mock glab/jq setup"
+
+GITLAB_REMOTE_REPO="$TMP_DIR/gl-remote.git"
+GITLAB_MAIN_REPO="$TMP_DIR/gl-project"
+GITLAB_MR_SOURCE="$TMP_DIR/gl-mr-source"
+GITLAB_REVIEW_WT="$TMP_DIR/gl-project.feature-mr-gamma"
+
+git init --bare "$GITLAB_REMOTE_REPO" >/dev/null
+git clone "$GITLAB_REMOTE_REPO" "$GITLAB_MAIN_REPO" >/dev/null
+git -C "$GITLAB_MAIN_REPO" switch -c main >/dev/null
+printf 'gitlab hello\n' > "$GITLAB_MAIN_REPO/README.md"
+git -C "$GITLAB_MAIN_REPO" add README.md
+git -C "$GITLAB_MAIN_REPO" commit -m "init gitlab" >/dev/null
+git -C "$GITLAB_MAIN_REPO" push -u origin main >/dev/null
+
+git clone "$GITLAB_REMOTE_REPO" "$GITLAB_MR_SOURCE" >/dev/null
+git -C "$GITLAB_MR_SOURCE" switch -c main origin/main >/dev/null
+git -C "$GITLAB_MR_SOURCE" switch -c feature/mr-gamma >/dev/null
+printf 'gamma mr\n' > "$GITLAB_MR_SOURCE/gamma.txt"
+git -C "$GITLAB_MR_SOURCE" add gamma.txt
+git -C "$GITLAB_MR_SOURCE" commit -m "gamma mr" >/dev/null
+git -C "$GITLAB_MR_SOURCE" push -u origin feature/mr-gamma >/dev/null
+# GitLab uses merge-requests/<iid>/head refs
+git -C "$GITLAB_MR_SOURCE" push origin HEAD:refs/merge-requests/42/head >/dev/null
+
+# Create mock glab that returns JSON (glab api does not support --jq)
+cat > "$MOCK_BIN/glab" <<'GLABEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "api" ]]; then
+  endpoint="${2:-}"
+
+  case "$endpoint" in
+    */merge_requests/42)
+      printf '%s\n' "${MOCK_GLAB_VIEW_42:-}"
+      exit 0
+      ;;
+    *"merge_requests?state=opened&per_page=100"*)
+      printf '%s\n' "${MOCK_GLAB_LIST:-}"
+      exit 0
+      ;;
+  esac
+fi
+
+echo "unsupported glab invocation: $*" >&2
+exit 1
+GLABEOF
+chmod +x "$MOCK_BIN/glab"
+
+echo "==> GitLab review worktree create (wtmr)"
+cd "$GITLAB_MAIN_REPO"
+
+# Switch to GitLab forge for these tests
+export _TREEMAN_FORGE="gitlab"
+unset _TREEMAN_GH_REPO
+export _TREEMAN_REMOTE_URL="git@gitlab.company.com:acme/frontend/gl-project.git"
+
+export MOCK_GLAB_VIEW_42='{"iid":42,"title":"Gamma MR","source_branch":"feature/mr-gamma","author":{"username":"testuser"}}'
+wtmr 42 >/dev/null
+assert_exists "$GITLAB_REVIEW_WT"
+assert_exists "$GITLAB_REVIEW_WT/gamma.txt"
+[[ "$(pwd)" == "$GITLAB_REVIEW_WT" ]] || fail "Expected wtmr to cd into GitLab review worktree"
+git -C "$GITLAB_MAIN_REPO" show-ref --verify --quiet refs/heads/feature/mr-gamma || fail "Expected feature/mr-gamma branch"
+
+cd "$GITLAB_MAIN_REPO"
+if wtmr nope >/dev/null 2>&1; then
+  fail "wtmr should reject non-numeric input for GitLab"
+fi
+
+# Restore GitHub forge for remaining tests
+export _TREEMAN_FORGE="github"
+export _TREEMAN_GH_REPO="shoutcape/TreeMan"
+unset _TREEMAN_REMOTE_URL
+
+cd "$MAIN_REPO"
 
 echo "==> protected deletions"
 if _wt_lazygit_delete_branch main >/dev/null 2>&1; then
