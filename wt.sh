@@ -394,8 +394,10 @@ _wt_pick_pr_number() {
     return 1
   fi
 
-  line_num=$(_wt_selection_line_num "$display" "$selection")
-  pr_number=$(echo "$rows" | sed -n "${line_num}p" | cut -f1)
+  # The first field of the selected line is "#<number>" — parse it directly.
+  # This avoids fragile line-number reverse-lookup which breaks when fzf
+  # reorders results due to interactive fuzzy filtering.
+  pr_number=$(printf '%s' "$selection" | sed $'s/\033\\[[0-9;]*m//g' | awk '{print $1}' | tr -d '#')
 
   [[ -n "$pr_number" ]] || return 1
   echo "$pr_number"
