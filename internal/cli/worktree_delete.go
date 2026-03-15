@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/shoutcape/TreeMan/internal/git"
+	"github.com/shoutcape/TreeMan/internal/runtime"
 	"github.com/shoutcape/TreeMan/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -26,6 +28,16 @@ Prints the path to cd to after deletion (typically the main worktree).`,
 // deleteFlags holds flags specific to the delete command.
 var deleteBranch string
 var deletePath string
+
+var (
+	defaultBranchFn           = git.DefaultBranch
+	loadRuntimeStateFn        = runtime.LoadState
+	checkProcessStatusFn      = runtime.CheckProcessStatus
+	stopProcessFn             = runtime.StopProcess
+	cleanupRuntimeArtifactsFn = runtime.CleanupRuntimeArtifacts
+	worktreeRemoveFn          = git.WorktreeRemove
+	branchDeleteFn            = git.BranchDelete
+)
 
 func init() {
 	// Flags for lazygit integration (direct deletion without fzf)
@@ -112,7 +124,7 @@ func deleteInteractive(args []string, mainRoot string) error {
 
 func deleteByBranch(branch, mainRoot string) error {
 	// Guard: cannot delete default branch
-	defaultBranch, _ := git.DefaultBranch()
+	defaultBranch, _ := defaultBranchFn()
 	if branch == defaultBranch {
 		return fmt.Errorf("cannot delete the default branch '%s'", branch)
 	}
@@ -178,13 +190,33 @@ func confirmAndDelete(dest, branch, mainRoot string) error {
 
 func doDelete(dest, branch, mainRoot string) error {
 	// Guard: cannot delete default branch
-	defaultBranch, _ := git.DefaultBranch()
+	defaultBranch, _ := defaultBranchFn()
 	if branch == defaultBranch {
 		return fmt.Errorf("cannot delete the default branch '%s'", branch)
 	}
 
 	if dest == mainRoot {
 		return fmt.Errorf("cannot delete the main worktree")
+	}
+
+	repo := filepath.Base(mainRoot)
+	branchSlug := git.BranchSlug(branch)
+	state, err := loadRuntimeStateFn(repo, branchSlug)
+	if err != nil {
+		return fmt.Errorf("loading runtime state: %w", err)
+	}
+
+	if state != nil {
+		status := checkProcessStatusFn(state)
+		if status == "running" {
+			fmt.Fprintf(os.Stderr, "Stopping runtime for '%s'...\n", branch)
+			if err := stopProcessFn(state); err != nil {
+				return fmt.Errorf("stopping runtime for '%s': %w", branch, err)
+			}
+		} else {
+			state.Status = status
+			_ = runtime.SaveState(state)
+		}
 	}
 
 	// Check if we're inside the worktree being deleted
@@ -194,13 +226,19 @@ func doDelete(dest, branch, mainRoot string) error {
 	}
 
 	fmt.Fprintln(os.Stderr, "Removing worktree...")
-	if err := git.WorktreeRemove(dest); err != nil {
+	if err := worktreeRemoveFn(dest); err != nil {
 		return fmt.Errorf("failed to remove worktree '%s'. Use 'git worktree remove --force' to force it", dest)
 	}
 
 	fmt.Fprintf(os.Stderr, "Deleting branch '%s'...\n", branch)
-	if err := git.BranchDelete(branch); err != nil {
+	if err := branchDeleteFn(branch); err != nil {
 		return fmt.Errorf("branch '%s' could not be deleted", branch)
+	}
+
+	if state != nil {
+		if err := cleanupRuntimeArtifactsFn(state); err != nil {
+			return fmt.Errorf("cleaning runtime artifacts for '%s': %w", branch, err)
+		}
 	}
 
 	fmt.Fprintln(os.Stderr, "Done — worktree and branch removed.")

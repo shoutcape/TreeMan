@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/shoutcape/TreeMan/internal/runtime"
 	"github.com/spf13/cobra"
@@ -47,7 +48,7 @@ func runRuntimeEnv(cmd *cobra.Command, args []string) error {
 
 		for _, name := range names {
 			port := state.Ports[name]
-			envName := fmt.Sprintf("%s_PORT", capitalize(name))
+			envName := fmt.Sprintf("%s_PORT", strings.ToUpper(name))
 			fmt.Printf("%s=%d\n", envName, port)
 			if name == "app" {
 				fmt.Printf("PORT=%d\n", port)
@@ -61,7 +62,11 @@ func runRuntimeEnv(cmd *cobra.Command, args []string) error {
 
 	// Also show the env file path on stderr
 	if state.EnvFile != "" {
-		fmt.Fprintf(os.Stderr, "Env file: %s/%s\n", state.WorktreePath, state.EnvFile)
+		envPath, err := runtime.EnvFilePath(state)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Env file: %s\n", envPath)
 	}
 
 	return nil

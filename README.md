@@ -1,44 +1,51 @@
 <img width="2758" height="1504" alt="TreeMan_Logo_no_white_bg_smooth2" src="https://github.com/user-attachments/assets/d12d7c55-cd61-4116-932d-e0f5f63ae613" />
 
+TreeMan is a Go CLI for Git worktree workflows with an optional per-worktree runtime layer.
 
-
-
-Shell functions for git worktree workflows — create new branch worktrees, jump straight into them, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
-
-No runtime required. Single shell script. Works with bash and zsh.
+- Create branch worktrees quickly
+- Open review worktrees from GitHub PRs or GitLab MRs
+- Switch and delete worktrees with an `fzf` picker
+- Run isolated dev servers per worktree with auto-assigned ports
 
 ```bash
-wt feature/my-thing        # create a new worktree + branch
-wtpr 123                   # create a review worktree from PR #123
-wtmr                       # pick an open PR/MR with fzf, then create a review worktree
-wts                        # switch between worktrees (fzf picker)
-wtd                        # delete a worktree (interactive picker)
+wt feature/my-thing         # create a new worktree + branch
+wtpr 123                    # create a review worktree from PR/MR #123
+wtmr                        # pick an open PR/MR with fzf
+wts                         # switch between worktrees
+wtd                         # delete a worktree
+
+treeman init                # create .treeman.yml
+treeman runtime up          # start per-worktree runtime
+treeman runtime status      # show runtime status
+treeman runtime env         # print assigned env vars
+treeman runtime down        # stop runtime
 ```
 
-### `wt` — create
+The shell aliases come from `wt.sh`. The actual implementation lives in the `treeman` binary.
+
+### `wt` - create
 
 <video src="https://github.com/user-attachments/assets/7491c0eb-896f-4046-b46b-1c3db01619c3" width="400"></video>
 
-```
+```text
 Fetching latest main from origin...
 Creating worktree at ~/Github/my-project.feature-my-thing (branch: feature/my-thing)...
 Copied .env, .env.local
-Detected pnpm-lock.yaml — running pnpm install...
+Detected pnpm-lock.yaml - running pnpm install...
 
 Worktree ready:
-  Auto-switched to: /home/user/Github/my-project.feature-my-thing
   Path: /home/user/Github/my-project.feature-my-thing
 ```
 
-### `wtpr` / `wtmr` — review
+### `wtpr` / `wtmr` - review
 
-`wtpr` and `wtmr` are identical commands. TreeMan uses PR and MR interchangeably for this workflow.
+`wtpr` and `wtmr` are identical. TreeMan uses PR and MR interchangeably for the review-worktree flow.
 
-```bash
+```text
 $ wtpr 123
 Fetching PR/MR #123 from origin...
 Creating review worktree at ~/Github/my-project.feature-login-fix (branch: feature/login-fix)...
-Detected pnpm-lock.yaml — running pnpm install...
+Detected pnpm-lock.yaml - running pnpm install...
 
 Review worktree ready:
   PR/MR:  #123
@@ -47,100 +54,105 @@ Review worktree ready:
   Path:   /home/user/Github/my-project.feature-login-fix
 ```
 
-If you omit the PR number, TreeMan uses `fzf` to let you choose from open PRs/MRs:
+If you omit the number, TreeMan can open an `fzf` picker of open PRs/MRs.
 
-- PR/MR number is highlighted first
-- branch name is shown next for quick scanning
-- title stays visible so related branches are easy to tell apart
-
-```bash
-wtpr
-wtmr
-```
-
-### `wts` — switch
-
+### `wts` - switch
 
 <video src="https://github.com/user-attachments/assets/ebb762c0-f530-4f35-aa3e-4b2c04c1f75b" width="300"></video>
 
-```
-┌──────────────── worktrees ────────────────────────────┐
-│ switch >                                              │
-│ Github/my-project  [main]                             │
-│ Github/my-project.feature-my-thing [feature/my-thing] │
-└───────────────────────────────────────────────────────┘
+TreeMan shows shortened worktree paths plus branch names, then prints the selected path so the shell wrapper can `cd` into it.
+
+### `wtd` - delete
+
+TreeMan confirms before deletion, protects the main worktree, and removes the worktree first before deleting the branch.
+
+If Git refuses to remove a dirty worktree, TreeMan fails safely and tells you to force removal manually with `git worktree remove --force`.
+
+### Runtime isolation
+
+`treeman runtime` lets each worktree run its own dev server with separate ports and generated env vars.
+
+```yaml
+runtime:
+  type: process
+  command: pnpm dev
+  env_file: .env.treeman
+  ports:
+    app: 3000
+    api: 4000
 ```
 
-### `wtd` — delete
+When you run `treeman runtime up`, TreeMan:
 
+- allocates unique ports for the current worktree
+- writes the generated env file
+- starts the configured process
+- stores runtime state under `~/.treeman/`
+
+Available runtime commands:
+
+```bash
+treeman runtime up
+treeman runtime down
+treeman runtime status
+treeman runtime logs
+treeman runtime env
+treeman runtime ls
 ```
-┌──────────────── worktrees ────────────────────────────┐
-│ delete >                                              │
-│ Github/my-project.feature-my-thing [feature/my-thing] │
-└───────────────────────────────────────────────────────┘
-```
-```
-Are you sure you want to delete this worktree and its branch? [y/N] y
-```
+
+`env_file` must stay inside the worktree. Relative nested paths like `config/.env.treeman` are supported.
 
 ---
 
 ## How it works
 
-### `wt` — worktree creation
+### `wt`
 
-1. **Validates** you're inside a git repo with a branch name argument
-2. **Detects the default branch** — checks for `origin/main`, falls back to `origin/master`
-3. **Fetches** the latest from origin so the new branch is always up to date
-4. **Creates** a new branch and worktree at `../<repo>.<branch-slug>` (sibling of your main repo)
-5. **Copies `.env*` files** from the main worktree so the new worktree has the same environment
-6. **Installs dependencies** by detecting the project's lockfile:
-   | Lockfile | Command |
-   |---|---|
-   | `pnpm-lock.yaml` | `pnpm install` |
-   | `yarn.lock` | `yarn install` |
-   | `package-lock.json` | `npm install` |
-   | `go.mod` | `go mod download` |
-   | `requirements.txt` / `pyproject.toml` | notifies you to activate venv manually |
-7. **Auto-`cd`s** into the new worktree and prints the path
+1. Validates that you are inside a Git repo and that the branch name is valid.
+2. Detects the default branch from `origin`.
+3. Fetches the latest default branch.
+4. Creates a sibling worktree at `../<repo>.<branch-slug>`.
+5. Copies `.env*` files from the main worktree.
+6. Detects dependencies and runs one of:
 
-Works correctly even when run from inside an existing worktree — always targets the main worktree root.
+| Lockfile | Command |
+|---|---|
+| `pnpm-lock.yaml` | `pnpm install` |
+| `yarn.lock` | `yarn install` |
+| `package-lock.json` | `npm install` |
+| `go.mod` | `go mod download` |
+| `requirements.txt` / `pyproject.toml` | warns to activate a venv manually |
 
-### `wtpr` / `wtmr` — review worktree creation
+### `wtpr` / `wtmr`
 
-1. **Detects the forge** — GitHub (`github.com`) or GitLab (any host containing `gitlab`, including self-hosted instances like `gitlab.company.com`)
-2. **Resolves PR/MR metadata** with `gh api` (GitHub) or `glab api` (GitLab), or lets you choose from open PRs/MRs with `fzf`
-3. **Fetches** the PR/MR head via `pull/<number>/head` (GitHub) or `merge-requests/<number>/head` (GitLab)
-4. **Creates** a review worktree using the PR/MR head branch name at `../<repo>.<branch-slug>`
-5. **Copies `.env*` files** from the main worktree
-6. **Installs dependencies** using the same lockfile detection as `wt`
-7. **Auto-`cd`s** into the new review worktree and prints review details including the PR/MR number, title, branch, and final path
+1. Detects GitHub or GitLab from the `origin` remote.
+2. Reads PR/MR metadata with `gh api` or `glab api`.
+3. Optionally opens an `fzf` picker for open PRs/MRs.
+4. Fetches the review ref from origin.
+5. Creates a review worktree from `FETCH_HEAD`.
 
-If the PR head branch already exists locally or already has a worktree, TreeMan fails safely instead of guessing.
+If the PR/MR head branch already exists locally, TreeMan fails instead of guessing.
 
-### `wts` — worktree switching
+### `wts`
 
-1. **Lists** all worktrees via `git worktree list`
-2. **Opens an fzf picker** showing shortened paths (last two path components) and branch names with color highlighting
-3. **`cd`s** into the selected worktree
+1. Lists worktrees with `git worktree list`.
+2. Shows them in `fzf`.
+3. Prints the selected path for the shell wrapper to `cd` into.
 
-An optional query argument pre-filters the list (e.g. `wts feat`). If the query matches exactly one worktree, it's selected automatically.
+### `wtd`
 
-### `wtd` — worktree deletion
-
-1. **Lists** all worktrees via `git worktree list` (protects the main worktree from deletion)
-2. **Opens an fzf picker** showing shortened paths and branch names
-3. **Prompts** for confirmation before taking any destructive action
-4. **Removes** the selected worktree using `git worktree remove`
-5. **Deletes** the associated branch using `git branch -D`
-
-If Git refuses to remove a dirty worktree, you can force it manually with `git worktree remove --force`.
+1. Excludes the main worktree from deletion.
+2. Prompts for confirmation.
+3. Stops any tracked runtime for that worktree.
+4. Runs `git worktree remove`.
+5. Runs `git branch -D`.
+6. Cleans runtime state, logs, generated env file, and port allocations only after git deletion succeeds.
 
 ---
 
 ## Worktree naming
 
-Slashes in branch names become dashes in the directory name:
+Slashes in branch names become dashes in worktree directory names.
 
 | Repo | Branch | Worktree directory |
 |---|---|---|
@@ -148,40 +160,36 @@ Slashes in branch names become dashes in the directory name:
 | `~/Github/my-project` | `fix/bug-123` | `~/Github/my-project.fix-bug-123` |
 | `~/Github/my-project` | `hotfix` | `~/Github/my-project.hotfix` |
 
-Review worktrees created by `wtpr` / `wtmr` use the same branch-based naming.
-
 ---
 
-## Supported forges & remote URLs
+## Supported forges
 
-`wtpr` / `wtmr` auto-detect the forge from your `origin` remote URL:
+`wtpr` / `wtmr` support:
 
 | Forge | Detection | CLI tool | Fetch ref |
 |---|---|---|---|
-| **GitHub** | Host is `github.com` | `gh` | `pull/<n>/head` |
-| **GitLab** | Host contains `gitlab` (e.g. `gitlab.com`, `gitlab.company.com`) | `glab` + `jq` | `merge-requests/<n>/head` |
+| GitHub | host is `github.com` | `gh` | `pull/<n>/head` |
+| GitLab | host contains `gitlab` | `glab` + `jq` | `merge-requests/<n>/head` |
 
-All common remote URL formats are supported:
+Supported remote URL formats include:
 
-| Format | Example |
-|---|---|
-| SSH shorthand | `git@github.com:owner/repo.git` |
-| SSH shorthand (GitLab, nested groups) | `git@gitlab.company.com:group/subgroup/project.git` |
-| HTTPS | `https://github.com/owner/repo.git` |
-| SSH URL | `ssh://git@github.com/owner/repo.git` |
-
-GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
+- `git@github.com:owner/repo.git`
+- `git@gitlab.company.com:group/subgroup/project.git`
+- `https://github.com/owner/repo.git`
+- `ssh://git@github.com/owner/repo.git`
 
 ---
 
 ## Requirements
 
 - `git`
-- `bash` or `zsh`
-- [`gh`](https://cli.github.com/) (for `wtpr` / `wtmr` with **GitHub** repos)
-- [`glab`](https://gitlab.com/gitlab-org/cli) + [`jq`](https://jqlang.github.io/jq/) (for `wtpr` / `wtmr` with **GitLab** repos, including self-hosted instances)
-- [`fzf`](https://github.com/junegunn/fzf) (for `wts`, `wtd`, and optional `wtpr` / `wtmr` picker mode)
-- The package manager your project uses (only needed when a lockfile is detected)
+- `bash` or `zsh` for the shell wrapper
+- `fzf` for `wts`, `wtd`, and optional review picking
+- `gh` for GitHub review worktrees
+- `glab` and `jq` for GitLab review worktrees
+- the package manager your project uses
+
+For runtime commands, TreeMan currently targets Unix-like process management. Linux and macOS are the supported install targets in `install.sh`.
 
 ---
 
@@ -189,7 +197,7 @@ GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
 
 ### One-liner
 
-Downloads `wt.sh` to `~/.treeman/`, adds a source line to your shell config, and optionally injects lazygit keybindings.
+This installs the `treeman` binary into `~/.treeman/`, downloads `wt.sh`, adds both to your shell config, and optionally injects lazygit bindings.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
@@ -203,135 +211,94 @@ source ~/.zshrc   # or ~/.bashrc
 
 ### Manual
 
-Copy the contents of [`wt.sh`](./wt.sh) into your `~/.zshrc` or `~/.bashrc`.
+```bash
+go build -o treeman ./cmd/treeman
+```
+
+Then place the `treeman` binary somewhere on your `PATH`, and source [`wt.sh`](./wt.sh) from your shell config:
+
+```bash
+export PATH="/path/to/treeman/bin:$PATH"
+source "/path/to/TreeMan/wt.sh"
+```
 
 ---
 
 ## Usage
 
+### Shell aliases
+
 ```bash
-# Create a new worktree + branch:
 wt <branch-name>
-wt feature/my-thing
+wtpr [pr-number]
+wtmr [pr-number]
+wts [query]
+wtd [query]
+lg
+```
 
-# Create a review worktree from a PR/MR number:
-wtpr <pr-number>
-wtmr <pr-number>
+### CLI
 
-# Or pick from open PRs/MRs with fzf:
-wtpr
-wtmr
+```bash
+treeman worktree create <branch>
+treeman worktree review [number]
+treeman worktree switch [query]
+treeman worktree delete [query]
+treeman worktree list
+treeman worktree main
 
-# Switch between worktrees (fzf picker):
-wts                         # opens interactive picker
-wts feat                    # pre-filters the list
+treeman runtime up
+treeman runtime down
+treeman runtime status
+treeman runtime logs
+treeman runtime env
+treeman runtime ls
 
-# Delete a worktree (interactive picker):
-wtd                         # opens interactive picker for deletion
-wtd feat                    # pre-filters the list
+treeman init
+treeman version
+```
+
+### `.treeman.yml`
+
+Generate a starter config:
+
+```bash
+treeman init
+```
+
+Example process runtime:
+
+```yaml
+runtime:
+  type: process
+  command: pnpm dev
+  env_file: config/.env.treeman
+  ports:
+    app: 3000
 ```
 
 ---
 
 ## Lazygit integration
 
-### Custom keybindings
-
-TreeMan can add custom keybindings to lazygit for creating and deleting worktrees without leaving the UI.
+TreeMan can inject lazygit custom commands for creating and deleting worktrees.
 
 | Key | Panel | Action |
 |---|---|---|
-| `W` | Branches | Create a new worktree + branch (prompts for branch name) |
+| `W` | Branches | Create a new worktree + branch |
 | `D` | Worktrees | Delete the selected worktree and its branch |
-| `D` | Branches | Delete the worktree associated with the selected branch and the branch itself |
+| `D` | Branches | Delete the selected branch's worktree and branch |
 
-**Install:**
-
-`install.sh` automatically detects if lazygit is installed and idempotently injects the keybindings. Running it twice is safe.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
-```
-
-**Uninstall:**
-
-The unified uninstaller natively detects and removes the injected lazygit configuration.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
-```
-
----
+The installer adds these automatically when lazygit is present.
 
 ### `lg` wrapper
 
-TreeMan includes an `lg` wrapper function for [lazygit](https://github.com/jesseduffield/lazygit). When you switch worktrees inside lazygit, `lg` automatically `cd`s your shell to the new worktree directory on exit.
+TreeMan also ships an `lg` shell wrapper for [lazygit](https://github.com/jesseduffield/lazygit). When you switch worktrees inside lazygit, `lg` can update your shell directory after lazygit exits.
 
 ```bash
-lg          # launch lazygit with auto-cd
-lg --help   # all lazygit flags work as normal
+lg
+lg --help
 ```
-
-Use `Shift+Q` to quit lazygit without triggering a directory change.
-
-The `lg` function is sourced alongside `wt` — no extra setup needed. If lazygit isn't installed, calling `lg` prints a warning and exits.
-
-### Neovim
-
-The `lg` shell wrapper doesn't help when lazygit runs inside Neovim — the terminal's `cd` can't reach Neovim's working directory. To get auto-cd working in Neovim, pass `LAZYGIT_NEW_DIR_FILE` via your plugin's `env` option and read it back on `TermClose`.
-
-<details>
-<summary>snacks.nvim (folke/snacks.nvim)</summary>
-
-```lua
-{ "<leader>lg", function()
-  local newdir_file = vim.fn.expand("~/.lazygit/newdir")
-  vim.fn.mkdir(vim.fn.expand("~/.lazygit"), "p")
-
-  snacks.lazygit({
-    env = { LAZYGIT_NEW_DIR_FILE = newdir_file },
-  })
-
-  vim.api.nvim_create_autocmd("TermClose", {
-    pattern = "*lazygit*",
-    once = true,
-    callback = function()
-      vim.schedule(function()
-        local f = io.open(newdir_file, "r")
-        if not f then return end
-        local dir = f:read("*a"):gsub("%s+$", "")
-        f:close()
-        os.remove(newdir_file)
-        if dir ~= "" and dir ~= vim.fn.getcwd() then
-          vim.cmd("cd " .. vim.fn.fnameescape(dir))
-        end
-      end)
-    end
-  })
-end, desc = "Lazygit" },
-```
-
-</details>
-
-<details>
-<summary>lazygit.nvim (kdheepak/lazygit.nvim)</summary>
-
-`lazygit.nvim` supports this natively. Add to your config:
-
-```lua
-{
-  "kdheepak/lazygit.nvim",
-  config = function()
-    vim.g.lazygit_use_neovim_remote = 1
-  end,
-}
-```
-
-The plugin sets `LAZYGIT_NEW_DIR_FILE` automatically and calls `cd` on exit.
-
-</details>
-
-The pattern is the same for any terminal plugin: set `LAZYGIT_NEW_DIR_FILE` as an env var, read the file after lazygit exits, and call `cd`.
 
 ---
 
@@ -341,12 +308,8 @@ The pattern is the same for any terminal plugin: set `LAZYGIT_NEW_DIR_FILE` as a
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
 ```
 
-Or manually:
-- Remove the `# TreeMan` and `source` lines from your shell config
-- Delete `~/.treeman/`
+Manual uninstall:
 
-### Uninstall lazygit keybindings
-
-The lazygit configuration is automatically removed if you run the standard uninstall command (`curl .../uninstall.sh | bash`).
-
-Or manually remove all lines marked with `# TreeMan` from your lazygit `config.yml` (find its location with `lazygit -cd`).
+- remove the `# TreeMan` block from your shell config
+- delete `~/.treeman/`
+- remove the TreeMan block from lazygit `config.yml` if you added it manually

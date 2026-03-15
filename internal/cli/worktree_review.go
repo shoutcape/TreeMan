@@ -68,20 +68,16 @@ func runWorktreeReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("finding main worktree: %w", err)
 	}
 
-	worktreePath := git.WorktreePathForBranch(mainRoot, meta.HeadRef)
-
-	// Guard against existing branch
-	if git.LocalBranchExists(meta.HeadRef) {
-		existing := git.FindWorktreeForBranch(meta.HeadRef)
-		if existing != "" {
-			return fmt.Errorf("branch '%s' already has a worktree at '%s'", meta.HeadRef, existing)
-		}
-		return fmt.Errorf("PR/MR head branch '%s' already exists locally", meta.HeadRef)
+	reviewBranch, err := resolveReviewBranchName(meta, git.LocalBranchExists, git.FindWorktreeForBranch)
+	if err != nil {
+		return err
 	}
+
+	worktreePath := git.WorktreePathForBranch(mainRoot, reviewBranch)
 
 	// Guard against existing directory
 	if _, err := os.Stat(worktreePath); err == nil {
-		return fmt.Errorf("directory '%s' already exists for branch '%s'", worktreePath, meta.HeadRef)
+		return fmt.Errorf("directory '%s' already exists for branch '%s'", worktreePath, reviewBranch)
 	}
 
 	// Fetch the PR/MR ref
@@ -92,8 +88,8 @@ func runWorktreeReview(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create the worktree
-	fmt.Fprintf(os.Stderr, "Creating review worktree at %s (branch: %s)...\n", worktreePath, meta.HeadRef)
-	if err := git.WorktreeAdd(worktreePath, meta.HeadRef, "FETCH_HEAD"); err != nil {
+	fmt.Fprintf(os.Stderr, "Creating review worktree at %s (branch: %s)...\n", worktreePath, reviewBranch)
+	if err := git.WorktreeAdd(worktreePath, reviewBranch, "FETCH_HEAD"); err != nil {
 		return err
 	}
 
@@ -108,12 +104,47 @@ func runWorktreeReview(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "\nReview worktree ready:\n")
 	fmt.Fprintf(os.Stderr, "  PR/MR:  #%d\n", meta.Number)
 	fmt.Fprintf(os.Stderr, "  Title:  %s\n", meta.Title)
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", meta.HeadRef)
+	fmt.Fprintf(os.Stderr, "  Branch: %s\n", reviewBranch)
 	fmt.Fprintf(os.Stderr, "  Path:   %s\n", worktreePath)
 
 	// Print path to stdout for shell wrapper to cd into
 	fmt.Println(worktreePath)
 	return nil
+}
+
+func resolveReviewBranchName(meta *forge.PRMetadata, branchExists func(string) bool, worktreeForBranch func(string) string) (string, error) {
+	candidates := []string{meta.HeadRef}
+	if meta.Owner != "" {
+		candidates = append(candidates, meta.Owner+"/"+meta.HeadRef)
+	}
+
+	seen := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+
+		if err := git.ValidateBranchName(candidate); err != nil {
+			continue
+		}
+
+		if !branchExists(candidate) {
+			return candidate, nil
+		}
+	}
+
+	for _, candidate := range candidates {
+		if existing := worktreeForBranch(candidate); existing != "" {
+			return "", fmt.Errorf("branch '%s' already has a worktree at '%s'", candidate, existing)
+		}
+	}
+
+	if meta.Owner != "" {
+		return "", fmt.Errorf("PR/MR head branch '%s' already exists locally; tried '%s/%s' too", meta.HeadRef, meta.Owner, meta.HeadRef)
+	}
+
+	return "", fmt.Errorf("PR/MR head branch '%s' already exists locally", meta.HeadRef)
 }
 
 // pickPRNumber opens an fzf picker to select an open PR/MR.

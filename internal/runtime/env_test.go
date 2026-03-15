@@ -103,3 +103,46 @@ func TestGenerateEnvFileWithCompose(t *testing.T) {
 		t.Error("missing COMPOSE_PROJECT_NAME")
 	}
 }
+
+func TestGenerateEnvFileHonorsCustomPath(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+
+	state := &RuntimeState{
+		Repo:         "shop-app",
+		Branch:       "main",
+		BranchSlug:   "main",
+		WorktreePath: dir,
+		EnvFile:      "config/.env.treeman",
+		Ports:        map[string]int{"app": 3000},
+	}
+
+	if err := GenerateEnvFile(state); err != nil {
+		t.Fatalf("GenerateEnvFile: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(configDir, ".env.treeman")); err != nil {
+		t.Fatalf("expected custom env file path to exist: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".env.treeman")); !os.IsNotExist(err) {
+		t.Fatalf("expected root env file to be absent, got err=%v", err)
+	}
+}
+
+func TestGenerateEnvFileRejectsEscapingPath(t *testing.T) {
+	dir := t.TempDir()
+	state := &RuntimeState{
+		Repo:         "shop-app",
+		Branch:       "main",
+		BranchSlug:   "main",
+		WorktreePath: dir,
+		EnvFile:      "../outside/.env.treeman",
+		Ports:        map[string]int{"app": 3000},
+	}
+
+	err := GenerateEnvFile(state)
+	if err == nil || !strings.Contains(err.Error(), "must stay inside the worktree") {
+		t.Fatalf("expected escaping path error, got %v", err)
+	}
+}

@@ -114,6 +114,12 @@ func WorktreeRemove(path string) error {
 	return err
 }
 
+// WorktreeRemoveForce removes a worktree directory, even if it is dirty.
+func WorktreeRemoveForce(path string) error {
+	_, err := run("worktree", "remove", "--force", path)
+	return err
+}
+
 // FindWorktreeForBranch returns the worktree path for a given branch name,
 // or empty string if no worktree exists for that branch.
 func FindWorktreeForBranch(branch string) string {

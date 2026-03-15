@@ -131,13 +131,37 @@ SOURCE_MARKER="# TreeMan"
 PATH_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
 SOURCE_LINE="source \"$WT_SH_FILE\""
 
+rewrite_tree_man_block() {
+  local rc_file="$1"
+  local tmp
+
+  mkdir -p "$(dirname "$rc_file")"
+  touch "$rc_file"
+
+  tmp=$(mktemp)
+  awk -v marker="$SOURCE_MARKER" '
+    $0 == marker { skip = 2; next }
+    skip > 0 { skip--; next }
+    { print }
+  ' "$rc_file" > "$tmp"
+  mv "$tmp" "$rc_file"
+
+  printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$SOURCE_LINE" >> "$rc_file"
+}
+
 print_step "Adding TreeMan to $SHELL_RC..."
 
 if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
-  print_warn "TreeMan source line already present in $SHELL_RC, skipping."
+	if grep -qFx "$PATH_LINE" "$SHELL_RC" 2>/dev/null && grep -qFx "$SOURCE_LINE" "$SHELL_RC" 2>/dev/null; then
+	  print_warn "TreeMan shell setup already present in $SHELL_RC, skipping."
+	else
+	  print_step "Repairing TreeMan shell setup in $SHELL_RC..."
+	  rewrite_tree_man_block "$SHELL_RC"
+	  print_done
+	fi
 else
-  printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$SOURCE_LINE" >> "$SHELL_RC"
-  print_done
+	rewrite_tree_man_block "$SHELL_RC"
+	print_done
 fi
 
 # --- Check optional dependencies --------------------------------------------

@@ -23,15 +23,25 @@ func StartProcess(cfg *Config, worktreePath, repo, branch, branchSlug string) (*
 	key := AllocateKey(repo, branchSlug)
 
 	var ports map[string]int
+	portsAllocated := false
 	if len(cfg.Runtime.Ports) > 0 {
 		ports, err = registry.AllocatePorts(key, cfg.Runtime.Ports)
 		if err != nil {
 			return nil, fmt.Errorf("allocating ports: %w", err)
 		}
+		portsAllocated = true
 
 		if err := registry.Save(); err != nil {
 			return nil, fmt.Errorf("saving port registry: %w", err)
 		}
+	}
+
+	releasePorts := func() {
+		if !portsAllocated {
+			return
+		}
+		registry.ReleasePorts(key)
+		_ = registry.Save()
 	}
 
 	// Prepare state
@@ -53,17 +63,20 @@ func StartProcess(cfg *Config, worktreePath, repo, branch, branchSlug string) (*
 
 	// Generate env file
 	if err := GenerateEnvFile(state); err != nil {
+		releasePorts()
 		return nil, fmt.Errorf("generating env file: %w", err)
 	}
 
 	// Ensure log directory exists
 	if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
+		releasePorts()
 		return nil, fmt.Errorf("creating log directory: %w", err)
 	}
 
 	// Open log file
 	logF, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
+		releasePorts()
 		return nil, fmt.Errorf("opening log file: %w", err)
 	}
 
@@ -71,6 +84,7 @@ func StartProcess(cfg *Config, worktreePath, repo, branch, branchSlug string) (*
 	parts := strings.Fields(cfg.Runtime.Command)
 	if len(parts) == 0 {
 		logF.Close()
+		releasePorts()
 		return nil, fmt.Errorf("empty command")
 	}
 
@@ -99,6 +113,7 @@ func StartProcess(cfg *Config, worktreePath, repo, branch, branchSlug string) (*
 
 	if err := cmd.Start(); err != nil {
 		logF.Close()
+		releasePorts()
 		return nil, fmt.Errorf("starting process: %w", err)
 	}
 
@@ -109,6 +124,7 @@ func StartProcess(cfg *Config, worktreePath, repo, branch, branchSlug string) (*
 		// Try to kill the process if we can't save state
 		cmd.Process.Kill()
 		logF.Close()
+		releasePorts()
 		return nil, fmt.Errorf("saving state: %w", err)
 	}
 

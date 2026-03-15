@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -50,6 +51,38 @@ func logDir(repo string) string {
 // ~/.treeman/logs/<repo-basename>/<branch-slug>.log
 func LogFilePath(repo, branchSlug string) string {
 	return filepath.Join(logDir(repo), branchSlug+".log")
+}
+
+// EnvFilePath returns the absolute path to the generated env file.
+func EnvFilePath(state *RuntimeState) (string, error) {
+	if state == nil {
+		return "", fmt.Errorf("runtime state is required")
+	}
+	if state.WorktreePath == "" {
+		return "", fmt.Errorf("worktree path is required")
+	}
+	if state.EnvFile == "" {
+		return "", fmt.Errorf("env file path is required")
+	}
+
+	clean := filepath.Clean(state.EnvFile)
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("env file path must be relative to the worktree")
+	}
+	if clean == "." {
+		return "", fmt.Errorf("env file path must point to a file")
+	}
+
+	fullPath := filepath.Join(state.WorktreePath, clean)
+	rel, err := filepath.Rel(state.WorktreePath, fullPath)
+	if err != nil {
+		return "", fmt.Errorf("resolving env file path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("env file path must stay inside the worktree")
+	}
+
+	return fullPath, nil
 }
 
 // tremanDir returns the TreeMan home directory: ~/.treeman
@@ -143,4 +176,48 @@ func RemoveState(repo, branchSlug string) error {
 		return fmt.Errorf("removing state file: %w", err)
 	}
 	return nil
+}
+
+// CleanupRuntimeArtifacts removes generated files and persistent runtime state.
+func CleanupRuntimeArtifacts(state *RuntimeState) error {
+	if state == nil {
+		return nil
+	}
+
+	var firstErr error
+	recordErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if state.EnvFile != "" {
+		envPath, err := EnvFilePath(state)
+		if err != nil {
+			recordErr(fmt.Errorf("resolving env file path: %w", err))
+		} else {
+			err = os.Remove(envPath)
+			if err != nil && !os.IsNotExist(err) {
+				recordErr(fmt.Errorf("removing env file: %w", err))
+			}
+		}
+	}
+
+	if state.LogFile != "" {
+		err := os.Remove(state.LogFile)
+		if err != nil && !os.IsNotExist(err) {
+			recordErr(fmt.Errorf("removing log file: %w", err))
+		}
+	}
+
+	registry, err := LoadRegistry()
+	if err != nil {
+		recordErr(fmt.Errorf("loading port registry: %w", err))
+	} else {
+		registry.ReleasePorts(AllocateKey(state.Repo, state.BranchSlug))
+		recordErr(registry.Save())
+	}
+
+	recordErr(RemoveState(state.Repo, state.BranchSlug))
+	return firstErr
 }

@@ -13,7 +13,13 @@ func GenerateEnvFile(state *RuntimeState) error {
 	lines := buildEnvLines(state)
 	content := strings.Join(lines, "\n") + "\n"
 
-	envPath := filepath.Join(state.WorktreePath, filepath.Base(state.EnvFile))
+	envPath, err := EnvFilePath(state)
+	if err != nil {
+		return fmt.Errorf("resolving env file path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(envPath), 0755); err != nil {
+		return fmt.Errorf("creating env file directory: %w", err)
+	}
 	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("writing env file: %w", err)
 	}
