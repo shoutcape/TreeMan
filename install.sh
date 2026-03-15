@@ -4,8 +4,10 @@
 
 set -e
 
-REPO_URL="${TREEMAN_REPO_URL:-https://raw.githubusercontent.com/shoutcape/TreeMan/main/wt.sh}"
+REPO="shoutcape/TreeMan"
 INSTALL_DIR="${TREEMAN_INSTALL_DIR:-$HOME/.treeman}"
+BIN_FILE="$INSTALL_DIR/treeman"
+WT_SH_URL="${TREEMAN_WT_SH_URL:-https://raw.githubusercontent.com/$REPO/main/wt.sh}"
 WT_SH_FILE="$INSTALL_DIR/wt.sh"
 
 # --- Helpers -----------------------------------------------------------------
@@ -45,33 +47,96 @@ detect_lazygit_config_dir() {
   fi
 }
 
-# --- Download wt.sh ----------------------------------------------------------
+# --- Detect OS and architecture ----------------------------------------------
 
-print_step "Installing TreeMan to $INSTALL_DIR..."
+detect_platform() {
+  local os arch
+
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case "$os" in
+    linux)  os="linux" ;;
+    darwin) os="darwin" ;;
+    *)
+      echo "Error: unsupported operating system: $os" >&2
+      exit 1
+      ;;
+  esac
+
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *)
+      echo "Error: unsupported architecture: $arch" >&2
+      exit 1
+      ;;
+  esac
+
+  echo "${os}_${arch}"
+}
+
+# --- Download function -------------------------------------------------------
+
+download() {
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$dest" "$url"
+  else
+    echo "Error: curl or wget is required to install TreeMan." >&2
+    exit 1
+  fi
+}
+
+# --- Download binary ---------------------------------------------------------
+
 mkdir -p "$INSTALL_DIR"
 
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$REPO_URL" -o "$WT_SH_FILE"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$WT_SH_FILE" "$REPO_URL"
+if [[ -n "${TREEMAN_BIN_PATH:-}" ]]; then
+  # Local install mode (for testing): copy binary from a local path
+  print_step "Installing TreeMan binary from $TREEMAN_BIN_PATH..."
+  cp "$TREEMAN_BIN_PATH" "$BIN_FILE"
+  chmod +x "$BIN_FILE"
 else
-  echo "Error: curl or wget is required to install TreeMan." >&2
-  exit 1
-fi
+  PLATFORM=$(detect_platform)
+  RELEASE_URL="https://github.com/$REPO/releases/latest/download/treeman_${PLATFORM}.tar.gz"
 
+  print_step "Downloading TreeMan for $PLATFORM..."
+  TMP_TAR=$(mktemp)
+  download "$RELEASE_URL" "$TMP_TAR"
+
+  tar -xzf "$TMP_TAR" -C "$INSTALL_DIR" treeman 2>/dev/null || {
+    # If tarball extraction fails, try direct binary download
+    mv "$TMP_TAR" "$BIN_FILE"
+  }
+  rm -f "$TMP_TAR"
+  chmod +x "$BIN_FILE"
+fi
 print_done
 
-# --- Add source line to shell config -----------------------------------------
+# --- Download wt.sh ----------------------------------------------------------
 
-SOURCE_LINE="source \"$WT_SH_FILE\""
+print_step "Downloading shell adapter (wt.sh)..."
+if [[ -n "${TREEMAN_WT_SH_PATH:-}" ]]; then
+  cp "$TREEMAN_WT_SH_PATH" "$WT_SH_FILE"
+else
+  download "$WT_SH_URL" "$WT_SH_FILE"
+fi
+print_done
+
+# --- Add to shell config -----------------------------------------------------
+
 SOURCE_MARKER="# TreeMan"
+PATH_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
+SOURCE_LINE="source \"$WT_SH_FILE\""
 
 print_step "Adding TreeMan to $SHELL_RC..."
 
 if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
   print_warn "TreeMan source line already present in $SHELL_RC, skipping."
 else
-  printf '\n%s\n%s\n' "$SOURCE_MARKER" "$SOURCE_LINE" >> "$SHELL_RC"
+  printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$SOURCE_LINE" >> "$SHELL_RC"
   print_done
 fi
 
@@ -111,7 +176,7 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Create new worktree (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: "bash -lc 'source \"$WT_SH_FILE\" && wt \"\$1\"' treeman {{.Form.BranchName | quote}}"
+    command: "treeman worktree create {{.Form.BranchName | quote}}"
     loadingText: 'Creating worktree...'
     prompts:
       - type: 'input'
@@ -121,7 +186,7 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Delete worktree and branch (TreeMan)'
     context: 'worktrees'
     output: logWithPty
-    command: "bash -lc 'source \"$WT_SH_FILE\" && _wt_lazygit_delete_worktree \"\$1\" \"\$2\"' treeman {{.SelectedWorktree.Path | quote}} {{.SelectedWorktree.Branch | quote}}"
+    command: "treeman worktree delete --path {{.SelectedWorktree.Path | quote}} 2>&1"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -131,7 +196,7 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Delete worktree and branch (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: "bash -lc 'source \"$WT_SH_FILE\" && _wt_lazygit_delete_branch \"\$1\"' treeman {{.SelectedLocalBranch.Name | quote}}"
+    command: "treeman worktree delete --branch {{.SelectedLocalBranch.Name | quote}} 2>&1"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -187,3 +252,7 @@ echo "  wtmr [pr-number]    Same as wtpr"
 echo "  wts [query]          Switch between worktrees (requires fzf)"
 echo "  wtd [query]          Delete a worktree and its branch (requires fzf)"
 echo "  lg                   Run lazygit with auto-cd"
+echo ""
+echo "  treeman runtime up   Start dev server with isolated ports"
+echo "  treeman runtime down Stop dev server"
+echo "  treeman init         Generate .treeman.yml config"

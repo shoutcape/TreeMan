@@ -19,6 +19,8 @@ detect_lazygit_config_dir() {
   fi
 }
 
+# Remove the TreeMan marker line and the two lines following it
+# (PATH export + source line) from shell config files.
 remove_from_rc() {
   local rc_file="$1"
   if [[ ! -f "$rc_file" ]]; then
@@ -26,7 +28,11 @@ remove_from_rc() {
   fi
   if grep -qF "$SOURCE_MARKER" "$rc_file" 2>/dev/null; then
     print_step "Removing TreeMan from $rc_file..."
-    awk -v marker="$SOURCE_MARKER" '$0 == marker { skip = 1; next } skip { skip = 0; next } { print }' "$rc_file" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
+    awk -v marker="$SOURCE_MARKER" '
+      $0 == marker { skip = 2; next }
+      skip > 0 { skip--; next }
+      { print }
+    ' "$rc_file" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
     print_done
   fi
 }

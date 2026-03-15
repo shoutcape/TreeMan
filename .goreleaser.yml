@@ -1,0 +1,37 @@
+version: 2
+
+project_name: treeman
+
+builds:
+  - id: treeman
+    main: ./cmd/treeman
+    binary: treeman
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/shoutcape/TreeMan/internal/cli.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "treeman_{{ .Os }}_{{ .Arch }}"
+    files:
+      - wt.sh
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"

@@ -1,0 +1,21 @@
+# Go binary
+treeman
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Test artifacts
+*.test
+cover.out
+
+# TreeMan generated files
+.env.treeman
+.treeman.yml
