@@ -1,21 +1,78 @@
 <img width="2758" height="1504" alt="TreeMan_Logo_no_white_bg_smooth2" src="https://github.com/user-attachments/assets/d12d7c55-cd61-4116-932d-e0f5f63ae613" />
 
-
-
-
 Git worktree management CLI — create new branch worktrees, jump straight into them, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
 
 Single compiled binary. No runtime required. Works with bash and zsh.
 
+---
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
+```
+
+Downloads the `treeman` binary to `~/.treeman/bin/`, adds it to your `PATH`, and wires the shell functions via `eval "$(treeman init <shell>)"`. Optionally injects lazygit keybindings.
+
+Reload your shell when done:
+
+```bash
+source ~/.zshrc   # or ~/.bashrc
+```
+
+<details>
+<summary>Manual install</summary>
+
+Download the binary for your platform from [GitHub Releases](https://github.com/shoutcape/TreeMan/releases/latest), place it somewhere on your `PATH`, then add to your shell config:
+
+```bash
+# ~/.zshrc or ~/.bashrc
+eval "$(treeman init zsh)"   # or bash
+```
+
+</details>
+
+<details>
+<summary>Build from source</summary>
+
+```bash
+go install github.com/shoutcape/treeman/cmd/treeman@latest
+```
+
+Then add to your shell config:
+
+```bash
+eval "$(treeman init zsh)"   # or bash
+```
+
+</details>
+
+---
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
+```
+
+Or manually:
+- Remove the `# TreeMan` block from your shell config (the `export PATH` line and the `eval "$(treeman init ...)"` line)
+- Delete `~/.treeman/`
+
+---
+
+## Commands
+
 ```bash
 wt feature/my-thing        # create a new worktree + branch
 wtpr 123                   # create a review worktree from PR #123
-wtmr                       # pick an open PR/MR with fzf, then create a review worktree
+wtmr                       # pick an open MR with fzf, then create a review worktree
 wts                        # switch between worktrees (fzf picker)
 wtd                        # delete a worktree (interactive picker)
 ```
 
-### `wt` — create
+<details>
+<summary><code>wt</code> — create</summary>
 
 <video src="https://github.com/user-attachments/assets/7491c0eb-896f-4046-b46b-1c3db01619c3" width="400"></video>
 
@@ -30,7 +87,10 @@ Worktree ready:
   Path:   /home/user/Github/my-project.feature-my-thing
 ```
 
-### `wtpr` / `wtmr` — review
+</details>
+
+<details>
+<summary><code>wtpr</code> / <code>wtmr</code> — review</summary>
 
 `wtpr` and `wtmr` are identical commands. TreeMan uses PR and MR interchangeably for this workflow.
 
@@ -58,8 +118,10 @@ wtpr
 wtmr
 ```
 
-### `wts` — switch
+</details>
 
+<details>
+<summary><code>wts</code> — switch</summary>
 
 <video src="https://github.com/user-attachments/assets/ebb762c0-f530-4f35-aa3e-4b2c04c1f75b" width="300"></video>
 
@@ -71,7 +133,12 @@ wtmr
 └───────────────────────────────────────────────────────┘
 ```
 
-### `wtd` — delete
+An optional query pre-filters the list (e.g. `wts feat`). If the query matches exactly one worktree, it's selected automatically.
+
+</details>
+
+<details>
+<summary><code>wtd</code> — delete</summary>
 
 ```
 ┌──────────────── worktrees ────────────────────────────┐
@@ -80,12 +147,19 @@ wtmr
 └───────────────────────────────────────────────────────┘
 ```
 ```
-Are you sure you want to delete this worktree and its branch? [y/N] y
+Are you sure? [y/N] y
 ```
+
+An optional query pre-filters the list (e.g. `wtd feat`). The main worktree and default branch are protected from deletion.
+
+If Git refuses to remove a dirty worktree, force it with `git worktree remove --force`.
+
+</details>
 
 ---
 
-## How it works
+<details>
+<summary>How it works</summary>
 
 ### Shell integration
 
@@ -112,7 +186,7 @@ eval "$(treeman init zsh)"   # or bash
    | `package-lock.json` | `npm install` |
    | `go.mod` | `go mod download` |
    | `requirements.txt` / `pyproject.toml` | notifies you to activate venv manually |
-7. **Auto-`cd`s** into the new worktree and prints the path
+7. **Auto-`cd`s** into the new worktree
 
 Works correctly even when run from inside an existing worktree — always targets the main worktree root.
 
@@ -124,31 +198,48 @@ Works correctly even when run from inside an existing worktree — always target
 4. **Creates** a review worktree using the PR/MR head branch name at `../<repo>.<branch-slug>`
 5. **Copies `.env*` files** from the main worktree
 6. **Installs dependencies** using the same lockfile detection as `wt`
-7. **Auto-`cd`s** into the new review worktree and prints review details including the PR/MR number, title, branch, and final path
+7. **Auto-`cd`s** into the new review worktree
 
 If the PR head branch already exists locally or already has a worktree, TreeMan fails safely instead of guessing.
 
 ### `wts` — worktree switching
 
 1. **Lists** all worktrees via `git worktree list`
-2. **Opens an fzf picker** showing shortened paths (last two path components) and branch names with color highlighting
+2. **Opens an fzf picker** showing shortened paths and branch names with color highlighting
 3. **`cd`s** into the selected worktree
-
-An optional query argument pre-filters the list (e.g. `wts feat`). If the query matches exactly one worktree, it's selected automatically.
 
 ### `wtd` — worktree deletion
 
 1. **Lists** all worktrees via `git worktree list` (protects the main worktree from deletion)
 2. **Opens an fzf picker** showing shortened paths and branch names
 3. **Prompts** for confirmation before taking any destructive action
-4. **Removes** the selected worktree using `git worktree remove`
+4. **Removes** the worktree using `git worktree remove`
 5. **Deletes** the associated branch using `git branch -D`
 
-If Git refuses to remove a dirty worktree, you can force it manually with `git worktree remove --force`.
+</details>
 
----
+<details>
+<summary>CLI reference</summary>
 
-## Worktree naming
+The shell aliases (`wt`, `wtpr`, etc.) are thin wrappers. You can also invoke the `treeman` binary directly — useful in scripts or CI:
+
+```bash
+treeman create <branch-name>       # same as wt
+treeman review [pr-number]         # same as wtpr / wtmr
+treeman switch [query]             # same as wts (prints path, does not cd)
+treeman delete [query]             # same as wtd
+treeman delete --path <path> --branch <branch> --yes   # non-interactive (lazygit / scripts)
+treeman init bash                  # print shell wrapper functions for bash
+treeman init zsh                   # print shell wrapper functions for zsh
+treeman version                    # print version, commit, and build date
+```
+
+The key difference between the CLI and the shell aliases is that `treeman create`, `treeman review`, and `treeman switch` print the target path to stdout — they don't `cd`. The shell wrappers capture that output and run `cd` in your current shell session.
+
+</details>
+
+<details>
+<summary>Worktree naming</summary>
 
 Slashes in branch names become dashes in the directory name:
 
@@ -160,9 +251,10 @@ Slashes in branch names become dashes in the directory name:
 
 Review worktrees created by `wtpr` / `wtmr` use the same branch-based naming.
 
----
+</details>
 
-## Supported forges & remote URLs
+<details>
+<summary>Supported forges & remote URLs</summary>
 
 `wtpr` / `wtmr` auto-detect the forge from your `origin` remote URL:
 
@@ -182,9 +274,10 @@ All common remote URL formats are supported:
 
 GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
 
----
+</details>
 
-## Requirements
+<details>
+<summary>Requirements</summary>
 
 **Core**
 - `git`
@@ -201,87 +294,10 @@ GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
 **For dependency auto-install**
 - The package manager your project uses (only invoked when a matching lockfile is detected)
 
----
+</details>
 
-## Install
-
-### One-liner
-
-Downloads the `treeman` binary to `~/.treeman/bin/`, adds it to your `PATH`, and wires the shell functions via `eval "$(treeman init <shell>)"`. Optionally injects lazygit keybindings.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
-```
-
-Reload your shell when done:
-
-```bash
-source ~/.zshrc   # or ~/.bashrc
-```
-
-### Manual
-
-Download the binary for your platform from [GitHub Releases](https://github.com/shoutcape/TreeMan/releases/latest), place it somewhere on your `PATH`, then add to your shell config:
-
-```bash
-# ~/.zshrc or ~/.bashrc
-eval "$(treeman init zsh)"   # or bash
-```
-
-### Build from source
-
-```bash
-go install github.com/shoutcape/treeman/cmd/treeman@latest
-```
-
----
-
-## Usage
-
-```bash
-# Create a new worktree + branch:
-wt <branch-name>
-wt feature/my-thing
-
-# Create a review worktree from a PR/MR number:
-wtpr <pr-number>
-wtmr <pr-number>
-
-# Or pick from open PRs/MRs with fzf:
-wtpr
-wtmr
-
-# Switch between worktrees (fzf picker):
-wts                         # opens interactive picker
-wts feat                    # pre-filters the list
-
-# Delete a worktree (interactive picker):
-wtd                         # opens interactive picker for deletion
-wtd feat                    # pre-filters the list
-```
-
----
-
-## CLI reference
-
-The shell aliases (`wt`, `wtpr`, etc.) are thin wrappers. You can also invoke the `treeman` binary directly — useful in scripts or CI:
-
-```bash
-treeman create <branch-name>       # same as wt
-treeman review [pr-number]         # same as wtpr / wtmr
-treeman switch [query]             # same as wts (prints path, does not cd)
-treeman delete [query]             # same as wtd
-treeman delete --path <path> --branch <branch> --yes   # non-interactive (lazygit / scripts)
-treeman init bash                  # print shell wrapper functions for bash
-treeman init zsh                   # print shell wrapper functions for zsh
-treeman version                    # print version, commit, and build date
-```
-
-The key difference between the CLI and the shell aliases is that `treeman create`, `treeman review`, and `treeman switch` print the target path to stdout — they don't `cd`. The shell wrappers capture that output and run `cd` in your current shell session.
-
----
-
-## Lazygit integration
+<details>
+<summary>Lazygit integration</summary>
 
 ### Custom keybindings
 
@@ -293,23 +309,7 @@ TreeMan can add custom keybindings to lazygit for creating and deleting worktree
 | `D` | Worktrees | Delete the selected worktree and its branch |
 | `D` | Branches | Delete the worktree associated with the selected branch and the branch itself |
 
-**Install:**
-
-`install.sh` automatically detects if lazygit is installed and idempotently injects the keybindings. Running it twice is safe.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
-```
-
-**Uninstall:**
-
-The unified uninstaller natively detects and removes the injected lazygit configuration.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
-```
-
----
+`install.sh` automatically detects if lazygit is installed and idempotently injects the keybindings. Running it twice is safe. The uninstaller removes them automatically too.
 
 ### `lg` wrapper
 
@@ -381,20 +381,4 @@ The plugin sets `LAZYGIT_NEW_DIR_FILE` automatically and calls `cd` on exit.
 
 The pattern is the same for any terminal plugin: set `LAZYGIT_NEW_DIR_FILE` as an env var, read the file after lazygit exits, and call `cd`.
 
----
-
-## Uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
-```
-
-Or manually:
-- Remove the `# TreeMan` block from your shell config (the `export PATH` line and the `eval "$(treeman init ...)"` line)
-- Delete `~/.treeman/`
-
-### Uninstall lazygit keybindings
-
-The lazygit configuration is automatically removed if you run the standard uninstall command (`curl .../uninstall.sh | bash`).
-
-Or manually remove all lines marked with `# TreeMan` from your lazygit `config.yml` (find its location with `lazygit -cd`).
+</details>
