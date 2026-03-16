@@ -1,0 +1,48 @@
+version: 2
+
+project_name: treeman
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: treeman
+    main: ./cmd/treeman
+    binary: treeman
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: treeman
+    builds:
+      - treeman
+    # Matches what install.sh expects: treeman_linux_amd64.tar.gz
+    name_template: "treeman_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - none*  # binary only, no extra files
+
+checksum:
+  name_template: "treeman_checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
