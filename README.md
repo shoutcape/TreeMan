@@ -3,9 +3,9 @@
 
 
 
-Shell functions for git worktree workflows — create new branch worktrees, jump straight into them, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
+Git worktree management CLI — create new branch worktrees, jump straight into them, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
 
-No runtime required. Single shell script. Works with bash and zsh.
+Single compiled binary. No runtime required. Works with bash and zsh.
 
 ```bash
 wt feature/my-thing        # create a new worktree + branch
@@ -26,8 +26,8 @@ Copied .env, .env.local
 Detected pnpm-lock.yaml — running pnpm install...
 
 Worktree ready:
-  Auto-switched to: /home/user/Github/my-project.feature-my-thing
-  Path: /home/user/Github/my-project.feature-my-thing
+  Branch: feature/my-thing
+  Path:   /home/user/Github/my-project.feature-my-thing
 ```
 
 ### `wtpr` / `wtmr` — review
@@ -86,6 +86,16 @@ Are you sure you want to delete this worktree and its branch? [y/N] y
 ---
 
 ## How it works
+
+### Shell integration
+
+The `wt`, `wtpr`, `wtmr`, `wts`, and `wtd` shell functions are thin wrappers around the `treeman` binary. Each wrapper captures the path printed to stdout by the binary and runs `cd` — this is how TreeMan can change the directory of your current shell session.
+
+The wrappers are injected by adding this line to your shell config:
+
+```bash
+eval "$(treeman init zsh)"   # or bash
+```
 
 ### `wt` — worktree creation
 
@@ -176,12 +186,20 @@ GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
 
 ## Requirements
 
+**Core**
 - `git`
-- `bash` or `zsh`
-- [`gh`](https://cli.github.com/) (for `wtpr` / `wtmr` with **GitHub** repos)
-- [`glab`](https://gitlab.com/gitlab-org/cli) + [`jq`](https://jqlang.github.io/jq/) (for `wtpr` / `wtmr` with **GitLab** repos, including self-hosted instances)
-- [`fzf`](https://github.com/junegunn/fzf) (for `wts`, `wtd`, and optional `wtpr` / `wtmr` picker mode)
-- The package manager your project uses (only needed when a lockfile is detected)
+- `treeman` binary (installed via the one-liner or manually — see [Install](#install))
+- `bash` or `zsh` (for shell wrapper functions)
+
+**For `wtpr` / `wtmr`**
+- [`gh`](https://cli.github.com/) — GitHub repos
+- [`glab`](https://gitlab.com/gitlab-org/cli) + [`jq`](https://jqlang.github.io/jq/) — GitLab repos (including self-hosted)
+
+**For `wts`, `wtd`, and the interactive PR/MR picker**
+- [`fzf`](https://github.com/junegunn/fzf)
+
+**For dependency auto-install**
+- The package manager your project uses (only invoked when a matching lockfile is detected)
 
 ---
 
@@ -244,6 +262,25 @@ wtd feat                    # pre-filters the list
 
 ---
 
+## CLI reference
+
+The shell aliases (`wt`, `wtpr`, etc.) are thin wrappers. You can also invoke the `treeman` binary directly — useful in scripts or CI:
+
+```bash
+treeman create <branch-name>       # same as wt
+treeman review [pr-number]         # same as wtpr / wtmr
+treeman switch [query]             # same as wts (prints path, does not cd)
+treeman delete [query]             # same as wtd
+treeman delete --path <path> --branch <branch> --yes   # non-interactive (lazygit / scripts)
+treeman init bash                  # print shell wrapper functions for bash
+treeman init zsh                   # print shell wrapper functions for zsh
+treeman version                    # print version, commit, and build date
+```
+
+The key difference between the CLI and the shell aliases is that `treeman create`, `treeman review`, and `treeman switch` print the target path to stdout — they don't `cd`. The shell wrappers capture that output and run `cd` in your current shell session.
+
+---
+
 ## Lazygit integration
 
 ### Custom keybindings
@@ -285,7 +322,7 @@ lg --help   # all lazygit flags work as normal
 
 Use `Shift+Q` to quit lazygit without triggering a directory change.
 
-The `lg` function is sourced alongside `wt` — no extra setup needed. If lazygit isn't installed, calling `lg` prints a warning and exits.
+The `lg` function is included in the shell integration — no extra setup needed. If lazygit isn't installed, calling `lg` prints a warning and exits.
 
 ### Neovim
 
@@ -353,7 +390,7 @@ curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh
 ```
 
 Or manually:
-- Remove the `# TreeMan` and `source` lines from your shell config
+- Remove the `# TreeMan` block from your shell config (the `export PATH` line and the `eval "$(treeman init ...)"` line)
 - Delete `~/.treeman/`
 
 ### Uninstall lazygit keybindings
