@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -226,19 +227,34 @@ func glabAPI(host, endpoint string) ([]byte, error) {
 
 // ResolveFromRemote detects the forge type, repo slug, and host from a remote
 // URL string. This is a convenience wrapper used by command handlers.
+//
+// Env var overrides (mirrors wt.sh test hooks):
+//   - _TREEMAN_FORGE    — override forge detection ("github" or "gitlab")
+//   - _TREEMAN_GH_REPO  — override repo slug (e.g. "owner/repo")
 func ResolveFromRemote(remoteURL string) (forgeType Type, repoSlug, host string, err error) {
 	host, err = remote.ParseHost(remoteURL)
 	if err != nil {
-		return "", "", "", err
+		// If _TREEMAN_FORGE is set, we can proceed even with an unparse-able URL.
+		if os.Getenv("_TREEMAN_FORGE") == "" {
+			return "", "", "", err
+		}
+		host = "override"
 	}
+
 	forgeType, err = DetectFromHost(host)
 	if err != nil {
 		return "", "", "", err
 	}
-	repoSlug, err = remote.ParsePath(remoteURL)
-	if err != nil {
-		return "", "", "", err
+
+	if slug := os.Getenv("_TREEMAN_GH_REPO"); slug != "" {
+		repoSlug = strings.TrimRight(slug, "/")
+	} else {
+		repoSlug, err = remote.ParsePath(remoteURL)
+		if err != nil {
+			return "", "", "", err
+		}
 	}
+
 	return forgeType, repoSlug, host, nil
 }
 

@@ -87,34 +87,40 @@ detect_lazygit_config_dir() {
 
 # --- Download binary ----------------------------------------------------------
 
-PLATFORM=$(detect_platform)
-TARBALL="treeman_${PLATFORM}.tar.gz"
-DOWNLOAD_URL="${RELEASE_BASE}/${TARBALL}"
-
 print_step "Installing TreeMan to $BIN_DIR..."
 mkdir -p "$BIN_DIR"
 
-TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
-
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$TMP_DIR/$TARBALL" "$DOWNLOAD_URL"
+if [[ -n "${TREEMAN_LOCAL_BIN:-}" ]]; then
+  # Local install path: skip download, copy binary directly (used in tests and
+  # local builds: TREEMAN_LOCAL_BIN=/path/to/treeman ./install.sh)
+  install -m 755 "$TREEMAN_LOCAL_BIN" "$BINARY"
 else
-  echo "Error: curl or wget is required to install TreeMan." >&2
-  exit 1
-fi
+  PLATFORM=$(detect_platform)
+  TARBALL="treeman_${PLATFORM}.tar.gz"
+  DOWNLOAD_URL="${RELEASE_BASE}/${TARBALL}"
 
-tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
-install -m 755 "$TMP_DIR/treeman" "$BINARY"
+  TMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$TMP_DIR/$TARBALL" "$DOWNLOAD_URL"
+  else
+    echo "Error: curl or wget is required to install TreeMan." >&2
+    exit 1
+  fi
+
+  tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
+  install -m 755 "$TMP_DIR/treeman" "$BINARY"
+fi
 
 print_done
 
 # --- Add PATH + eval line to shell config ------------------------------------
 
 SOURCE_MARKER="# TreeMan"
-PATH_LINE="export PATH=\"\$HOME/.treeman/bin:\$PATH\""
+PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
 EVAL_LINE="eval \"\$(treeman init ${SHELL_NAME})\""
 
 print_step "Adding TreeMan to $SHELL_RC..."

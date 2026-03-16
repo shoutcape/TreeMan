@@ -5,6 +5,7 @@ package forge
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -22,7 +23,21 @@ const (
 //   - "github.com"      → GitHub
 //   - any host containing "gitlab" → GitLab  (covers gitlab.com, gitlab.company.com, etc.)
 //   - anything else     → error
+//
+// If the environment variable _TREEMAN_FORGE is set to "github" or "gitlab"
+// it is returned directly, bypassing host detection (used in tests).
 func DetectFromHost(host string) (Type, error) {
+	if override := os.Getenv("_TREEMAN_FORGE"); override != "" {
+		switch Type(override) {
+		case GitHub:
+			return GitHub, nil
+		case GitLab:
+			return GitLab, nil
+		default:
+			return "", fmt.Errorf("_TREEMAN_FORGE: unsupported value %q", override)
+		}
+	}
+
 	switch {
 	case host == "github.com":
 		return GitHub, nil

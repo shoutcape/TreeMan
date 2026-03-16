@@ -189,7 +189,7 @@ GitLab nested groups (e.g. `group/subgroup/project`) are fully supported.
 
 ### One-liner
 
-Downloads `wt.sh` to `~/.treeman/`, adds a source line to your shell config, and optionally injects lazygit keybindings.
+Downloads the `treeman` binary to `~/.treeman/bin/`, adds it to your `PATH`, and wires the shell functions via `eval "$(treeman init <shell>)"`. Optionally injects lazygit keybindings.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
@@ -203,7 +203,18 @@ source ~/.zshrc   # or ~/.bashrc
 
 ### Manual
 
-Copy the contents of [`wt.sh`](./wt.sh) into your `~/.zshrc` or `~/.bashrc`.
+Download the binary for your platform from [GitHub Releases](https://github.com/shoutcape/TreeMan/releases/latest), place it somewhere on your `PATH`, then add to your shell config:
+
+```bash
+# ~/.zshrc or ~/.bashrc
+eval "$(treeman init zsh)"   # or bash
+```
+
+### Build from source
+
+```bash
+go install github.com/shoutcape/treeman/cmd/treeman@latest
+```
 
 ---
 

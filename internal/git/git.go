@@ -6,6 +6,7 @@ package git
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -211,9 +212,15 @@ func DeleteBranch(branch string) error {
 }
 
 // OriginRemoteURL returns the URL of the origin remote.
+// If the environment variable _TREEMAN_REMOTE_URL is set it is returned
+// directly without querying git (mirrors wt.sh:77 caching behaviour and
+// allows the smoke-test to inject a fake URL against a local bare repo).
 //
 // Mirrors _wt_origin_remote_url in wt.sh:77.
 func OriginRemoteURL() (string, error) {
+	if override := os.Getenv("_TREEMAN_REMOTE_URL"); override != "" {
+		return override, nil
+	}
 	url, err := run("remote", "get-url", "origin")
 	if err != nil {
 		return "", fmt.Errorf("could not read origin remote URL")
