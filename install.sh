@@ -4,15 +4,46 @@
 
 set -e
 
-REPO_URL="${TREEMAN_REPO_URL:-https://raw.githubusercontent.com/shoutcape/TreeMan/main/wt.sh}"
+REPO_OWNER="shoutcape"
+REPO_NAME="TreeMan"
+RELEASE_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download"
 INSTALL_DIR="${TREEMAN_INSTALL_DIR:-$HOME/.treeman}"
-WT_SH_FILE="$INSTALL_DIR/wt.sh"
+BIN_DIR="$INSTALL_DIR/bin"
+BINARY="$BIN_DIR/treeman"
 
 # --- Helpers -----------------------------------------------------------------
 
 print_step() { echo "==> $1"; }
 print_done() { echo "    done."; }
 print_warn() { echo "    warning: $1"; }
+
+# --- Detect OS and architecture ----------------------------------------------
+
+detect_platform() {
+  local os arch
+
+  case "$(uname -s)" in
+    Linux)  os="linux"  ;;
+    Darwin) os="darwin" ;;
+    *)
+      echo "Error: unsupported OS '$(uname -s)'." >&2
+      echo "       Build from source: go install github.com/${REPO_OWNER}/treeman/cmd/treeman@latest" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64)          arch="amd64" ;;
+    aarch64 | arm64) arch="arm64" ;;
+    *)
+      echo "Error: unsupported architecture '$(uname -m)'." >&2
+      echo "       Build from source: go install github.com/${REPO_OWNER}/treeman/cmd/treeman@latest" >&2
+      exit 1
+      ;;
+  esac
+
+  echo "${os}_${arch}"
+}
 
 # --- Detect shell config file ------------------------------------------------
 
@@ -35,7 +66,16 @@ detect_shell_rc() {
   fi
 }
 
+detect_shell_name() {
+  if [[ -n "$ZSH_VERSION" ]] || [[ "$SHELL" == */zsh ]]; then
+    echo "zsh"
+  else
+    echo "bash"
+  fi
+}
+
 SHELL_RC="${TREEMAN_SHELL_RC:-$(detect_shell_rc)}"
+SHELL_NAME=$(detect_shell_name)
 
 detect_lazygit_config_dir() {
   if [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
@@ -45,33 +85,50 @@ detect_lazygit_config_dir() {
   fi
 }
 
-# --- Download wt.sh ----------------------------------------------------------
+# --- Download binary ----------------------------------------------------------
 
-print_step "Installing TreeMan to $INSTALL_DIR..."
-mkdir -p "$INSTALL_DIR"
+print_step "Installing TreeMan to $BIN_DIR..."
+mkdir -p "$BIN_DIR"
 
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$REPO_URL" -o "$WT_SH_FILE"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$WT_SH_FILE" "$REPO_URL"
+if [[ -n "${TREEMAN_LOCAL_BIN:-}" ]]; then
+  # Local install path: skip download, copy binary directly (used in tests and
+  # local builds: TREEMAN_LOCAL_BIN=/path/to/treeman ./install.sh)
+  install -m 755 "$TREEMAN_LOCAL_BIN" "$BINARY"
 else
-  echo "Error: curl or wget is required to install TreeMan." >&2
-  exit 1
+  PLATFORM=$(detect_platform)
+  TARBALL="treeman_${PLATFORM}.tar.gz"
+  DOWNLOAD_URL="${RELEASE_BASE}/${TARBALL}"
+
+  TMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TMP_DIR"' EXIT
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$TMP_DIR/$TARBALL" "$DOWNLOAD_URL"
+  else
+    echo "Error: curl or wget is required to install TreeMan." >&2
+    exit 1
+  fi
+
+  tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
+  install -m 755 "$TMP_DIR/treeman" "$BINARY"
 fi
 
 print_done
 
-# --- Add source line to shell config -----------------------------------------
+# --- Add PATH + eval line to shell config ------------------------------------
 
-SOURCE_LINE="source \"$WT_SH_FILE\""
 SOURCE_MARKER="# TreeMan"
+PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
+EVAL_LINE="eval \"\$(treeman init ${SHELL_NAME})\""
 
 print_step "Adding TreeMan to $SHELL_RC..."
 
 if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
-  print_warn "TreeMan source line already present in $SHELL_RC, skipping."
+  print_warn "TreeMan already present in $SHELL_RC, skipping."
 else
-  printf '\n%s\n%s\n' "$SOURCE_MARKER" "$SOURCE_LINE" >> "$SHELL_RC"
+  printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$EVAL_LINE" >> "$SHELL_RC"
   print_done
 fi
 
@@ -83,7 +140,7 @@ if ! command -v fzf >/dev/null 2>&1; then
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-  print_warn "gh is not installed. The 'wtpr' and 'wtmr' commands require it."
+  print_warn "gh is not installed. The 'wtpr' and 'wtmr' commands require it for GitHub repos."
   echo "    Install it from: https://cli.github.com/"
 fi
 
@@ -94,12 +151,10 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
   config_dir=$(detect_lazygit_config_dir)
   if [[ -n "$config_dir" ]]; then
     config_file="$config_dir/config.yml"
-    
-    # Create config file if it doesn't exist
+
     if [ ! -f "$config_file" ]; then
       mkdir -p "$config_dir"
       touch "$config_file"
-      print_done
     fi
 
     if grep -q "$SOURCE_MARKER" "$config_file" 2>/dev/null; then
@@ -111,7 +166,7 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Create new worktree (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: "bash -lc 'source \"$WT_SH_FILE\" && wt \"\$1\"' treeman {{.Form.BranchName | quote}}"
+    command: "treeman create {{.Form.BranchName | quote}}"
     loadingText: 'Creating worktree...'
     prompts:
       - type: 'input'
@@ -121,7 +176,7 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Delete worktree and branch (TreeMan)'
     context: 'worktrees'
     output: logWithPty
-    command: "bash -lc 'source \"$WT_SH_FILE\" && _wt_lazygit_delete_worktree \"\$1\" \"\$2\"' treeman {{.SelectedWorktree.Path | quote}} {{.SelectedWorktree.Branch | quote}}"
+    command: "treeman delete --path {{.SelectedWorktree.Path | quote}} --branch {{.SelectedWorktree.Branch | quote}} --yes"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -131,7 +186,7 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
     description: 'Delete worktree and branch (TreeMan)'
     context: 'localBranches'
     output: logWithPty
-    command: "bash -lc 'source \"$WT_SH_FILE\" && _wt_lazygit_delete_branch \"\$1\"' treeman {{.SelectedLocalBranch.Name | quote}}"
+    command: "treeman delete --branch {{.SelectedLocalBranch.Name | quote}} --yes"
     loadingText: 'Removing worktree...'
     prompts:
       - type: 'confirm'
@@ -181,9 +236,9 @@ echo "Reload your shell to start using it:"
 echo "  source $SHELL_RC"
 echo ""
 echo "Usage:"
-echo "  wt  <branch-name>   Create a new worktree + branch"
-echo "  wtpr [pr-number]    Create a review worktree from a PR"
-echo "  wtmr [pr-number]    Same as wtpr"
-echo "  wts [query]          Switch between worktrees (requires fzf)"
-echo "  wtd [query]          Delete a worktree and its branch (requires fzf)"
+echo "  wt  <branch-name>    Create a new worktree + branch"
+echo "  wtpr [pr-number]     Create a review worktree from a GitHub PR"
+echo "  wtmr [pr-number]     Create a review worktree from a GitLab MR"
+echo "  wts  [query]         Switch between worktrees (requires fzf)"
+echo "  wtd  [query]         Delete a worktree and its branch (requires fzf)"
 echo "  lg                   Run lazygit with auto-cd"

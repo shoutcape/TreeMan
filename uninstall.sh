@@ -19,6 +19,14 @@ detect_lazygit_config_dir() {
   fi
 }
 
+# Remove TreeMan lines from a shell rc file.
+# Removes the marker comment and the next two lines that follow it:
+#   # TreeMan
+#   export PATH="$HOME/.treeman/bin:$PATH"
+#   eval "$(treeman init bash)"
+#
+# Also handles the legacy single-line format (source "...wt.sh") left over
+# from installs done before the Go rewrite.
 remove_from_rc() {
   local rc_file="$1"
   if [[ ! -f "$rc_file" ]]; then
@@ -26,7 +34,11 @@ remove_from_rc() {
   fi
   if grep -qF "$SOURCE_MARKER" "$rc_file" 2>/dev/null; then
     print_step "Removing TreeMan from $rc_file..."
-    awk -v marker="$SOURCE_MARKER" '$0 == marker { skip = 1; next } skip { skip = 0; next } { print }' "$rc_file" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
+    awk -v marker="$SOURCE_MARKER" '
+      $0 == marker { skip = 2; next }
+      skip > 0     { skip--; next }
+      { print }
+    ' "$rc_file" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
     print_done
   fi
 }
@@ -66,7 +78,6 @@ if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}"
       awk '
         {
           lines[NR] = $0
-          original[NR] = $0
           suppress[NR] = 0
         }
         END {
