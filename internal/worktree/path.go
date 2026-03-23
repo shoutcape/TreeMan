@@ -1,5 +1,5 @@
 // Package worktree provides high-level worktree business logic.
-// This file handles path naming conventions for sibling worktrees.
+// This file handles path naming conventions for worktrees.
 package worktree
 
 import (
@@ -17,20 +17,18 @@ func BranchSlug(branch string) string {
 	return strings.ReplaceAll(branch, "/", "-")
 }
 
-// PathForBranch builds the sibling worktree path for a given branch.
+// PathForBranch builds the worktree path for a given branch inside the repo.
 //
-// The formula (mirrors _wt_worktree_path_for_branch in wt.sh:66) is:
+// The formula is:
 //
-//	<dirname(mainRoot)>/<basename(mainRoot)>.<branchSlug>
+//	<mainRoot>/.worktrees/<branchSlug>
 //
 // Example:
 //
 //	mainRoot = "/home/user/Github/my-project"
 //	branch   = "feature/cool-thing"
-//	result   = "/home/user/Github/my-project.feature-cool-thing"
+//	result   = "/home/user/Github/my-project/.worktrees/feature-cool-thing"
 func PathForBranch(mainRoot, branch string) string {
-	parent := filepath.Dir(mainRoot)
-	repoName := filepath.Base(mainRoot)
 	slug := BranchSlug(branch)
-	return filepath.Join(parent, repoName+"."+slug)
+	return filepath.Join(mainRoot, ".worktrees", slug)
 }

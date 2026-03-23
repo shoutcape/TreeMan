@@ -131,6 +131,11 @@ func runReview(cmd *cobra.Command, prArg string) error {
 		return err
 	}
 
+	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
+	if err := worktree.EnsureIgnored(mainRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update .gitignore: %v\n", err)
+	}
+
 	// Copy .env* files.
 	envResult, envErr := envfile.Copy(mainRoot, worktreePath)
 	if envErr != nil {

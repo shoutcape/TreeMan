@@ -37,25 +37,25 @@ func TestPathForBranch(t *testing.T) {
 			name:     "feature branch with slash",
 			mainRoot: "/home/user/Github/my-project",
 			branch:   "feature/cool-thing",
-			want:     "/home/user/Github/my-project.feature-cool-thing",
+			want:     "/home/user/Github/my-project/.worktrees/feature-cool-thing",
 		},
 		{
 			name:     "fix branch with slash",
 			mainRoot: "/home/user/Github/my-project",
 			branch:   "fix/bug-123",
-			want:     "/home/user/Github/my-project.fix-bug-123",
+			want:     "/home/user/Github/my-project/.worktrees/fix-bug-123",
 		},
 		{
 			name:     "simple branch no slash",
 			mainRoot: "/home/user/Github/my-project",
 			branch:   "hotfix",
-			want:     "/home/user/Github/my-project.hotfix",
+			want:     "/home/user/Github/my-project/.worktrees/hotfix",
 		},
 		{
 			name:     "review branch matches smoke test naming",
 			mainRoot: "/tmp/project",
 			branch:   "feature/review-alpha",
-			want:     "/tmp/project.feature-review-alpha",
+			want:     "/tmp/project/.worktrees/feature-review-alpha",
 		},
 	}
 

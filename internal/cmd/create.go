@@ -18,8 +18,7 @@ func newCreateCmd() *cobra.Command {
 		Short: "Create a new worktree + branch",
 		Long: `Create a new linked worktree and branch from the latest default branch.
 
-The worktree is placed as a sibling of the main worktree with the naming
-convention: <repo>.<branch-slug>
+The worktree is placed under .worktrees/<branch-slug> inside the repository.
 
 .env* files are automatically copied from the main worktree, and
 dependencies are installed if a known lockfile is detected.
@@ -79,6 +78,11 @@ func runCreate(cmd *cobra.Command, branch string) error {
 	fmt.Fprintf(os.Stderr, "Creating worktree at %s (branch: %s)...\n", worktreePath, branch)
 	if err := git.WorktreeAdd(worktreePath, branch, "origin/"+defaultBranch); err != nil {
 		return err
+	}
+
+	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
+	if err := worktree.EnsureIgnored(mainRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update .gitignore: %v\n", err)
 	}
 
 	// Copy .env* files (best-effort, non-fatal).
