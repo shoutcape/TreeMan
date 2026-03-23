@@ -57,7 +57,7 @@ func Install(dir string) (InstallResult, error) {
 	args := append([]string{installer.Binary}, installer.Args...)
 	cmd := exec.Command(filepath.Clean(args[0]), args[1:]...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
