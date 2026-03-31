@@ -9,6 +9,7 @@ import (
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
@@ -132,6 +133,18 @@ func runCreate(cmd *cobra.Command, branch string) error {
 			installResult.Installer.Binary,
 			joinArgs(installResult.Installer.Args),
 		)
+	}
+
+	// Run post-create hooks (best-effort, non-fatal).
+	if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
+		fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
+		for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
+			if r.Err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: hook %q failed: %v\n", r.Command, r.Err)
+			} else {
+				fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
+			}
+		}
 	}
 
 	// Print result to stderr for the user.

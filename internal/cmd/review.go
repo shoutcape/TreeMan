@@ -13,6 +13,7 @@ import (
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/shoutcape/treeman/internal/worktree"
@@ -177,6 +178,18 @@ func runReview(cmd *cobra.Command, prArg string) error {
 		fmt.Fprintln(os.Stderr, "Detected Python project -- skipping auto-install (activate your venv manually).")
 	case installResult.Skipped:
 		fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
+	}
+
+	// Run post-create hooks (best-effort, non-fatal).
+	if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
+		fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
+		for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
+			if r.Err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: hook %q failed: %v\n", r.Command, r.Err)
+			} else {
+				fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
+			}
+		}
 	}
 
 	// Print review summary to stderr.
