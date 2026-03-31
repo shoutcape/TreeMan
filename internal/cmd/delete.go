@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
@@ -84,7 +86,14 @@ func runDeleteDirect(path, branch string, skipConfirm bool) error {
 		}
 	}
 
-	return deleteWorktreeAndBranch(path, branch, mainRoot)
+	// Load project config for database management.
+	cfgResult := config.Load(mainRoot)
+	if cfgResult.Warning != "" {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
+	}
+	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
+
+	return deleteWorktreeAndBranch(path, branch, mainRoot, dbEnvKey)
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
@@ -179,14 +188,23 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
 		return nil
 	}
 
-	return deleteWorktreeAndBranch(dest, branch, mainRoot)
+	// Load project config for database management.
+	cfgResult := config.Load(mainRoot)
+	if cfgResult.Warning != "" {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
+	}
+	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
+
+	return deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey)
 }
 
 // deleteWorktreeAndBranch removes the worktree and deletes its branch with
 // guards against deleting the main worktree or the default branch.
 //
+// If dbEnvKey is non-empty, the branch-specific database is dropped first.
+//
 // Mirrors _wt_delete_worktree_and_branch in wt.sh:461.
-func deleteWorktreeAndBranch(dest, branch, mainRoot string) error {
+func deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey string) error {
 	if dest == mainRoot {
 		return fmt.Errorf("cannot delete the main worktree")
 	}
@@ -200,7 +218,14 @@ func deleteWorktreeAndBranch(dest, branch, mainRoot string) error {
 	// Detect this and print a clear message.
 	cwd, _ := os.Getwd()
 	if strings.HasPrefix(cwd, dest) {
-		return fmt.Errorf("currently inside this worktree — run 'treeman switch' to leave it first")
+		return fmt.Errorf("currently inside this worktree -- run 'treeman switch' to leave it first")
+	}
+
+	// Drop branch-specific database (best-effort, non-fatal).
+	if dbEnvKey != "" {
+		if err := database.CleanupBranchDB(dest, dbEnvKey); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: database cleanup failed: %v\n", err)
+		}
 	}
 
 	fmt.Fprintln(os.Stderr, "Removing worktree...")

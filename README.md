@@ -77,3 +77,59 @@ Or manually:
 
     **For dependency auto-install**
 - The package manager your project uses (only invoked when a matching lockfile is detected)
+
+    **For per-branch databases**
+    - `docker` -- used to find and exec into the running PostgreSQL container
+
+---
+
+## Per-Branch Database Management
+
+TreeMan can automatically create a dedicated PostgreSQL database for each worktree and drop it on deletion. This keeps branch data fully isolated without manual setup.
+
+### How it works
+
+1. **On `wt create`** -- TreeMan reads the database URI from your `.env` file, derives a branch-specific database name (`<db>__<branch_slug>`), runs `CREATE DATABASE` inside the running Postgres container, and rewrites the `.env` in the new worktree to point at the new database.
+2. **On `wtd` (delete)** -- TreeMan reads the `.env` from the worktree being deleted, and runs `DROP DATABASE IF EXISTS` to clean up. Only databases containing `__` (the branch separator) are eligible for auto-drop, so your main database is never touched.
+
+### Setup
+
+Create a `.treeman.toml` in your project root:
+
+```toml
+[database]
+env_key = "DATABASE_URI"    # the .env variable that holds your postgres connection string
+```
+
+That's it. The `.env` file must contain a `postgres://` or `postgresql://` URI under that key:
+
+```
+DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp
+```
+
+### Database naming
+
+Branch names are converted to safe PostgreSQL identifiers:
+
+| Branch | Database |
+|---|---|
+| `jd/fix-123/add-user-auth` | `myapp__jd_fix_123_add_user_auth` |
+| `hotfix` | `myapp__hotfix` |
+| `feat/v2.0-support` | `myapp__feat_v2_0_support` |
+
+Names are truncated to 63 characters (PostgreSQL's max identifier length).
+
+### Container discovery
+
+TreeMan finds the running PostgreSQL container automatically via `docker ps`. It tries in order:
+
+1. A container publishing the port from the URI
+2. A container with the `postgres` ancestor image
+3. Any container with "postgres" in the image name
+
+### Notes
+
+- The feature is **opt-in** -- without `.treeman.toml`, nothing changes.
+- Database operations are **best-effort** -- failures produce warnings, never block worktree creation or deletion.
+- Only `postgres://` and `postgresql://` URIs are handled; other databases are silently skipped.
+- Quoted values in `.env` (single or double quotes) are supported.

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/forge"
@@ -147,6 +149,24 @@ func runReview(cmd *cobra.Command, prArg string) error {
 		fmt.Fprintf(os.Stderr, "Copied %d env file(s) from main worktree.\n", len(envResult.Copied))
 	}
 
+	// Load project config for database management.
+	cfgResult := config.Load(mainRoot)
+	if cfgResult.Warning != "" {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
+	}
+
+	// Set up branch-specific database (best-effort, non-fatal).
+	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
+	dbResult, dbErr := database.SetupBranchDB(worktreePath, info.Branch, dbEnvKey)
+	switch {
+	case dbErr != nil:
+		fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
+	case dbResult.Skipped:
+		// No config, no env key, or not a postgres URI -- silently skip.
+	default:
+		fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+	}
+
 	// Install dependencies.
 	fmt.Fprintln(os.Stderr, "Detecting dependencies...")
 	installResult, installErr := deps.Install(worktreePath)
@@ -154,7 +174,7 @@ func runReview(cmd *cobra.Command, prArg string) error {
 	case installErr != nil:
 		fmt.Fprintf(os.Stderr, "Warning: dependency installation failed: %v\n", installErr)
 	case installResult.Python:
-		fmt.Fprintln(os.Stderr, "Detected Python project — skipping auto-install (activate your venv manually).")
+		fmt.Fprintln(os.Stderr, "Detected Python project -- skipping auto-install (activate your venv manually).")
 	case installResult.Skipped:
 		fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
 	}
