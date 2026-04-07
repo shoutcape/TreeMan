@@ -10,7 +10,10 @@ import (
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/terminal"
+	_ "github.com/shoutcape/treeman/internal/terminal/ghostty"
 	"github.com/shoutcape/treeman/internal/ui"
+	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -93,7 +96,11 @@ func runDeleteDirect(path, branch string, skipConfirm bool) error {
 	}
 	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
 
-	return deleteWorktreeAndBranch(path, branch, mainRoot, dbEnvKey)
+	termCfg := config.MergeTerminalConfig(
+		config.LoadGlobal("").Config.Terminal,
+		cfgResult.Config.Terminal,
+	)
+	return deleteWorktreeAndBranch(path, branch, mainRoot, dbEnvKey, termCfg)
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
@@ -195,7 +202,11 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
 	}
 	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
 
-	return deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey)
+	termCfg := config.MergeTerminalConfig(
+		config.LoadGlobal("").Config.Terminal,
+		cfgResult.Config.Terminal,
+	)
+	return deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey, termCfg)
 }
 
 // deleteWorktreeAndBranch removes the worktree and deletes its branch with
@@ -204,7 +215,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
 // If dbEnvKey is non-empty, the branch-specific database is dropped first.
 //
 // Mirrors _wt_delete_worktree_and_branch in wt.sh:461.
-func deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey string) error {
+func deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey string, termCfg *config.TerminalConfig) error {
 	if dest == mainRoot {
 		return fmt.Errorf("cannot delete the main worktree")
 	}
@@ -225,6 +236,17 @@ func deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey string) error {
 	if dbEnvKey != "" {
 		if err := database.CleanupBranchDB(dest, dbEnvKey); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: database cleanup failed: %v\n", err)
+		}
+	}
+
+	// Close terminals for this worktree (best-effort).
+	if mgr := terminal.NewManager(termCfg); mgr != nil {
+		if err := mgr.Close(terminal.WorktreeInfo{
+			Path:   dest,
+			Branch: branch,
+			Slug:   worktree.BranchSlug(branch),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not close terminal: %v\n", err)
 		}
 	}
 
