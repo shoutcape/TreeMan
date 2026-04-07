@@ -10,6 +10,8 @@ import (
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
+	"github.com/shoutcape/treeman/internal/terminal"
+	_ "github.com/shoutcape/treeman/internal/terminal/ghostty"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
@@ -147,6 +149,25 @@ func runCreate(cmd *cobra.Command, branch string) error {
 		}
 	}
 
+	// Open terminal for the new worktree (best-effort).
+	terminalOpened := false
+	termCfg := config.MergeTerminalConfig(
+		config.LoadGlobal("").Config.Terminal,
+		cfgResult.Config.Terminal,
+	)
+	if mgr := terminal.NewManager(termCfg); mgr != nil {
+		fmt.Fprintln(os.Stderr, "Opening Ghostty terminal...")
+		if err := mgr.Open(terminal.WorktreeInfo{
+			Path:   worktreePath,
+			Branch: branch,
+			Slug:   worktree.BranchSlug(branch),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not open terminal: %v\n", err)
+		} else {
+			terminalOpened = true
+		}
+	}
+
 	// Print result to stderr for the user.
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Worktree ready:")
@@ -154,7 +175,10 @@ func runCreate(cmd *cobra.Command, branch string) error {
 	fmt.Fprintf(os.Stderr, "  Path:   %s\n", worktreePath)
 
 	// Print path to stdout so the shell wrapper can cd into it.
-	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
+	// Skip when a terminal was opened -- the user is already there.
+	if !terminalOpened {
+		fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
+	}
 
 	return nil
 }
