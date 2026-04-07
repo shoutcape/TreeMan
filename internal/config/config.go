@@ -17,6 +17,9 @@ import (
 // ConfigFileName is the name of the config file searched for.
 const ConfigFileName = ".treeman.toml"
 
+// GlobalConfigFileName is the name of the global config file.
+const GlobalConfigFileName = "config.toml"
+
 // Config holds the full project-level configuration from .treeman.toml.
 type Config struct {
 	// Database configures per-branch database management.
@@ -26,6 +29,10 @@ type Config struct {
 	// Hooks configures lifecycle hooks (commands to run at various stages).
 	// Nil when the [hooks] section is absent (no custom hooks).
 	Hooks *HooksConfig `toml:"hooks"`
+
+	// Terminal configures terminal emulator integration.
+	// Nil when the [terminal] section is absent (feature disabled).
+	Terminal *TerminalConfig `toml:"terminal"`
 }
 
 // HooksConfig configures lifecycle hook commands.
@@ -34,6 +41,23 @@ type HooksConfig struct {
 	// created. Commands run sequentially in the new worktree directory.
 	// Failures are treated as warnings (best-effort).
 	PostCreate []string `toml:"post_create"`
+}
+
+// TerminalConfig configures terminal emulator integration.
+type TerminalConfig struct {
+	App    string        `toml:"app"`
+	Layout *LayoutConfig `toml:"layout"`
+}
+
+// LayoutConfig defines the pane layout for terminal integration.
+type LayoutConfig struct {
+	Splits []SplitConfig `toml:"splits"`
+}
+
+// SplitConfig defines a single terminal pane split.
+type SplitConfig struct {
+	Direction string `toml:"direction"`
+	Command   string `toml:"command"`
 }
 
 // DatabaseConfig configures per-branch database management.
@@ -114,6 +138,73 @@ func Load(dir string) LoadResult {
 		Config: cfg,
 		Path:   path,
 	}
+}
+
+// LoadGlobal loads the global config from configDir/config.toml.
+// If configDir is empty, it falls back to $XDG_CONFIG_HOME/treeman or
+// $HOME/.config/treeman. Returns a zero LoadResult if no global config
+// exists.
+func LoadGlobal(configDir string) LoadResult {
+	if configDir == "" {
+		configDir = defaultGlobalConfigDir()
+		if configDir == "" {
+			return LoadResult{}
+		}
+	}
+	path := filepath.Join(configDir, GlobalConfigFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return LoadResult{}
+	}
+	var cfg Config
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return LoadResult{
+			Path:    path,
+			Warning: fmt.Sprintf("could not parse %s: %v", path, err),
+		}
+	}
+	return LoadResult{Config: cfg, Path: path}
+}
+
+// defaultGlobalConfigDir returns the directory for the global config file,
+// using $XDG_CONFIG_HOME/treeman or falling back to $HOME/.config/treeman.
+func defaultGlobalConfigDir() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "treeman")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "treeman")
+}
+
+// MergeTerminalConfig merges global and project terminal configs.
+// Project-level fields override global when set, but unset project fields
+// fall back to global values. This allows the global config to set
+// app = "ghostty" while the project config only specifies a layout.
+func MergeTerminalConfig(global, project *TerminalConfig) *TerminalConfig {
+	if global == nil && project == nil {
+		return nil
+	}
+	if global == nil {
+		return project
+	}
+	if project == nil {
+		return global
+	}
+
+	merged := &TerminalConfig{
+		App:    global.App,
+		Layout: global.Layout,
+	}
+	if project.App != "" {
+		merged.App = project.App
+	}
+	if project.Layout != nil {
+		merged.Layout = project.Layout
+	}
+	return merged
 }
 
 // findConfig walks from dir upward looking for ConfigFileName.

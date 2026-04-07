@@ -222,3 +222,169 @@ func TestPostCreateHooks_NilHooks(t *testing.T) {
 	cfg := Config{}
 	assert.Nil(t, cfg.PostCreateHooks())
 }
+
+func TestLoad_TerminalConfig(t *testing.T) {
+	dir := t.TempDir()
+	content := `[terminal]
+app = "wezterm"
+
+[terminal.layout]
+[[terminal.layout.splits]]
+direction = "right"
+command = "pnpm dev"
+
+[[terminal.layout.splits]]
+direction = "bottom"
+command = "pnpm test --watch"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Equal(t, "", result.Warning)
+	assert.NotEmpty(t, result.Path)
+	require.NotNil(t, result.Config.Terminal)
+	assert.Equal(t, "wezterm", result.Config.Terminal.App)
+	require.NotNil(t, result.Config.Terminal.Layout)
+	require.Len(t, result.Config.Terminal.Layout.Splits, 2)
+	assert.Equal(t, "right", result.Config.Terminal.Layout.Splits[0].Direction)
+	assert.Equal(t, "pnpm dev", result.Config.Terminal.Layout.Splits[0].Command)
+	assert.Equal(t, "bottom", result.Config.Terminal.Layout.Splits[1].Direction)
+	assert.Equal(t, "pnpm test --watch", result.Config.Terminal.Layout.Splits[1].Command)
+}
+
+func TestLoad_TerminalNoLayout(t *testing.T) {
+	dir := t.TempDir()
+	content := `[terminal]
+app = "kitty"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Equal(t, "", result.Warning)
+	require.NotNil(t, result.Config.Terminal)
+	assert.Equal(t, "kitty", result.Config.Terminal.App)
+	assert.Nil(t, result.Config.Terminal.Layout)
+}
+
+func TestLoad_TerminalAndDatabase(t *testing.T) {
+	dir := t.TempDir()
+	content := `[database]
+env_key = "DATABASE_URI"
+
+[terminal]
+app = "wezterm"
+
+[terminal.layout]
+[[terminal.layout.splits]]
+direction = "right"
+command = "pnpm dev"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Equal(t, "", result.Warning)
+	require.NotNil(t, result.Config.Database)
+	assert.Equal(t, "DATABASE_URI", result.Config.Database.EnvKey)
+	require.NotNil(t, result.Config.Terminal)
+	assert.Equal(t, "wezterm", result.Config.Terminal.App)
+	require.NotNil(t, result.Config.Terminal.Layout)
+	require.Len(t, result.Config.Terminal.Layout.Splits, 1)
+}
+
+func TestLoadGlobal_NoFile(t *testing.T) {
+	dir := t.TempDir()
+	result := LoadGlobal(dir)
+
+	assert.Equal(t, Config{}, result.Config)
+	assert.Equal(t, "", result.Path)
+	assert.Equal(t, "", result.Warning)
+}
+
+func TestLoadGlobal_ValidTerminal(t *testing.T) {
+	dir := t.TempDir()
+	content := `[terminal]
+app = "wezterm"
+
+[terminal.layout]
+[[terminal.layout.splits]]
+direction = "right"
+command = "pnpm dev"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, GlobalConfigFileName), []byte(content), 0600))
+
+	result := LoadGlobal(dir)
+
+	assert.Equal(t, "", result.Warning)
+	assert.Equal(t, filepath.Join(dir, GlobalConfigFileName), result.Path)
+	require.NotNil(t, result.Config.Terminal)
+	assert.Equal(t, "wezterm", result.Config.Terminal.App)
+	require.NotNil(t, result.Config.Terminal.Layout)
+	require.Len(t, result.Config.Terminal.Layout.Splits, 1)
+	assert.Equal(t, "right", result.Config.Terminal.Layout.Splits[0].Direction)
+	assert.Equal(t, "pnpm dev", result.Config.Terminal.Layout.Splits[0].Command)
+}
+
+func TestLoadGlobal_InvalidToml(t *testing.T) {
+	dir := t.TempDir()
+	content := `[terminal
+broken toml
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, GlobalConfigFileName), []byte(content), 0600))
+
+	result := LoadGlobal(dir)
+
+	assert.Contains(t, result.Warning, "could not parse")
+	assert.Equal(t, filepath.Join(dir, GlobalConfigFileName), result.Path)
+	assert.Equal(t, Config{}, result.Config)
+}
+
+func TestMergeTerminalConfig_BothNil(t *testing.T) {
+	result := MergeTerminalConfig(nil, nil)
+	assert.Nil(t, result)
+}
+
+func TestMergeTerminalConfig_GlobalOnly(t *testing.T) {
+	global := &TerminalConfig{App: "wezterm"}
+	result := MergeTerminalConfig(global, nil)
+	assert.Equal(t, global, result)
+}
+
+func TestMergeTerminalConfig_ProjectOnly(t *testing.T) {
+	project := &TerminalConfig{App: "kitty"}
+	result := MergeTerminalConfig(nil, project)
+	assert.Equal(t, project, result)
+}
+
+func TestMergeTerminalConfig_ProjectOverridesGlobal(t *testing.T) {
+	global := &TerminalConfig{App: "wezterm"}
+	project := &TerminalConfig{App: "kitty"}
+	result := MergeTerminalConfig(global, project)
+	assert.Equal(t, "kitty", result.App)
+}
+
+func TestMergeTerminalConfig_ProjectLayoutWithGlobalApp(t *testing.T) {
+	global := &TerminalConfig{App: "ghostty"}
+	project := &TerminalConfig{Layout: &LayoutConfig{
+		Splits: []SplitConfig{{Direction: "right", Command: "pdev"}},
+	}}
+	result := MergeTerminalConfig(global, project)
+	assert.Equal(t, "ghostty", result.App)
+	require.NotNil(t, result.Layout)
+	assert.Equal(t, "right", result.Layout.Splits[0].Direction)
+}
+
+func TestMergeTerminalConfig_GlobalLayoutOverriddenByProject(t *testing.T) {
+	global := &TerminalConfig{App: "ghostty", Layout: &LayoutConfig{
+		Splits: []SplitConfig{{Direction: "right", Command: ""}},
+	}}
+	project := &TerminalConfig{Layout: &LayoutConfig{
+		Splits: []SplitConfig{{Direction: "down", Command: "pdev"}},
+	}}
+	result := MergeTerminalConfig(global, project)
+	assert.Equal(t, "ghostty", result.App)
+	assert.Equal(t, "down", result.Layout.Splits[0].Direction)
+	assert.Equal(t, "pdev", result.Layout.Splits[0].Command)
+}
