@@ -133,3 +133,51 @@ TreeMan finds the running PostgreSQL container automatically via `docker ps`. It
 - Database operations are **best-effort** -- failures produce warnings, never block worktree creation or deletion.
 - Only `postgres://` and `postgresql://` URIs are handled; other databases are silently skipped.
 - Quoted values in `.env` (single or double quotes) are supported.
+
+---
+
+## Terminal Integration (Ghostty)
+
+TreeMan can automatically control your terminal emulator when managing worktrees -- opening tabs on create, focusing them on switch, and closing them on delete.
+
+Currently supported: **Ghostty** on macOS (requires Ghostty 1.3+ for AppleScript support).
+
+### Setup
+
+Add to your global config at `~/.config/treeman/config.toml`:
+
+```toml
+[terminal]
+app = "ghostty"
+```
+
+That's it. Now `wt`, `wts`, and `wtd` will manage Ghostty tabs alongside worktrees.
+
+### Layout splits
+
+You can configure automatic pane splits per project. Add a `[terminal.layout]` section to your project's `.treeman.toml`:
+
+```toml
+[terminal.layout]
+splits = [
+    { direction = "right", command = "pnpm dev" },
+    { direction = "down", command = "pnpm test --watch" },
+]
+```
+
+When creating a worktree, TreeMan opens a new Ghostty tab and splits it according to the layout, running the specified commands in each pane. All panes start in the worktree directory.
+
+You can also set a default layout in the global config (`~/.config/treeman/config.toml`). Project config overrides global when present.
+
+### How it works
+
+- **`wt create`** -- Opens a new Ghostty tab (or window if none exists) at the worktree directory. Names the terminal `treeman:<branch-slug>` for tracking.
+- **`wts` (switch)** -- Finds and focuses the Ghostty terminal for the selected worktree. Still prints the path for the shell `cd`.
+- **`wtd` (delete)** -- Closes all Ghostty terminals associated with the worktree before removing it.
+
+### Notes
+
+- The feature is **opt-in** -- without `terminal.app` in config, nothing changes.
+- Terminal operations are **best-effort** -- failures produce warnings, never block worktree operations.
+- If Ghostty is not running, `activate` will launch it.
+- Split directions: `right`, `left`, `down`, `up`.

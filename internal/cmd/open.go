@@ -54,69 +54,53 @@ func runOpen(query string) error {
 		return fmt.Errorf("no worktrees found")
 	}
 
-	var dest, branch string
-
-	// If CWD is inside a worktree, skip fzf and use it directly.
-	if cwd, err := git.CurrentDir(); err == nil {
-		for _, e := range entries {
-			if e.Path == cwd {
-				dest = e.Path
-				branch = e.Branch
-				break
-			}
-		}
+	if _, err := exec.LookPath("fzf"); err != nil {
+		return fmt.Errorf("fzf is required for open. Install it from https://github.com/junegunn/fzf")
 	}
 
-	// Otherwise fall back to fzf picker.
-	if dest == "" {
-		if _, err := exec.LookPath("fzf"); err != nil {
-			return fmt.Errorf("fzf is required for open. Install it from https://github.com/junegunn/fzf")
-		}
-
-		// Build parallel display-rows and entry slices.
-		var displayLines []string
-		var fullPaths []string
-		var branchList []string
-		for _, e := range entries {
-			displayLines = append(displayLines, ui.WorktreeRow(e.Path, e.Branch))
-			fullPaths = append(fullPaths, e.Path)
-			branchList = append(branchList, e.Branch)
-		}
-
-		display := strings.Join(displayLines, "\n")
-
-		fzfArgs := []string{
-			"--ansi",
-			"--border-label", " open worktree ",
-			"--prompt=open > ",
-		}
-		if query != "" {
-			fzfArgs = append(fzfArgs, "--query", query)
-		}
-
-		fzfCmd := exec.Command("fzf", fzfArgs...)
-		fzfCmd.Stdin = strings.NewReader(display)
-		fzfCmd.Stderr = os.Stderr
-
-		out, err := fzfCmd.Output()
-		if err != nil {
-			// User cancelled -- not an error.
-			return nil
-		}
-
-		selection := strings.TrimSpace(string(out))
-		if selection == "" {
-			return nil
-		}
-
-		// Map selection back to path + branch.
-		idx := matchIndex(displayLines, selection)
-		if idx < 0 {
-			return fmt.Errorf("could not map fzf selection to a worktree")
-		}
-		dest = fullPaths[idx]
-		branch = branchList[idx]
+	// Build parallel display-rows and entry slices.
+	var displayLines []string
+	var fullPaths []string
+	var branchList []string
+	for _, e := range entries {
+		displayLines = append(displayLines, ui.WorktreeRow(e.Path, e.Branch))
+		fullPaths = append(fullPaths, e.Path)
+		branchList = append(branchList, e.Branch)
 	}
+
+	display := strings.Join(displayLines, "\n")
+
+	fzfArgs := []string{
+		"--ansi",
+		"--border-label", " open worktree ",
+		"--prompt=open > ",
+	}
+	if query != "" {
+		fzfArgs = append(fzfArgs, "--query", query)
+	}
+
+	fzfCmd := exec.Command("fzf", fzfArgs...)
+	fzfCmd.Stdin = strings.NewReader(display)
+	fzfCmd.Stderr = os.Stderr
+
+	out, err := fzfCmd.Output()
+	if err != nil {
+		// User cancelled -- not an error.
+		return nil
+	}
+
+	selection := strings.TrimSpace(string(out))
+	if selection == "" {
+		return nil
+	}
+
+	// Map selection back to path + branch.
+	idx := matchIndex(displayLines, selection)
+	if idx < 0 {
+		return fmt.Errorf("could not map fzf selection to a worktree")
+	}
+	dest := fullPaths[idx]
+	branch := branchList[idx]
 
 	// Load terminal config.
 	mainRoot, err := git.MainWorktreeRoot()
