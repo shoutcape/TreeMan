@@ -89,10 +89,11 @@ func runSwitch(cmd *cobra.Command, query string) error {
 
 	// Map selection back to a full path by stripping ANSI and matching against
 	// the plain-text versions of our display rows.
-	dest := matchPath(displayLines, fullPaths, selection)
-	if dest == "" {
+	idx := matchIndex(displayLines, selection)
+	if idx < 0 {
 		return fmt.Errorf("could not map fzf selection to a worktree path")
 	}
+	dest := fullPaths[idx]
 
 	// Determine current directory to detect same-worktree selection.
 	cwd, _ := os.Getwd()
