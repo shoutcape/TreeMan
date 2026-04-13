@@ -286,3 +286,57 @@ func confirmYN(cmd *cobra.Command, prompt string) bool {
 	}
 	return false
 }
+
+// deleteWorktreeAndBranchDrain is like deleteWorktreeAndBranch but adapted
+// for drain context: skips the cwd guard (caller handles it) and treats
+// already-removed worktrees/branches as success for idempotent cleanup.
+func deleteWorktreeAndBranchDrain(dest, branch, mainRoot, dbEnvKey string, termCfg *config.TerminalConfig) error {
+	if dest == mainRoot {
+		return fmt.Errorf("cannot delete the main worktree")
+	}
+
+	defaultBranch, _ := git.DetectDefaultBranch()
+	if defaultBranch != "" && branch == defaultBranch {
+		return fmt.Errorf("cannot delete the default branch %q", branch)
+	}
+
+	// Drop branch-specific database (best-effort, non-fatal).
+	if dbEnvKey != "" {
+		if err := database.CleanupBranchDB(dest, dbEnvKey); err != nil {
+			fmt.Fprintf(os.Stderr, "    Warning: database cleanup failed: %v\n", err)
+		}
+	}
+
+	// Close terminals for this worktree (best-effort).
+	if mgr := terminal.NewManager(termCfg); mgr != nil {
+		if err := mgr.Close(terminal.WorktreeInfo{
+			Path:   dest,
+			Branch: branch,
+			Slug:   worktree.BranchSlug(branch),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "    Warning: could not close terminal: %v\n", err)
+		}
+	}
+
+	// Remove worktree - treat already-removed as success.
+	if err := git.WorktreeRemove(dest); err != nil {
+		// If the directory no longer exists, the worktree was already cleaned up.
+		if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
+			// Already gone - proceed to branch deletion.
+		} else {
+			return err
+		}
+	}
+
+	// Delete branch - treat "not found" as success.
+	// git outputs "error: branch 'x' not found" which is wrapped by
+	// DeleteBranch as "branch %q could not be deleted: <stderr>".
+	if err := git.DeleteBranch(branch); err != nil {
+		if !strings.Contains(err.Error(), "not found") {
+			return err
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "    done\n")
+	return nil
+}
