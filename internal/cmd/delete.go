@@ -189,61 +189,6 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
 	return enqueueDeletion(dest, branch, mainRoot)
 }
 
-// deleteWorktreeAndBranch removes the worktree and deletes its branch with
-// guards against deleting the main worktree or the default branch.
-//
-// If dbEnvKey is non-empty, the branch-specific database is dropped first.
-//
-// Mirrors _wt_delete_worktree_and_branch in wt.sh:461.
-func deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey string, termCfg *config.TerminalConfig) error {
-	if dest == mainRoot {
-		return fmt.Errorf("cannot delete the main worktree")
-	}
-
-	defaultBranch, _ := git.DetectDefaultBranch()
-	if defaultBranch != "" && branch == defaultBranch {
-		return fmt.Errorf("cannot delete the default branch %q", branch)
-	}
-
-	// If currently inside the target worktree, git worktree remove will refuse.
-	// Detect this and print a clear message.
-	cwd, _ := os.Getwd()
-	if strings.HasPrefix(cwd, dest) {
-		return fmt.Errorf("currently inside this worktree -- run 'treeman switch' to leave it first")
-	}
-
-	// Drop branch-specific database (best-effort, non-fatal).
-	if dbEnvKey != "" {
-		if err := database.CleanupBranchDB(dest, dbEnvKey); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: database cleanup failed: %v\n", err)
-		}
-	}
-
-	// Close terminals for this worktree (best-effort).
-	if mgr := terminal.NewManager(termCfg); mgr != nil {
-		if err := mgr.Close(terminal.WorktreeInfo{
-			Path:   dest,
-			Branch: branch,
-			Slug:   worktree.BranchSlug(branch),
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not close terminal: %v\n", err)
-		}
-	}
-
-	fmt.Fprintln(os.Stderr, "Removing worktree...")
-	if err := git.WorktreeRemove(dest); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stderr, "Deleting branch %q...\n", branch)
-	if err := git.DeleteBranch(branch); err != nil {
-		return err
-	}
-
-	fmt.Fprintln(os.Stderr, "Done — worktree and branch removed.")
-	return nil
-}
-
 // matchIndex returns the index in displayLines that matches the fzf selection,
 // using ANSI-stripped comparison.
 func matchIndex(displayLines []string, selection string) int {
