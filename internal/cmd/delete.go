@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/queue"
 	"github.com/shoutcape/treeman/internal/terminal"
 	_ "github.com/shoutcape/treeman/internal/terminal/ghostty"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -89,18 +91,7 @@ func runDeleteDirect(path, branch string, skipConfirm bool) error {
 		}
 	}
 
-	// Load project config for database management.
-	cfgResult := config.Load(mainRoot)
-	if cfgResult.Warning != "" {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
-	}
-	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-
-	termCfg := config.MergeTerminalConfig(
-		config.LoadGlobal("").Config.Terminal,
-		cfgResult.Config.Terminal,
-	)
-	return deleteWorktreeAndBranch(path, branch, mainRoot, dbEnvKey, termCfg)
+	return enqueueDeletion(path, branch, mainRoot)
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
@@ -195,18 +186,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
 		return nil
 	}
 
-	// Load project config for database management.
-	cfgResult := config.Load(mainRoot)
-	if cfgResult.Warning != "" {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
-	}
-	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-
-	termCfg := config.MergeTerminalConfig(
-		config.LoadGlobal("").Config.Terminal,
-		cfgResult.Config.Terminal,
-	)
-	return deleteWorktreeAndBranch(dest, branch, mainRoot, dbEnvKey, termCfg)
+	return enqueueDeletion(dest, branch, mainRoot)
 }
 
 // deleteWorktreeAndBranch removes the worktree and deletes its branch with
@@ -285,6 +265,30 @@ func confirmYN(cmd *cobra.Command, prompt string) bool {
 		return strings.EqualFold(answer, "y")
 	}
 	return false
+}
+
+func enqueueDeletion(dest, branch, mainRoot string) error {
+	// Run guards before enqueuing so the user gets immediate feedback.
+	if dest == mainRoot {
+		return fmt.Errorf("cannot delete the main worktree")
+	}
+
+	defaultBranch, _ := git.DetectDefaultBranch()
+	if defaultBranch != "" && branch == defaultBranch {
+		return fmt.Errorf("cannot delete the default branch %q", branch)
+	}
+
+	if err := queue.Enqueue(queue.Entry{
+		Path:     dest,
+		Branch:   branch,
+		RepoRoot: mainRoot,
+		QueuedAt: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("failed to queue deletion: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "queued: %s\n", branch)
+	return nil
 }
 
 // deleteWorktreeAndBranchDrain is like deleteWorktreeAndBranch but adapted
