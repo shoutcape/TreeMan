@@ -12,9 +12,19 @@ func New(version, commit, date string) *cobra.Command {
 		Long: `TreeMan is a Git worktree management CLI.
 
 It provides fast commands to create, switch, review, and delete
-Git worktrees — keeping your branches isolated without juggling stashes.`,
+Git worktrees -- keeping your branches isolated without juggling stashes.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+
+		// PersistentPreRunE runs before every subcommand. It drains any
+		// pending async deletions queued by earlier 'treeman delete' runs.
+		//
+		// NOTE: Cobra does NOT chain PersistentPreRunE hooks. If a subcommand
+		// defines its own PersistentPreRunE, it will replace this one.
+		// In that case the subcommand must call drainDeleteQueue() explicitly.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return drainDeleteQueue()
+		},
 	}
 
 	root.AddCommand(newVersionCmd(version, commit, date))
