@@ -6,6 +6,7 @@ package queue
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -89,4 +90,51 @@ func writeAll(entries []Entry) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// Enqueue appends an entry to the queue file.
+// Creates the file and parent dirs if they do not exist.
+// If the queue file is malformed JSON, returns an error rather than
+// overwriting it (preserves the file per spec).
+func Enqueue(e Entry) error {
+	entries, err := readAll()
+	if err != nil {
+		return fmt.Errorf("could not read queue (fix or remove %s): %w", queuePath(), err)
+	}
+	entries = append(entries, e)
+	return writeAll(entries)
+}
+
+// Peek returns all entries without modifying the queue.
+// Returns nil, nil if the queue is empty or absent.
+func Peek() ([]Entry, error) {
+	return readAll()
+}
+
+// Drain reads all entries and calls fn for each one. Entries where fn
+// returns nil are removed. Entries where fn returns an error are retained
+// for retry on the next drain. Returns the number of failed entries and
+// any file I/O error.
+func Drain(fn func(Entry) error) (int, error) {
+	entries, err := readAll()
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+
+	var remaining []Entry
+	failCount := 0
+	for _, e := range entries {
+		if err := fn(e); err != nil {
+			remaining = append(remaining, e)
+			failCount++
+		}
+	}
+
+	if err := writeAll(remaining); err != nil {
+		return failCount, err
+	}
+	return failCount, nil
 }

@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,4 +71,81 @@ func TestWriteAll_EmptyRemovesFile(t *testing.T) {
 
 	_, err := os.Stat(filepath.Join(dir, "treeman", fileName))
 	assert.True(t, os.IsNotExist(err))
+}
+
+func TestEnqueue_AppendsToEmptyQueue(t *testing.T) {
+	withTempDataDir(t)
+	e := Entry{Path: "/tmp/wt", Branch: "feat/a", RepoRoot: "/tmp", QueuedAt: time.Now().UTC()}
+	require.NoError(t, Enqueue(e))
+
+	got, err := Peek()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "feat/a", got[0].Branch)
+}
+
+func TestEnqueue_AppendsToExistingQueue(t *testing.T) {
+	withTempDataDir(t)
+	require.NoError(t, Enqueue(Entry{Path: "/a", Branch: "b1", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+	require.NoError(t, Enqueue(Entry{Path: "/b", Branch: "b2", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+
+	got, err := Peek()
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "b1", got[0].Branch)
+	assert.Equal(t, "b2", got[1].Branch)
+}
+
+func TestPeek_EmptyQueue(t *testing.T) {
+	withTempDataDir(t)
+	got, err := Peek()
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestDrain_AllSucceed(t *testing.T) {
+	withTempDataDir(t)
+	require.NoError(t, Enqueue(Entry{Path: "/a", Branch: "b1", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+	require.NoError(t, Enqueue(Entry{Path: "/b", Branch: "b2", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+
+	failCount, err := Drain(func(e Entry) error {
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, failCount)
+
+	got, err := Peek()
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestDrain_SomeFail(t *testing.T) {
+	withTempDataDir(t)
+	require.NoError(t, Enqueue(Entry{Path: "/a", Branch: "b1", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+	require.NoError(t, Enqueue(Entry{Path: "/b", Branch: "b2", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+	require.NoError(t, Enqueue(Entry{Path: "/c", Branch: "b3", RepoRoot: "/r", QueuedAt: time.Now().UTC()}))
+
+	failCount, err := Drain(func(e Entry) error {
+		if e.Branch == "b2" {
+			return fmt.Errorf("simulated failure")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, failCount)
+
+	got, err := Peek()
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "b2", got[0].Branch)
+}
+
+func TestDrain_EmptyQueue(t *testing.T) {
+	withTempDataDir(t)
+	failCount, err := Drain(func(e Entry) error {
+		t.Fatal("should not be called")
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, failCount)
 }
