@@ -16,14 +16,16 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 
-		// PersistentPreRunE runs before every subcommand. It drains any
-		// pending async deletions queued by earlier 'treeman delete' runs.
+		// PersistentPreRunE runs before every subcommand. It reports any
+		// errors from background deletions that were spawned by earlier
+		// 'treeman delete' runs.
 		//
 		// NOTE: Cobra does NOT chain PersistentPreRunE hooks. If a subcommand
 		// defines its own PersistentPreRunE, it will replace this one.
-		// In that case the subcommand must call drainDeleteQueue() explicitly.
+		// In that case the subcommand must call reportDeleteErrors() explicitly.
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return drainDeleteQueue()
+			reportDeleteErrors()
+			return nil
 		},
 	}
 

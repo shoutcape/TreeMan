@@ -18,7 +18,9 @@ import (
 )
 
 func newCreateCmd() *cobra.Command {
-	return &cobra.Command{
+	var flagNoOpen bool
+
+	cmd := &cobra.Command{
 		Use:   "create <branch-name>",
 		Short: "Create a new worktree + branch",
 		Long: `Create a new linked worktree and branch from the latest default branch.
@@ -32,12 +34,16 @@ The path of the new worktree is printed to stdout so that a shell wrapper
 can cd into it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(cmd, args[0])
+			return runCreate(cmd, args[0], flagNoOpen)
 		},
 	}
+
+	cmd.Flags().BoolVarP(&flagNoOpen, "no-open", "n", false, "Skip opening a terminal tab/pane")
+
+	return cmd
 }
 
-func runCreate(cmd *cobra.Command, branch string) error {
+func runCreate(cmd *cobra.Command, branch string, noOpen bool) error {
 	// Validate branch name.
 	if err := validate.BranchName(branch); err != nil {
 		return err
@@ -151,20 +157,22 @@ func runCreate(cmd *cobra.Command, branch string) error {
 
 	// Open terminal for the new worktree (best-effort).
 	terminalOpened := false
-	termCfg := config.MergeTerminalConfig(
-		config.LoadGlobal("").Config.Terminal,
-		cfgResult.Config.Terminal,
-	)
-	if mgr := terminal.NewManager(termCfg); mgr != nil {
-		fmt.Fprintln(os.Stderr, "Opening Ghostty terminal...")
-		if err := mgr.Open(terminal.WorktreeInfo{
-			Path:   worktreePath,
-			Branch: branch,
-			Slug:   worktree.BranchSlug(branch),
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not open terminal: %v\n", err)
-		} else {
-			terminalOpened = true
+	if !noOpen {
+		termCfg := config.MergeTerminalConfig(
+			config.LoadGlobal("").Config.Terminal,
+			cfgResult.Config.Terminal,
+		)
+		if mgr := terminal.NewManager(termCfg); mgr != nil {
+			fmt.Fprintln(os.Stderr, "Opening Ghostty terminal...")
+			if err := mgr.Open(terminal.WorktreeInfo{
+				Path:   worktreePath,
+				Branch: branch,
+				Slug:   worktree.BranchSlug(branch),
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not open terminal: %v\n", err)
+			} else {
+				terminalOpened = true
+			}
 		}
 	}
 

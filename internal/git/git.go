@@ -189,13 +189,15 @@ func parseWorktreePorcelain(out string) []WorktreeEntry {
 	return entries
 }
 
-// WorktreeRemove removes the linked worktree at path.
+// WorktreeRemove force-removes the linked worktree at path.
+// Uses --force because the user has already confirmed deletion and
+// untracked/modified files should not block removal.
 //
 // Mirrors `git worktree remove` in wt.sh:490.
 func WorktreeRemove(path string) error {
-	_, err := run("worktree", "remove", path)
+	_, err := run("worktree", "remove", "--force", path)
 	if err != nil {
-		return fmt.Errorf("failed to remove worktree %q: use 'git worktree remove --force' to force it", path)
+		return fmt.Errorf("failed to remove worktree %q: %w", path, err)
 	}
 	return nil
 }
