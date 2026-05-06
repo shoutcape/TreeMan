@@ -75,6 +75,7 @@ func BuildOpenScript(wt terminal.WorktreeInfo, layout *config.LayoutConfig) stri
 			b.WriteString(fmt.Sprintf("\n    set %s to new surface configuration\n", cfgVar))
 			b.WriteString(fmt.Sprintf("    set initial working directory of %s to \"%s\"\n", cfgVar, path))
 			b.WriteString(fmt.Sprintf("    set %s to split term direction %s with configuration %s\n", paneVar, dir, cfgVar))
+			b.WriteString("    delay 0.5\n")
 			b.WriteString(fmt.Sprintf("    input text \"%s\\n\" to %s\n", titleHook, paneVar))
 
 			if split.Command != "" {

@@ -78,6 +78,7 @@ func TestBuildOpenScript_WithSplits(t *testing.T) {
 	script := BuildOpenScript(wt, layout)
 
 	assert.Contains(t, script, "split term direction right")
+	assert.Contains(t, script, "delay 0.5")
 	assert.Contains(t, script, `input text "pnpm dev\n" to pane1`)
 	assert.Contains(t, script, "split term direction down")
 	// Title hooks injected into main terminal and all panes
