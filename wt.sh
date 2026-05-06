@@ -770,6 +770,12 @@ EOF
   echo "Creating review worktree at $worktree_path (branch: $head_ref)..."
   HUSKY=0 git worktree add --no-track -b "$head_ref" "$worktree_path" FETCH_HEAD || return 1
 
+  # Fetch branch by name and set upstream so git pull/push work without explicit remote args.
+  # Non-fatal: fork PRs may not have the branch on origin.
+  git fetch origin "$head_ref" 2>/dev/null \
+    && git -C "$worktree_path" branch --set-upstream-to="origin/$head_ref" "$head_ref" 2>/dev/null \
+    || echo "Warning: could not set upstream for $head_ref" >&2
+
   _wt_copy_env_files "$main_root" "$worktree_path"
 
   echo "Detecting dependencies..."

@@ -134,6 +134,15 @@ func runReview(cmd *cobra.Command, prArg string) error {
 		return err
 	}
 
+	// Fetch the branch by name so origin/<branch> remote-tracking ref exists,
+	// then set upstream so git pull/push work without explicit remote args.
+	// Non-fatal: fork PRs may not have the branch on origin.
+	if err := git.Fetch(info.Branch); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not fetch branch %q (upstream not set): %v\n", info.Branch, err)
+	} else if err := git.SetUpstreamInDir(worktreePath, info.Branch); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not set upstream for %q: %v\n", info.Branch, err)
+	}
+
 	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
 	if err := worktree.EnsureIgnored(mainRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not update .gitignore: %v\n", err)

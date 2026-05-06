@@ -244,6 +244,10 @@ assert_exists "$REVIEW_WT_ALPHA/review-alpha.txt"
 [[ "$(pwd)" == "$REVIEW_WT_ALPHA" ]] || fail "Expected wtpr to cd into created review worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/review-alpha \
   || fail "Expected feature/review-alpha branch"
+# Verify upstream is set correctly.
+UPSTREAM=$(git -C "$REVIEW_WT_ALPHA" rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null)
+[[ "$UPSTREAM" == "origin/feature/review-alpha" ]] \
+  || fail "Expected upstream origin/feature/review-alpha, got: $UPSTREAM"
 
 # Guard: non-numeric PR number.
 cd "$MAIN_REPO"

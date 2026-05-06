@@ -189,6 +189,19 @@ func parseWorktreePorcelain(out string) []WorktreeEntry {
 	return entries
 }
 
+// SetUpstreamInDir sets the upstream tracking branch for the given local branch
+// to origin/<branch>. dir must be the worktree directory so git resolves
+// the correct branch.
+//
+//	git branch --set-upstream-to=origin/<branch> <branch>
+func SetUpstreamInDir(dir, branch string) error {
+	_, err := runInDir(dir, "branch", "--set-upstream-to=origin/"+branch, branch)
+	if err != nil {
+		return fmt.Errorf("could not set upstream for %q: %w", branch, err)
+	}
+	return nil
+}
+
 // WorktreeRemove force-removes the linked worktree at path.
 // Uses --force because the user has already confirmed deletion and
 // untracked/modified files should not block removal.
