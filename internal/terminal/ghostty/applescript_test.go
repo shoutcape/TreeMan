@@ -57,6 +57,8 @@ func TestBuildOpenScript_NoLayout(t *testing.T) {
 	assert.Contains(t, script, `new window`)
 	assert.Contains(t, script, `focus term`)
 	assert.NotContains(t, script, "split term")
+	// Delay before main terminal input to avoid race condition
+	assert.Contains(t, script, "delay 0.5")
 	// Title hook injected into the main terminal
 	assert.Contains(t, script, `TREEMAN_BRANCH`)
 	assert.Contains(t, script, `input text`)

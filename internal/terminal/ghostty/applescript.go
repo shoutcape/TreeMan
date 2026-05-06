@@ -64,6 +64,7 @@ func BuildOpenScript(wt terminal.WorktreeInfo, layout *config.LayoutConfig) stri
 	b.WriteString("        set t to selected tab of win\n")
 	b.WriteString("    end if\n\n")
 	b.WriteString("    set term to focused terminal of t\n")
+	b.WriteString("    delay 0.5\n")
 	b.WriteString(fmt.Sprintf("    input text \"%s\\n\" to term\n", titleHook))
 
 	if layout != nil {
