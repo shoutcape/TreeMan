@@ -1,9 +1,10 @@
-# TreeMan — wt, wtpr, wtmr, wts & wtd
+# TreeMan — wt, wtb, wtpr, wtmr, wts & wtd
 # Git worktree creation for branches and PRs/MRs, automatic dependency
 # installation, interactive switching via fzf, and worktree deletion.
 #
 # Usage:
 #   wt   <branch-name>     Create a new worktree + branch
+#   wtb  [query]           Check out a remote branch into a worktree
 #   wtpr [pr-number]       Create a review worktree from a GitHub PR or GitLab MR
 #   wtmr [pr-number]       Same as wtpr (PR/MR are interchangeable here)
 #   wts  [query]           Switch between worktrees (fzf picker)
@@ -11,7 +12,7 @@
 #
 # Supports: bash, zsh
 # Forges:   GitHub (gh CLI) and GitLab (glab CLI), including self-hosted instances
-# Dependencies: git, gh or glab (for wtpr/wtmr), fzf (for wts/wtd and optional wtpr/wtmr picker),
+# Dependencies: git, gh or glab (for wtb/wtpr/wtmr), fzf (for wts/wtd and optional pickers),
 # and whichever package manager your project uses
 
 # ---------------------------------------------------------------------------

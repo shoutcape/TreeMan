@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/shoutcape/treeman/internal/remote"
 )
@@ -18,6 +19,13 @@ type PRInfo struct {
 	Title  string
 	Branch string // head ref / source branch
 	Owner  string // PR author login
+}
+
+// BranchInfo holds metadata for a remote branch from the forge API.
+type BranchInfo struct {
+	Name      string
+	Date      string // commit date (relative or ISO, depending on forge)
+	Protected bool
 }
 
 // PRMetadata fetches metadata for a single PR/MR number via gh or glab.
@@ -60,6 +68,19 @@ func FetchRef(forge Type, prNumber int) string {
 		return fmt.Sprintf("merge-requests/%d/head", prNumber)
 	default:
 		return ""
+	}
+}
+
+// BranchList returns all remote branches via gh or glab.
+// Returns branch name, last commit date, and protected status.
+func BranchList(forge Type, repoSlug, host string) ([]BranchInfo, error) {
+	switch forge {
+	case GitHub:
+		return githubBranchList(repoSlug)
+	case GitLab:
+		return gitlabBranchList(repoSlug, host)
+	default:
+		return nil, fmt.Errorf("unsupported forge: %q", forge)
 	}
 }
 
@@ -150,6 +171,39 @@ func ghAPI(endpoint string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
+func githubBranchList(repoSlug string) ([]BranchInfo, error) {
+	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
+	out, err := ghAPI(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var data []struct {
+		Name      string `json:"name"`
+		Protected bool   `json:"protected"`
+		Commit    struct {
+			Commit struct {
+				Committer struct {
+					Date string `json:"date"`
+				} `json:"committer"`
+			} `json:"commit"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(out, &data); err != nil {
+		return nil, fmt.Errorf("gh: parsing branch list: %w", err)
+	}
+
+	branches := make([]BranchInfo, 0, len(data))
+	for _, d := range data {
+		branches = append(branches, BranchInfo{
+			Name:      d.Name,
+			Date:      formatRelativeDate(d.Commit.Commit.Committer.Date),
+			Protected: d.Protected,
+		})
+	}
+	return branches, nil
+}
+
 // ---------------------------------------------------------------------------
 // GitLab
 // ---------------------------------------------------------------------------
@@ -221,9 +275,116 @@ func glabAPI(host, endpoint string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
+func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
+	encoded := remote.URLEncode(repoSlug)
+	endpoint := fmt.Sprintf("projects/%s/repository/branches?per_page=100", encoded)
+	out, err := glabAPI(host, endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	var data []struct {
+		Name      string `json:"name"`
+		Protected bool   `json:"protected"`
+		Commit    struct {
+			CommittedDate string `json:"committed_date"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(out, &data); err != nil {
+		return nil, fmt.Errorf("glab: parsing branch list: %w", err)
+	}
+
+	branches := make([]BranchInfo, 0, len(data))
+	for _, d := range data {
+		branches = append(branches, BranchInfo{
+			Name:      d.Name,
+			Date:      formatRelativeDate(d.Commit.CommittedDate),
+			Protected: d.Protected,
+		})
+	}
+	return branches, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helper: resolve forge from the current repo's origin remote
 // ---------------------------------------------------------------------------
+
+// formatRelativeDate converts an ISO 8601 date string to a human-friendly
+// relative format (e.g. "3 days ago", "2 weeks ago"). Falls back to the raw
+// string if parsing fails.
+func formatRelativeDate(isoDate string) string {
+	if isoDate == "" {
+		return ""
+	}
+
+	// Try common ISO formats.
+	layouts := []string{
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02T15:04:05.000-07:00",
+		"2006-01-02T15:04:05+00:00",
+	}
+
+	var t time.Time
+	var err error
+	for _, layout := range layouts {
+		t, err = time.Parse(layout, isoDate)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		// Return raw date trimmed to date portion if possible.
+		if len(isoDate) >= 10 {
+			return isoDate[:10]
+		}
+		return isoDate
+	}
+
+	duration := time.Since(t)
+
+	switch {
+	case duration < time.Minute:
+		return "just now"
+	case duration < time.Hour:
+		m := int(duration.Minutes())
+		if m == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", m)
+	case duration < 24*time.Hour:
+		h := int(duration.Hours())
+		if h == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", h)
+	case duration < 7*24*time.Hour:
+		d := int(duration.Hours() / 24)
+		if d == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", d)
+	case duration < 30*24*time.Hour:
+		w := int(duration.Hours() / (24 * 7))
+		if w == 1 {
+			return "1 week ago"
+		}
+		return fmt.Sprintf("%d weeks ago", w)
+	case duration < 365*24*time.Hour:
+		m := int(duration.Hours() / (24 * 30))
+		if m == 1 {
+			return "1 month ago"
+		}
+		return fmt.Sprintf("%d months ago", m)
+	default:
+		y := int(duration.Hours() / (24 * 365))
+		if y == 1 {
+			return "1 year ago"
+		}
+		return fmt.Sprintf("%d years ago", y)
+	}
+}
 
 // ResolveFromRemote detects the forge type, repo slug, and host from a remote
 // URL string. This is a convenience wrapper used by command handlers.

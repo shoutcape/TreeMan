@@ -87,3 +87,27 @@ func StripANSI(s string) string {
 	}
 	return b.String()
 }
+
+// BranchHeader returns the column header row for the branch fzf picker.
+func BranchHeader() string {
+	return fmt.Sprintf("%s%-50s%s  %s%-14s%s  %s%s%s",
+		ColorBranch, "Branch", ColorReset,
+		ColorPath, "Last Updated", ColorReset,
+		ColorPR, "MR/PR", ColorReset,
+	)
+}
+
+// BranchRow formats a single remote branch entry for the fzf picker.
+// If mrNumber > 0, it displays the MR/PR number in the third column.
+func BranchRow(branch, date string, mrNumber int) string {
+	truncBranch := truncate(branch, 50)
+	mr := ""
+	if mrNumber > 0 {
+		mr = fmt.Sprintf("#%d", mrNumber)
+	}
+	return fmt.Sprintf("%s%-50s%s  %s%-14s%s  %s%s%s",
+		ColorBranch, truncBranch, ColorReset,
+		ColorPath, date, ColorReset,
+		ColorPR, mr, ColorReset,
+	)
+}

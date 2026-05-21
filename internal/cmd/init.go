@@ -25,6 +25,12 @@ wt() {
   [ -n "$_tm_dir" ] && cd "$_tm_dir"
 }
 
+wtb() {
+  local _tm_dir
+  _tm_dir=$(treeman branch "$@") || return $?
+  [ -n "$_tm_dir" ] && cd "$_tm_dir"
+}
+
 wtpr() {
   local _tm_dir
   _tm_dir=$(treeman review "$@") || return $?
@@ -87,7 +93,7 @@ Add this to your shell configuration file:
   # zsh (~/.zshrc):
   eval "$(treeman init zsh)"
 
-This defines the wt, wtpr, wtmr, wts, wtd, wto, and lg functions in your shell
+This defines the wt, wtb, wtpr, wtmr, wts, wtd, wto, and lg functions in your shell
 session, enabling automatic cd into new or switched worktrees.`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"bash", "zsh"},

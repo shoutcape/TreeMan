@@ -30,9 +30,9 @@ MOCK_BIN="$TMP_DIR/bin"
 REMOTE_REPO="$TMP_DIR/remote.git"
 MAIN_REPO="$TMP_DIR/project"
 PR_SOURCE_REPO="$TMP_DIR/pr-source"
-WORKTREE_REPO="$TMP_DIR/project.feature-test"
-REVIEW_WT_ALPHA="$TMP_DIR/project.feature-review-alpha"
-REVIEW_WT_BETA="$TMP_DIR/project.feature-review-beta"
+WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-test"
+REVIEW_WT_ALPHA="$MAIN_REPO/.worktrees/feature-review-alpha"
+REVIEW_WT_BETA="$MAIN_REPO/.worktrees/feature-review-beta"
 
 cleanup() {
   # Go's module cache uses read-only files; chmod before removing.
@@ -166,6 +166,10 @@ if [[ "${1:-}" == "api" ]]; then
       printf '%s\n' "${MOCK_GH_LIST:-}"
       exit 0
       ;;
+    *"/branches?per_page=100")
+      printf '%s\n' "${MOCK_GH_BRANCHES:-[]}"
+      exit 0
+      ;;
   esac
 fi
 echo "unsupported gh invocation: $*" >&2
@@ -283,7 +287,7 @@ echo "==> GitLab mock setup"
 GITLAB_REMOTE_REPO="$TMP_DIR/gl-remote.git"
 GITLAB_MAIN_REPO="$TMP_DIR/gl-project"
 GITLAB_MR_SOURCE="$TMP_DIR/gl-mr-source"
-GITLAB_REVIEW_WT="$TMP_DIR/gl-project.feature-mr-gamma"
+GITLAB_REVIEW_WT="$GITLAB_MAIN_REPO/.worktrees/feature-mr-gamma"
 
 git init --bare "$GITLAB_REMOTE_REPO" >/dev/null
 git clone "$GITLAB_REMOTE_REPO" "$GITLAB_MAIN_REPO" >/dev/null
@@ -359,6 +363,72 @@ export _TREEMAN_GH_REPO="shoutcape/TreeMan"
 unset _TREEMAN_REMOTE_URL
 
 cd "$MAIN_REPO"
+
+# ---------------------------------------------------------------------------
+# branch worktree — wtb (forge API, exact match)
+# ---------------------------------------------------------------------------
+
+echo "==> branch worktree (exact match)"
+
+# Create a branch on remote that doesn't exist locally.
+BRANCH_WT="$MAIN_REPO/.worktrees/feature-remote-only"
+git -C "$PR_SOURCE_REPO" switch main >/dev/null
+git -C "$PR_SOURCE_REPO" switch -c feature/remote-only >/dev/null
+printf 'remote only content\n' > "$PR_SOURCE_REPO/remote-only.txt"
+git -C "$PR_SOURCE_REPO" add remote-only.txt
+git -C "$PR_SOURCE_REPO" commit -m "remote only branch" >/dev/null
+git -C "$PR_SOURCE_REPO" push -u origin feature/remote-only >/dev/null
+
+# Mock the forge branch list API to return this branch.
+export MOCK_GH_BRANCHES='[{"name":"feature/remote-only","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
+export MOCK_GH_LIST='[]'
+
+cd "$MAIN_REPO"
+wtb feature/remote-only
+assert_exists "$BRANCH_WT"
+assert_exists "$BRANCH_WT/remote-only.txt"
+[[ "$(pwd)" == "$BRANCH_WT" ]] || fail "Expected wtb to cd into created branch worktree"
+git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/remote-only \
+  || fail "Expected feature/remote-only branch to exist locally"
+# Verify upstream is set.
+UPSTREAM=$(git -C "$BRANCH_WT" rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null)
+[[ "$UPSTREAM" == "origin/feature/remote-only" ]] \
+  || fail "Expected upstream origin/feature/remote-only, got: $UPSTREAM"
+
+# Guard: branch already exists locally (re-running same command should fail).
+cd "$MAIN_REPO"
+if wtb feature/remote-only >/dev/null 2>&1; then
+  fail "wtb should reject branches that already exist locally"
+fi
+
+# ---------------------------------------------------------------------------
+# branch worktree — wtb (fzf picker)
+# ---------------------------------------------------------------------------
+
+echo "==> branch worktree (fzf picker)"
+
+# Create another remote branch.
+BRANCH_WT_PICKER="$MAIN_REPO/.worktrees/feature-picker-test"
+git -C "$PR_SOURCE_REPO" switch main >/dev/null
+git -C "$PR_SOURCE_REPO" switch -c feature/picker-test >/dev/null
+printf 'picker test\n' > "$PR_SOURCE_REPO/picker-test.txt"
+git -C "$PR_SOURCE_REPO" add picker-test.txt
+git -C "$PR_SOURCE_REPO" commit -m "picker test branch" >/dev/null
+git -C "$PR_SOURCE_REPO" push -u origin feature/picker-test >/dev/null
+
+# Mock returns only the new branch (feature/remote-only already exists locally now).
+export MOCK_GH_BRANCHES='[{"name":"feature/picker-test","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-15T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
+export MOCK_GH_LIST='[{"number":99,"title":"Picker test PR","head":{"ref":"feature/picker-test"}}]'
+
+cd "$MAIN_REPO"
+# FZF_CHOICE=2 picks the first data row (row 1 = header).
+export FZF_CHOICE=2
+wtb
+assert_exists "$BRANCH_WT_PICKER"
+[[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected wtb picker to cd into created worktree"
+unset FZF_CHOICE
+unset MOCK_GH_BRANCHES
+unset MOCK_GH_LIST
 
 # ---------------------------------------------------------------------------
 # protected deletions — treeman delete --path/--branch/--yes

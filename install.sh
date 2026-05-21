@@ -140,7 +140,7 @@ if ! command -v fzf >/dev/null 2>&1; then
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-  print_warn "gh is not installed. The 'wtpr' and 'wtmr' commands require it for GitHub repos."
+  print_warn "gh is not installed. The 'wtb', 'wtpr', and 'wtmr' commands require it for GitHub repos."
   echo "    Install it from: https://cli.github.com/"
 fi
 
@@ -237,6 +237,7 @@ echo "  source $SHELL_RC"
 echo ""
 echo "Usage:"
 echo "  wt  <branch-name>    Create a new worktree + branch"
+echo "  wtb [query]          Check out a remote branch into a worktree"
 echo "  wtpr [pr-number]     Create a review worktree from a GitHub PR"
 echo "  wtmr [pr-number]     Create a review worktree from a GitLab MR"
 echo "  wts  [query]         Switch between worktrees (requires fzf)"

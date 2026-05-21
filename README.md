@@ -1,6 +1,6 @@
 <img width="2758" height="1504" alt="TreeMan_Logo_no_white_bg_smooth2" src="https://github.com/user-attachments/assets/d12d7c55-cd61-4116-932d-e0f5f63ae613" />
 
-Git worktree management CLI — create new branch worktrees, jump straight into them, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
+Git worktree management CLI -- create new branch worktrees, check out remote branches, spin up review worktrees from PRs or MRs, and switch between them with an interactive picker.
 
 Single compiled binary. No runtime required. Works with bash and zsh.
 
@@ -61,18 +61,48 @@ Or manually:
 
 ---
 
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `wt <branch-name>` | Create a new worktree + branch from latest main |
+| `wtb [query]` | Check out a remote branch into a new worktree |
+| `wtpr [pr-number]` | Create a review worktree from a GitHub PR |
+| `wtmr [mr-number]` | Create a review worktree from a GitLab MR |
+| `wts [query]` | Switch between worktrees (fzf picker) |
+| `wtd [query]` | Delete a worktree and its branch (fzf picker) |
+| `wto [query]` | Open a worktree in configured terminal |
+| `lg` | Run lazygit with auto-cd on worktree switch |
+
+### `wtb` -- Check out a remote branch
+
+```bash
+wtb                          # interactive fzf picker
+wtb feature/some-branch      # exact match, skips picker
+```
+
+Lists remote branches from the forge API (GitHub/GitLab), excluding the default branch and branches that already exist locally. The picker shows:
+
+- Branch name
+- Last commit date (relative)
+- Open MR/PR number (if one exists for that branch)
+
+After selection, TreeMan fetches the branch, creates a worktree, sets upstream tracking, copies `.env` files, and installs dependencies -- the same post-create workflow as `wt` and `wtpr`/`wtmr`.
+
+---
+
 ### Requirements
 
 **Core**
     - `git`
-    - `treeman` binary (installed via the one-liner or manually — see [Install](#install))
+    - `treeman` binary (installed via the one-liner or manually -- see [Install](#install))
 - `bash` or `zsh` (for shell wrapper functions)
 
-    **For `wtpr` / `wtmr`**
-    - [`gh`](https://cli.github.com/) — GitHub repos
-    - [`glab`](https://gitlab.com/gitlab-org/cli) + [`jq`](https://jqlang.github.io/jq/) — GitLab repos (including self-hosted)
+    **For `wtb`, `wtpr` / `wtmr`**
+    - [`gh`](https://cli.github.com/) -- GitHub repos
+    - [`glab`](https://gitlab.com/gitlab-org/cli) + [`jq`](https://jqlang.github.io/jq/) -- GitLab repos (including self-hosted)
 
-    **For `wts`, `wtd`, and the interactive PR/MR picker**
+    **For `wts`, `wtd`, `wtb` (picker), and the interactive PR/MR picker**
     - [`fzf`](https://github.com/junegunn/fzf)
 
     **For dependency auto-install**

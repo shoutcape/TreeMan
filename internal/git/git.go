@@ -297,3 +297,23 @@ func runWithEnv(env []string, args ...string) (string, error) {
 func CurrentDir() (string, error) {
 	return run("rev-parse", "--show-toplevel")
 }
+
+// WorktreeAddExisting creates a linked worktree for a branch that already
+// exists on the remote. Unlike WorktreeAdd which creates a new branch (-b),
+// this checks out an existing remote branch and sets up tracking.
+//
+//	HUSKY=0 git worktree add --no-track -b <branch> <path> origin/<branch>
+func WorktreeAddExisting(path, branch string) error {
+	cmd := exec.Command("git", "worktree", "add", "--no-track", "-b", branch, path, "origin/"+branch)
+	cmd.Env = append(cmd.Environ(), "HUSKY=0")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("git worktree add: %s", msg)
+		}
+		return fmt.Errorf("git worktree add: %w", err)
+	}
+	return nil
+}

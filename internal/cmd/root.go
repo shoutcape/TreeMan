@@ -31,6 +31,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 
 	root.AddCommand(newVersionCmd(version, commit, date))
 	root.AddCommand(newCreateCmd())
+	root.AddCommand(newBranchCmd())
 	root.AddCommand(newReviewCmd())
 	root.AddCommand(newSwitchCmd())
 	root.AddCommand(newDeleteCmd())
