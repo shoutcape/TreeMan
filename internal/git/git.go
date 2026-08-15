@@ -77,6 +77,16 @@ func MainWorktreeRoot() (string, error) {
 	return "", fmt.Errorf("could not determine main worktree root")
 }
 
+// CurrentWorktreeRoot returns the root of the worktree that contains the
+// current directory.
+func CurrentWorktreeRoot() (string, error) {
+	root, err := run("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("could not determine current worktree root: %w", err)
+	}
+	return root, nil
+}
+
 // DetectDefaultBranch returns "main" or "master" by inspecting the origin
 // remote. It prefers the fast path (local origin/HEAD ref) and falls back to
 // querying origin with ls-remote.
@@ -192,20 +202,64 @@ func SetUpstreamInDir(dir, branch string) error {
 	return nil
 }
 
-// WorktreeRemove force-removes the linked worktree at path.
-// Uses --force because the user has already confirmed deletion and
-// untracked/modified files should not block removal.
-func WorktreeRemove(path string) error {
-	_, err := run("worktree", "remove", "--force", path)
+// WorktreeDirty reports whether a worktree has tracked, staged, or untracked
+// changes.
+func WorktreeDirty(path string) (bool, error) {
+	out, err := runInDir(path, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return false, fmt.Errorf("could not inspect worktree %q: %w", path, err)
+	}
+	return out != "", nil
+}
+
+// BranchCanDelete reports whether Git's safe branch deletion would accept the
+// branch. Git compares against its upstream when one exists, otherwise HEAD.
+func BranchCanDelete(dir, branch string) (bool, error) {
+	target := "HEAD"
+	if upstream, err := runInDir(dir, "rev-parse", "--abbrev-ref", branch+"@{upstream}"); err == nil {
+		target = upstream
+	}
+
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", branch, target)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return false, fmt.Errorf("could not check whether branch %q is merged: %s", branch, msg)
+		}
+		return false, fmt.Errorf("could not check whether branch %q is merged: %w", branch, err)
+	}
+	return true, nil
+}
+
+// WorktreeRemove removes the linked worktree at path. force permits removal
+// when Git would otherwise protect local changes.
+func WorktreeRemove(path string, force bool) error {
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, path)
+	_, err := run(args...)
 	if err != nil {
 		return fmt.Errorf("failed to remove worktree %q: %w", path, err)
 	}
 	return nil
 }
 
-// DeleteBranch force-deletes a local branch.
-func DeleteBranch(branch string) error {
-	_, err := run("branch", "-D", branch)
+// DeleteBranch deletes a local branch from dir. force permits removal of
+// unmerged branches.
+func DeleteBranch(dir, branch string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	_, err := runInDir(dir, "branch", flag, branch)
 	if err != nil {
 		return fmt.Errorf("branch %q could not be deleted: %w", branch, err)
 	}

@@ -20,6 +20,7 @@ build:
 ## test: run all tests
 test:
 	go test ./...
+	./install-test.sh
 
 ## lint: run go vet (add golangci-lint later)
 lint:

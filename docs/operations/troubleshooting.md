@@ -38,14 +38,7 @@ Database setup is warning-only. Read [Branch Databases](../integrations/postgres
 
 ## Delete Finished With an Error
 
-Run another TreeMan command. It reports errors from the previous background delete process.
-
-Read one of these files if you need the error before another command runs:
-
-```text
-$XDG_DATA_HOME/treeman/delete-errors.log
-$HOME/.local/share/treeman/delete-errors.log
-```
+TreeMan returns deletion errors immediately. Correct the reported Git or database issue, then run the command again.
 
 Verify Git worktree state before manual cleanup.
 

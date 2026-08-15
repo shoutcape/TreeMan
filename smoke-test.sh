@@ -502,18 +502,35 @@ fi
 git -C "$MAIN_REPO" branch -D scratch >/dev/null
 
 # ---------------------------------------------------------------------------
-# safe deletion — treeman delete --path/--branch/--yes
+# worktree listing — treeman list --json
 # ---------------------------------------------------------------------------
 
-echo "==> safe deletion"
+echo "==> worktree listing"
+
+LIST_JSON=$(treeman list --json)
+for field in path branch main current dirty detached; do
+  [[ "$LIST_JSON" == *"\"$field\""* ]] || fail "Expected list JSON to contain $field"
+done
+
+# ---------------------------------------------------------------------------
+# forced deletion — treeman delete --path/--branch/--yes --force
+# ---------------------------------------------------------------------------
+
+echo "==> forced deletion"
 
 # We are currently in MAIN_REPO; delete WORKTREE_REPO non-interactively.
+touch "$WORKTREE_REPO/untracked-before-delete"
+if treeman delete --path "$WORKTREE_REPO" --branch feature/test --yes >/dev/null 2>&1; then
+  fail "Expected dirty worktree deletion to require --force"
+fi
+
 treeman delete \
   --path "$WORKTREE_REPO" \
   --branch feature/test \
-  --yes
+  --yes \
+  --force
 
-wait_for_missing "$WORKTREE_REPO"
+[[ ! -e "$WORKTREE_REPO" ]] || fail "Expected worktree to be deleted"
 if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/test; then
   fail "Expected feature/test branch to be deleted"
 fi
@@ -532,6 +549,21 @@ wts
 # After switching we should be in a different worktree.
 [[ "$(pwd)" != "$MAIN_REPO" ]] || fail "Expected wts to cd into a different worktree"
 unset FZF_CHOICE
+
+# ---------------------------------------------------------------------------
+# delete current worktree -- wtd returns to the main worktree
+# ---------------------------------------------------------------------------
+
+echo "==> delete current worktree"
+
+CURRENT_WORKTREE=$(pwd)
+CURRENT_BRANCH=$(git branch --show-current)
+wtd --path "$CURRENT_WORKTREE" --branch "$CURRENT_BRANCH" --yes --force
+[[ "$(pwd)" == "$MAIN_REPO" ]] || fail "Expected wtd to return to the main worktree"
+assert_missing "$CURRENT_WORKTREE"
+if git -C "$MAIN_REPO" show-ref --verify --quiet "refs/heads/$CURRENT_BRANCH"; then
+  fail "Expected $CURRENT_BRANCH branch to be deleted"
+fi
 
 # ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)

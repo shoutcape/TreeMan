@@ -2,7 +2,7 @@
 
 # TreeMan
 
-TreeMan is a Git worktree management CLI. It creates branch worktrees, adds remote branches, makes PR or MR review worktrees, and selects worktrees.
+TreeMan creates runnable, isolated Git worktrees for developers and coding agents. It copies environment files, installs dependencies, runs hooks, and can create a branch-specific PostgreSQL database.
 
 TreeMan has one compiled binary. Shell wrappers support Bash and Zsh.
 
@@ -37,6 +37,7 @@ wtd
 | `wtpr [number]` | `treeman review [number]` | Add a review worktree |
 | `wtmr [number]` | `treeman review [number]` | Add a review worktree |
 | `wts [query]` | `treeman switch [query]` | Change shell directory to a worktree |
+| `wtl` | `treeman list [--json]` | List worktrees and their state |
 | `wtd [query]` | `treeman delete [query]` | Delete a worktree and branch |
 
 Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs/reference/cli.md).
@@ -73,8 +74,8 @@ https://github.com/user-attachments/assets/fc675dd8-3edc-4bc3-8880-f965e666e21b
 
 https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 
-> [!warning]
-> `wtd` starts background deletion. It uses forced Git worktree and branch removal. Uncommitted and untracked files can be removed.
+> [!note]
+> Deletion completes before TreeMan returns. TreeMan refuses dirty worktrees and unmerged branches unless you explicitly use `--force`.
 
 ## Documentation
 

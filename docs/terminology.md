@@ -8,7 +8,6 @@ Use these terms with the specified meaning.
 | branch database | PostgreSQL database for one worktree branch |
 | branch slug | Branch name with `/` changed to `-` for a worktree path |
 | default branch | `main` or `master` branch detected from `origin` |
-| delete error log | File that records errors from background deletion |
 | global configuration | `config.toml` in the TreeMan user configuration directory |
 | linked worktree | Worktree added by `git worktree add` |
 | main worktree | First worktree from `git worktree list --porcelain` |

@@ -7,8 +7,6 @@ This document describes current behavior. It is not a product roadmap.
 - Default branch detection supports only `main` and `master`.
 - Branch validation does not implement all Git ref rules.
 - Branch names with `/` can collide after slug conversion to `-`.
-- Direct delete mode does not verify the supplied worktree path and branch relationship.
-- Deletion uses force removal and force branch deletion.
 
 ## Forge Data
 
@@ -22,11 +20,6 @@ This document describes current behavior. It is not a product roadmap.
 - A database can remain after environment-file rewrite failure.
 - SQL identifier text is not escaped for embedded quotes.
 - The `__` cleanup check reduces risk but does not prove database ownership.
-
-## Background Deletion
-
-- Multiple deletion processes can write to the same error log.
-- Error reporting can race with a running deletion process.
 
 ## User Interface
 
