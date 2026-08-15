@@ -35,7 +35,23 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          # Release tokens cannot write to the Actions cache.
+          cache: false
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
+
+      - name: Static checks
+        run: make lint
+
+      - name: Unit tests
+        run: make test
+
+      - name: Build
+        run: make build
+
+      - name: Smoke test
+        run: ./smoke-test.sh
 
       - name: Create patch tag
         if: github.event_name == 'pull_request'
@@ -54,7 +70,7 @@ jobs:
           git push origin "$next_tag"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"

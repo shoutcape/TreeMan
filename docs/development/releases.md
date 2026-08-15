@@ -31,7 +31,7 @@ Merging a pull request into `main` automatically publishes a release. The workfl
 
 For example, the release after `v0.3.0` is `v0.3.1`.
 
-CI runs the test, lint, build, and smoke-test checks before a pull request can be merged. After the release workflow completes, download and test the relevant archive if needed.
+CI runs the test, lint, build, and smoke-test checks before a pull request can be merged. The release workflow repeats these checks before creating a tag or publishing release assets. It disables Go caching because release tokens cannot write to the Actions cache. After the release workflow completes, download and test the relevant archive if needed.
 
 ## Manual Releases
 
