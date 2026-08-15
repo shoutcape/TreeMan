@@ -163,13 +163,13 @@ func runCreate(cmd *cobra.Command, branch string, noOpen bool) error {
 			cfgResult.Config.Terminal,
 		)
 		if mgr := terminal.NewManager(termCfg); mgr != nil {
-			fmt.Fprintln(os.Stderr, "Opening Ghostty terminal...")
-			if err := mgr.Open(terminal.WorktreeInfo{
+			fmt.Fprintln(os.Stderr, "Opening terminal...")
+			if openErr := mgr.Open(terminal.WorktreeInfo{
 				Path:   worktreePath,
 				Branch: branch,
 				Slug:   worktree.BranchSlug(branch),
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not open terminal: %v\n", err)
+			}); openErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not open terminal: %v\n", openErr)
 			} else {
 				terminalOpened = true
 			}
