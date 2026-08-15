@@ -49,19 +49,19 @@ Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs
 
 ### Switch worktrees
 
-https://github.com/user-attachments/assets/53c63aa4-bfb0-48e7-9a85-f933d6640233
+https://github.com/user-attachments/assets/88dce115-2ae6-4c43-9458-5651e8e4fd54
 
 ### Create a worktree
 
-https://github.com/user-attachments/assets/5c619d70-ad0f-4c04-84cb-28bc5640a83c
+https://github.com/user-attachments/assets/c0c472d1-f952-4a32-84ad-49cc0fbffa19
 
 ### Add a remote branch worktree
 
-https://github.com/user-attachments/assets/cdf9dba3-59ee-415e-950c-be98080c2fd8
+https://github.com/user-attachments/assets/fc675dd8-3edc-4bc3-8880-f965e666e21b
 
 ### Review a pull request
 
-https://github.com/user-attachments/assets/1c91d745-1524-4be8-9a30-b4bf1296f4c3
+https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 
 > [!warning]
 > `wtd` starts background deletion. It uses forced Git worktree and branch removal. Uncommitted and untracked files can be removed.
