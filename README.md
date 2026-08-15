@@ -45,7 +45,7 @@ Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs
 
 ### Terminal integration
 
-https://github.com/user-attachments/assets/9e17dcde-7ed4-413f-b38e-f1992ed4d7b9
+![TreeMan command output](docs/assets/terminal-intro.webp)
 
 ### Switch worktrees
 
