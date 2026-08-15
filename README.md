@@ -28,6 +28,7 @@ wtb
 wtpr 42
 wts
 wtd
+wtc
 ```
 
 | Wrapper | Native command | Purpose |
@@ -38,6 +39,7 @@ wtd
 | `wtmr [number]` | `treeman review [number]` | Add a review worktree |
 | `wts [query]` | `treeman switch [query]` | Change shell directory to a worktree |
 | `wtl` | `treeman list [--json]` | List worktrees and their state |
+| `wtc` | `treeman clean [--dry-run]` | Remove clean worktrees merged into the default branch |
 | `wtd [query]` | `treeman delete [query]` | Delete a worktree and branch |
 
 Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs/reference/cli.md).
@@ -76,6 +78,8 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 
 > [!note]
 > Deletion completes before TreeMan returns. TreeMan refuses dirty worktrees and unmerged branches unless you explicitly use `--force`.
+
+`wtc` fetches the default branch, then removes non-current linked worktrees only when their branch is merged into it and the worktree is clean. Use `wtc --dry-run` to inspect candidates first.
 
 ## Documentation
 

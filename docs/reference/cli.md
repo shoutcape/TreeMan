@@ -13,6 +13,7 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 | `treeman review [number]` | `wtpr`, `wtmr` | Add a PR or MR worktree |
 | `treeman switch [query]` | `wts` | Select a worktree path |
 | `treeman list [--json]` | `wtl` | List worktrees and their status |
+| `treeman clean [--dry-run]` | `wtc` | Remove clean worktrees merged into the default branch |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman init <shell>` | None | Print shell wrappers |
 | `treeman version` | None | Print build data |
@@ -92,6 +93,14 @@ List the repository worktrees with branch, path, main, current, dirty, and merge
 
 `wtl` is a shell shortcut for `treeman list`.
 
+## `clean`
+
+```text
+treeman clean [--dry-run]
+```
+
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main or current, it has no changes, and its branch is merged into `origin/main` or `origin/master`. It does not remove detached worktrees or the default branch. Use `--dry-run` to print candidate paths without deleting them.
+
 ## `init`
 
 ```text
@@ -99,7 +108,7 @@ treeman init bash
 treeman init zsh
 ```
 
-This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
+This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
 
 `lg` starts lazygit. It changes the directory when lazygit writes a new-directory file.
 
