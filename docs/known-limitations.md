@@ -14,7 +14,6 @@ This document describes current behavior. It is not a product roadmap.
 
 - Branch and PR or MR lists have a 100-item limit.
 - Protected remote branches are not filtered.
-- GitLab commands require `jq` although API parsing is in Go.
 - Large numeric review arguments can overflow internal integer parsing.
 
 ## Database Actions

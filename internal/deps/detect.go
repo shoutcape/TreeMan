@@ -1,6 +1,6 @@
 // Package deps handles dependency installer detection for new worktrees.
 // It maps well-known lockfiles to their corresponding install commands,
-// matching the behaviour of _wt_install_deps in wt.sh:546.
+// matching well-known project conventions.
 package deps
 
 // Installer describes a detected package manager and the command to run.
@@ -19,20 +19,12 @@ type Installer struct {
 var pythonFiles = []string{"requirements.txt", "pyproject.toml"}
 
 // knownInstallers is the ordered list of lockfile→installer mappings.
-// Priority is first-match-wins, mirroring the deps array in wt.sh:552-557.
+// Priority is first-match-wins.
 var knownInstallers = []Installer{
 	{Lockfile: "pnpm-lock.yaml", Binary: "pnpm", Args: []string{"install"}},
 	{Lockfile: "yarn.lock", Binary: "yarn", Args: []string{"install"}},
 	{Lockfile: "package-lock.json", Binary: "npm", Args: []string{"install"}},
 	{Lockfile: "go.mod", Binary: "go", Args: []string{"mod", "download"}},
-}
-
-// KnownInstallers returns a copy of the ordered installer list.
-// The first matching entry should be used (highest priority first).
-func KnownInstallers() []Installer {
-	out := make([]Installer, len(knownInstallers))
-	copy(out, knownInstallers)
-	return out
 }
 
 // DetectInstaller returns the first Installer whose lockfile appears in files,
@@ -59,8 +51,6 @@ func DetectInstaller(files []string) *Installer {
 
 // IsPythonProject reports whether any of files indicates a Python project.
 // This is checked only when DetectInstaller returns nil.
-//
-// Mirrors the python check in wt.sh:582-585.
 func IsPythonProject(files []string) bool {
 	set := make(map[string]struct{}, len(files))
 	for _, f := range files {

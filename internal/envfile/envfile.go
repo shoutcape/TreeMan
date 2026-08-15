@@ -1,5 +1,4 @@
 // Package envfile handles copying .env* files between worktrees.
-// It mirrors _wt_copy_env_files in wt.sh:592.
 package envfile
 
 import (
@@ -19,8 +18,6 @@ type CopyResult struct {
 // Copy finds all .env* files in src and copies them to dest.
 // It silently skips if no .env* files exist.
 // Returns the filenames that were copied and any error encountered.
-//
-// Mirrors _wt_copy_env_files in wt.sh:592.
 func Copy(src, dest string) (CopyResult, error) {
 	entries, err := os.ReadDir(src)
 	if err != nil {

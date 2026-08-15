@@ -21,8 +21,6 @@ type InstallResult struct {
 // Install detects the package manager for the project at dir and runs the
 // appropriate install command. It is a non-fatal operation — if the binary is
 // not found it prints a warning and returns with Skipped=true.
-//
-// Mirrors the execution part of _wt_install_deps in wt.sh:546.
 func Install(dir string) (InstallResult, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -47,7 +45,7 @@ func Install(dir string) (InstallResult, error) {
 
 	// Check that the binary is available.
 	if _, err := exec.LookPath(installer.Binary); err != nil {
-		// Not installed — warn but don't fail (mirrors wt.sh:575 behaviour).
+		// Not installed - warn but do not fail.
 		return InstallResult{Skipped: true}, fmt.Errorf(
 			"%s found but %s is not installed, skipping",
 			installer.Lockfile, installer.Binary,

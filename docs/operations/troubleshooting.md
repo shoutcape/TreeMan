@@ -18,8 +18,6 @@ gh auth status
 glab auth status
 ```
 
-Install `jq` for GitLab commands. TreeMan checks for it before GitLab branch and review actions.
-
 ## Configuration Has No Effect
 
 Check the configuration path. TreeMan searches upward from the main worktree. It uses the first `.treeman.toml` file that it finds.

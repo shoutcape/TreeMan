@@ -97,11 +97,3 @@ func TestIsPythonProject(t *testing.T) {
 	assert.False(t, deps.IsPythonProject([]string{"go.mod", "main.go"}))
 	assert.False(t, deps.IsPythonProject([]string{}))
 }
-
-func TestKnownInstallers_ReturnsCopy(t *testing.T) {
-	a := deps.KnownInstallers()
-	b := deps.KnownInstallers()
-	// Mutating one should not affect the other or the package-level list.
-	a[0].Binary = "mutated"
-	assert.NotEqual(t, "mutated", b[0].Binary)
-}

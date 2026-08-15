@@ -52,7 +52,7 @@ For repository development, read [Development Setup](development/setup.md).
 | Shell wrappers | `bash` or `zsh` |
 | Interactive selection | `fzf` |
 | GitHub branches and reviews | `gh` |
-| GitLab branches and reviews | `glab` and `jq` |
+| GitLab branches and reviews | `glab` |
 | Dependency installation | Project package manager |
 | Branch databases | `docker` and a running PostgreSQL container |
 

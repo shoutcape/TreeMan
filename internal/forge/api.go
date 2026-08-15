@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,19 +17,15 @@ type PRInfo struct {
 	Number int
 	Title  string
 	Branch string // head ref / source branch
-	Owner  string // PR author login
 }
 
 // BranchInfo holds metadata for a remote branch from the forge API.
 type BranchInfo struct {
-	Name      string
-	Date      string // commit date (relative or ISO, depending on forge)
-	Protected bool
+	Name string
+	Date string // commit date (relative or ISO, depending on forge)
 }
 
 // PRMetadata fetches metadata for a single PR/MR number via gh or glab.
-//
-// Mirrors _wt_pr_metadata in wt.sh:283.
 func PRMetadata(forge Type, repoSlug, host string, prNumber int) (PRInfo, error) {
 	switch forge {
 	case GitHub:
@@ -43,8 +38,6 @@ func PRMetadata(forge Type, repoSlug, host string, prNumber int) (PRInfo, error)
 }
 
 // PRList returns all open PRs/MRs via gh or glab.
-//
-// Mirrors _wt_pr_list in wt.sh:306.
 func PRList(forge Type, repoSlug, host string) ([]PRInfo, error) {
 	switch forge {
 	case GitHub:
@@ -72,7 +65,7 @@ func FetchRef(forge Type, prNumber int) string {
 }
 
 // BranchList returns all remote branches via gh or glab.
-// Returns branch name, last commit date, and protected status.
+// Returns branch names and last commit dates.
 func BranchList(forge Type, repoSlug, host string) ([]BranchInfo, error) {
 	switch forge {
 	case GitHub:
@@ -111,12 +104,7 @@ func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 		Number int    `json:"number"`
 		Title  string `json:"title"`
 		Head   struct {
-			Ref  string `json:"ref"`
-			Repo struct {
-				Owner struct {
-					Login string `json:"login"`
-				} `json:"owner"`
-			} `json:"repo"`
+			Ref string `json:"ref"`
 		} `json:"head"`
 	}
 	if err := json.Unmarshal(out, &data); err != nil {
@@ -127,7 +115,6 @@ func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 		Number: data.Number,
 		Title:  data.Title,
 		Branch: data.Head.Ref,
-		Owner:  data.Head.Repo.Owner.Login,
 	}, nil
 }
 
@@ -179,9 +166,8 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 	}
 
 	var data []struct {
-		Name      string `json:"name"`
-		Protected bool   `json:"protected"`
-		Commit    struct {
+		Name   string `json:"name"`
+		Commit struct {
 			Commit struct {
 				Committer struct {
 					Date string `json:"date"`
@@ -196,9 +182,8 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 	branches := make([]BranchInfo, 0, len(data))
 	for _, d := range data {
 		branches = append(branches, BranchInfo{
-			Name:      d.Name,
-			Date:      formatRelativeDate(d.Commit.Commit.Committer.Date),
-			Protected: d.Protected,
+			Name: d.Name,
+			Date: formatRelativeDate(d.Commit.Commit.Committer.Date),
 		})
 	}
 	return branches, nil
@@ -220,9 +205,6 @@ func gitlabMRMetadata(repoSlug, host string, prNumber int) (PRInfo, error) {
 		IID    int    `json:"iid"`
 		Title  string `json:"title"`
 		Branch string `json:"source_branch"`
-		Author struct {
-			Username string `json:"username"`
-		} `json:"author"`
 	}
 	if err := json.Unmarshal(out, &data); err != nil {
 		return PRInfo{}, fmt.Errorf("glab: parsing MR metadata: %w", err)
@@ -232,7 +214,6 @@ func gitlabMRMetadata(repoSlug, host string, prNumber int) (PRInfo, error) {
 		Number: data.IID,
 		Title:  data.Title,
 		Branch: data.Branch,
-		Owner:  data.Author.Username,
 	}, nil
 }
 
@@ -284,9 +265,8 @@ func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
 	}
 
 	var data []struct {
-		Name      string `json:"name"`
-		Protected bool   `json:"protected"`
-		Commit    struct {
+		Name   string `json:"name"`
+		Commit struct {
 			CommittedDate string `json:"committed_date"`
 		} `json:"commit"`
 	}
@@ -297,9 +277,8 @@ func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
 	branches := make([]BranchInfo, 0, len(data))
 	for _, d := range data {
 		branches = append(branches, BranchInfo{
-			Name:      d.Name,
-			Date:      formatRelativeDate(d.Commit.CommittedDate),
-			Protected: d.Protected,
+			Name: d.Name,
+			Date: formatRelativeDate(d.Commit.CommittedDate),
 		})
 	}
 	return branches, nil
@@ -389,7 +368,7 @@ func formatRelativeDate(isoDate string) string {
 // ResolveFromRemote detects the forge type, repo slug, and host from a remote
 // URL string. This is a convenience wrapper used by command handlers.
 //
-// Env var overrides (mirrors wt.sh test hooks):
+// Environment overrides support command tests.
 //   - _TREEMAN_FORGE    — override forge detection ("github" or "gitlab")
 //   - _TREEMAN_GH_REPO  — override repo slug (e.g. "owner/repo")
 func ResolveFromRemote(remoteURL string) (forgeType Type, repoSlug, host string, err error) {
@@ -417,9 +396,4 @@ func ResolveFromRemote(remoteURL string) (forgeType Type, repoSlug, host string,
 	}
 
 	return forgeType, repoSlug, host, nil
-}
-
-// NumberToString is a small helper used in tests and display.
-func NumberToString(n int) string {
-	return strconv.Itoa(n)
 }

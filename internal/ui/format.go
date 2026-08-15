@@ -9,7 +9,7 @@ import (
 // WorktreeRow formats a single worktree entry for the fzf picker.
 //
 // The display shows the last two path components in ColorPath and the branch
-// name in ColorBranch, mirroring _wt_display_worktrees in wt.sh:219-231.
+// name in ColorBranch.
 //
 // Column width for the path component is 40 characters.
 func WorktreeRow(path, branch string) string {
@@ -21,7 +21,6 @@ func WorktreeRow(path, branch string) string {
 }
 
 // PRHeader returns the column header row for the PR/MR fzf picker.
-// Mirrors the header in _wt_pr_picker_display in wt.sh:347-351.
 func PRHeader() string {
 	return fmt.Sprintf("%s%-8s%s  %s%-32s%s  %s%s%s",
 		ColorPR, "PR/MR", ColorReset,
@@ -31,7 +30,6 @@ func PRHeader() string {
 }
 
 // PRRow formats a single PR/MR entry for the fzf picker.
-// Mirrors the data rows in _wt_pr_picker_display in wt.sh:353-362.
 //
 // number is the PR/MR number, branch is truncated to 32 chars, title is the remainder.
 func PRRow(number int, branch, title string) string {

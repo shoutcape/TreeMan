@@ -19,7 +19,7 @@ const (
 
 // DetectFromHost returns the forge type for the given hostname.
 //
-// Rules (mirrors _wt_detect_forge in wt.sh:163):
+// Detection rules:
 //   - "github.com"      → GitHub
 //   - any host containing "gitlab" → GitLab  (covers gitlab.com, gitlab.company.com, etc.)
 //   - anything else     → error

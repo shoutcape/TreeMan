@@ -30,7 +30,6 @@ TreeMan makes and manages Git worktrees. It uses a local branch for each worktre
 - [Set up development](development/setup.md)
 - [Run tests](development/testing.md)
 - [Make releases](development/releases.md)
-- [Read legacy `wt.sh` status](development/legacy-wt-sh.md)
 
 ## Writing Controls
 

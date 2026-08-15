@@ -41,6 +41,6 @@ Deletion is different. The parent command starts a detached child. The child wri
 
 ## External Programs
 
-TreeMan runs `git`, `fzf`, `gh`, `glab`, `jq`, package managers, Docker, and `psql` when their related feature runs.
+TreeMan runs `git`, `fzf`, `gh`, `glab`, package managers, Docker, and `psql` when their related feature runs.
 
 Hooks run configured shell text. Treat project configuration as executable input.

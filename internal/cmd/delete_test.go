@@ -37,23 +37,3 @@ func TestMatchIndex_NotFound(t *testing.T) {
 	idx := matchIndex(displayLines, "does-not-exist")
 	assert.Equal(t, -1, idx)
 }
-
-func TestMatchPath_Found(t *testing.T) {
-	displayLines := []string{
-		ui.WorktreeRow("/home/user/repo", "main"),
-		ui.WorktreeRow("/home/user/repo.feat", "feat"),
-	}
-	fullPaths := []string{"/home/user/repo", "/home/user/repo.feat"}
-
-	plain := ui.StripANSI(displayLines[1])
-	dest := matchPath(displayLines, fullPaths, plain)
-	assert.Equal(t, "/home/user/repo.feat", dest)
-}
-
-func TestMatchPath_NotFound(t *testing.T) {
-	displayLines := []string{ui.WorktreeRow("/home/user/repo", "main")}
-	fullPaths := []string{"/home/user/repo"}
-
-	dest := matchPath(displayLines, fullPaths, "garbage")
-	assert.Equal(t, "", dest)
-}

@@ -69,13 +69,6 @@ func runReview(cmd *cobra.Command, prArg string) error {
 			cliTool, forgeType, cliInstallURL(forgeType))
 	}
 
-	// For GitLab we also need jq (used by glab api).
-	if forgeType == forge.GitLab {
-		if _, err := exec.LookPath("jq"); err != nil {
-			return fmt.Errorf("jq is required for review with GitLab repos. Install it from https://jqlang.github.io/jq/")
-		}
-	}
-
 	// Resolve PR number — prompt via fzf if not provided.
 	var prNumber int
 	if prArg == "" {
@@ -217,8 +210,6 @@ func runReview(cmd *cobra.Command, prArg string) error {
 
 // pickPRNumber opens an fzf picker populated with open PRs/MRs and returns
 // the selected PR/MR number.
-//
-// Mirrors _wt_pick_pr_number in wt.sh:366.
 func pickPRNumber(forgeType forge.Type, repoSlug, host string) (int, error) {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return 0, fmt.Errorf("fzf is required to pick an open PR/MR; pass a PR number or install fzf")

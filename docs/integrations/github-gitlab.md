@@ -25,7 +25,7 @@ Use `wtb` to add a remote branch. Use `wtpr <number>` to add a pull request work
 
 ## GitLab
 
-Install and authenticate GitLab CLI and `jq`.
+Install and authenticate GitLab CLI.
 
 ```bash
 glab auth login

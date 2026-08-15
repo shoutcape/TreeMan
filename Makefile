@@ -10,7 +10,7 @@ LDFLAGS    := -X main.version=$(VERSION) \
               -X main.commit=$(COMMIT) \
               -X main.date=$(DATE)
 
-.PHONY: build test lint clean install tidy
+.PHONY: build test lint clean install tidy help
 
 ## build: compile the binary to ./bin/treeman
 build:

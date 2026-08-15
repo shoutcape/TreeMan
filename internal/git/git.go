@@ -56,8 +56,6 @@ func runInDir(dir string, args ...string) (string, error) {
 
 // IsInsideRepo reports whether the current working directory is inside a git
 // repository.
-//
-// Mirrors the `git rev-parse --git-dir` guard used throughout wt.sh.
 func IsInsideRepo() bool {
 	_, err := run("rev-parse", "--git-dir")
 	return err == nil
@@ -65,8 +63,6 @@ func IsInsideRepo() bool {
 
 // MainWorktreeRoot returns the absolute path of the main (first) worktree.
 // This works correctly even when called from inside a linked worktree.
-//
-// Mirrors _wt_main_root in wt.sh:55.
 func MainWorktreeRoot() (string, error) {
 	out, err := run("worktree", "list", "--porcelain")
 	if err != nil {
@@ -84,8 +80,6 @@ func MainWorktreeRoot() (string, error) {
 // DetectDefaultBranch returns "main" or "master" by inspecting the origin
 // remote. It prefers the fast path (local origin/HEAD ref) and falls back to
 // querying origin with ls-remote.
-//
-// Mirrors _wt_detect_default_branch in wt.sh:24.
 func DetectDefaultBranch() (string, error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
 	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
@@ -116,8 +110,6 @@ func DetectDefaultBranch() (string, error) {
 }
 
 // BranchExists reports whether a local branch with the given name exists.
-//
-// Mirrors `git show-ref --verify --quiet refs/heads/<branch>` in wt.sh.
 func BranchExists(branch string) bool {
 	_, err := run("show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil
@@ -152,8 +144,6 @@ func WorktreeAdd(path, branch, startPoint string) error {
 
 // WorktreeList returns the list of all worktrees, parsed from
 // `git worktree list --porcelain`.
-//
-// Mirrors _wt_worktree_lines in wt.sh:208.
 func WorktreeList() ([]WorktreeEntry, error) {
 	out, err := run("worktree", "list", "--porcelain")
 	if err != nil {
@@ -205,8 +195,6 @@ func SetUpstreamInDir(dir, branch string) error {
 // WorktreeRemove force-removes the linked worktree at path.
 // Uses --force because the user has already confirmed deletion and
 // untracked/modified files should not block removal.
-//
-// Mirrors `git worktree remove` in wt.sh:490.
 func WorktreeRemove(path string) error {
 	_, err := run("worktree", "remove", "--force", path)
 	if err != nil {
@@ -216,8 +204,6 @@ func WorktreeRemove(path string) error {
 }
 
 // DeleteBranch force-deletes a local branch.
-//
-// Mirrors `git branch -D` in wt.sh:496.
 func DeleteBranch(branch string) error {
 	_, err := run("branch", "-D", branch)
 	if err != nil {
@@ -228,10 +214,8 @@ func DeleteBranch(branch string) error {
 
 // OriginRemoteURL returns the URL of the origin remote.
 // If the environment variable _TREEMAN_REMOTE_URL is set it is returned
-// directly without querying git (mirrors wt.sh:77 caching behaviour and
-// allows the smoke-test to inject a fake URL against a local bare repo).
-//
-// Mirrors _wt_origin_remote_url in wt.sh:77.
+// directly without querying git. This lets the smoke test inject a fake URL
+// against a local bare repository.
 func OriginRemoteURL() (string, error) {
 	if override := os.Getenv("_TREEMAN_REMOTE_URL"); override != "" {
 		return override, nil
@@ -245,8 +229,6 @@ func OriginRemoteURL() (string, error) {
 
 // FindWorktreeForBranch returns the worktree path for a given branch, or an
 // empty string if no worktree is checked out for that branch.
-//
-// Mirrors _wt_find_worktree_for_branch in wt.sh:422.
 func FindWorktreeForBranch(branch string) (string, error) {
 	entries, err := WorktreeList()
 	if err != nil {
@@ -258,44 +240,6 @@ func FindWorktreeForBranch(branch string) (string, error) {
 		}
 	}
 	return "", nil
-}
-
-// WorktreeListNormal returns the output of `git worktree list` (non-porcelain)
-// for display purposes. Each line has the format:
-//
-//	/path/to/worktree  <sha>  [branch]
-//
-// Mirrors _wt_worktree_lines in wt.sh:208.
-func WorktreeListNormal() (string, error) {
-	out, err := run("worktree", "list")
-	if err != nil {
-		return "", fmt.Errorf("could not list worktrees: %w", err)
-	}
-	return out, nil
-}
-
-// runWithEnv executes git with extra environment variables.
-func runWithEnv(env []string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Env = append(cmd.Environ(), env...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
-		}
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-	}
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-// CurrentDir returns the absolute path of the current working directory as
-// known to git (git rev-parse --show-toplevel).
-func CurrentDir() (string, error) {
-	return run("rev-parse", "--show-toplevel")
 }
 
 // WorktreeAddExisting creates a linked worktree for a branch that already

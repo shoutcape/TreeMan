@@ -33,6 +33,6 @@ Set `TREEMAN_BIN` to test another executable.
 TREEMAN_BIN=/path/to/treeman ./smoke-test.sh
 ```
 
-The smoke test creates temporary Git repositories. It uses mock `gh`, `glab`, `fzf`, and optional `jq` programs. It tests installation, uninstallation, lazygit setup, create, review, branch, switch, delete, and unit tests.
+The smoke test creates temporary Git repositories. It uses mock `gh`, `glab`, and `fzf` programs. It tests installation, uninstallation, lazygit setup, create, review, branch, switch, delete, and unit tests.
 
 The GitHub release workflow does not run these checks on pull requests.

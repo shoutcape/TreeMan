@@ -10,8 +10,6 @@ import (
 // BranchSlug converts a branch name to the slug used in worktree directory
 // names by replacing every "/" with "-".
 //
-// Mirrors _wt_branch_slug in wt.sh:60.
-//
 // Example: "feature/cool-thing" → "feature-cool-thing"
 func BranchSlug(branch string) string {
 	return strings.ReplaceAll(branch, "/", "-")

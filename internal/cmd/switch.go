@@ -110,16 +110,3 @@ func runSwitch(cmd *cobra.Command, query string) error {
 
 	return nil
 }
-
-// matchPath finds the full path corresponding to the fzf selection by
-// comparing stripped ANSI versions of display lines.
-func matchPath(displayLines, fullPaths []string, selection string) string {
-	plainSelection := ui.StripANSI(strings.TrimSpace(selection))
-
-	for i, line := range displayLines {
-		if ui.StripANSI(line) == plainSelection {
-			return fullPaths[i]
-		}
-	}
-	return ""
-}

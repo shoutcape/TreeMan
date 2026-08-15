@@ -50,7 +50,7 @@ func TestInstall_BinaryNotFound(t *testing.T) {
 	defer func() { os.Setenv("PATH", origPath) }()
 
 	result, err := Install(dir)
-	// Should not hard-fail — mirrors wt.sh warning-only behaviour.
+	// Missing installers only warn and do not fail worktree creation.
 	assert.Error(t, err) // warning error returned
 	assert.True(t, result.Skipped)
 }

@@ -89,10 +89,6 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 - [Architecture](docs/architecture/overview.md)
 - [Development](docs/development/setup.md)
 
-## Legacy Shell Script
-
-`wt.sh` is legacy code. The Go CLI is the authoritative implementation. Read [legacy status](docs/development/legacy-wt-sh.md).
-
 ## Documentation Standard
 
 Project documentation uses ASD-STE100 Simplified Technical English, Issue 9, as its writing standard. Read [writing controls](docs/writing-standard.md).

@@ -77,13 +77,6 @@ func runBranch(cmd *cobra.Command, query string) error {
 			cliTool, forgeType, cliInstallURL(forgeType))
 	}
 
-	// For GitLab we also need jq.
-	if forgeType == forge.GitLab {
-		if _, err := exec.LookPath("jq"); err != nil {
-			return fmt.Errorf("jq is required for branch listing with GitLab repos. Install it from https://jqlang.github.io/jq/")
-		}
-	}
-
 	// Fetch branches from forge API.
 	fmt.Fprintln(os.Stderr, "Fetching remote branches...")
 	allBranches, err := forge.BranchList(forgeType, repoSlug, host)
@@ -94,7 +87,7 @@ func runBranch(cmd *cobra.Command, query string) error {
 	// Detect default branch to exclude it.
 	defaultBranch, _ := git.DetectDefaultBranch()
 
-	// Filter out default branch, protected branches, and locally existing ones.
+	// Filter out the default branch and locally existing branches.
 	var branches []forge.BranchInfo
 	for _, b := range allBranches {
 		if b.Name == defaultBranch {

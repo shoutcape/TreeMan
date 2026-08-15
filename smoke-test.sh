@@ -27,6 +27,7 @@ TMP_DIR=$(cd "$TMP_DIR" && pwd -P)
 TEST_HOME="$TMP_DIR/home"
 LAZYGIT_CONFIG_DIR="$TMP_DIR/lazygit"
 MOCK_BIN="$TMP_DIR/bin"
+NO_JQ_BIN="$TMP_DIR/no-jq-bin"
 REMOTE_REPO="$TMP_DIR/remote.git"
 MAIN_REPO="$TMP_DIR/project"
 PR_SOURCE_REPO="$TMP_DIR/pr-source"
@@ -56,6 +57,11 @@ assert_file_not_contains() {
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
   [[ "$expected" == "$actual" ]] || fail "$label: expected '$expected', got '$actual'"
+}
+assert_file_count() {
+  local file="$1" text="$2" expected="$3" actual
+  actual=$(grep -cF "$text" "$file" || true)
+  assert_eq "Count of '$text' in $file" "$expected" "$actual"
 }
 
 wait_for_missing() {
@@ -89,7 +95,7 @@ export GIT_COMMITTER_EMAIL="test@example.com"
 
 # Forge/repo overrides — injected into the treeman binary via env vars so that
 # forge detection and API routing work against the local bare repo without a
-# real GitHub/GitLab remote URL (mirrors wt.sh test hooks).
+# real GitHub/GitLab remote URL.
 export _TREEMAN_FORGE="github"
 export _TREEMAN_GH_REPO="shoutcape/TreeMan"
 
@@ -124,10 +130,19 @@ assert_file_contains "$TEST_HOME/.bashrc" '# TreeMan'
 assert_file_contains "$TEST_HOME/.bashrc" '.treeman-install-test/bin'
 assert_file_contains "$TEST_HOME/.bashrc" 'treeman init'
 
-# Lazygit config must reference the treeman binary (not wt.sh).
+# Lazygit config must reference the treeman binary.
 assert_file_contains "$LAZYGIT_CONFIG_DIR/config.yml" 'treeman create'
 assert_file_contains "$LAZYGIT_CONFIG_DIR/config.yml" 'treeman delete'
-assert_file_not_contains "$LAZYGIT_CONFIG_DIR/config.yml" 'wt.sh'
+
+# Malformed integration blocks must survive removal.
+printf '# TreeMan\nexport PATH="/opt/unrelated/bin:$PATH"\neval "$(treeman init bash)"\n' >> "$TEST_HOME/.bashrc"
+printf '# TreeMan\nexport PATH="%s/bin:$PATH"\neval "$(treeman init fish)"\n' "$TEST_HOME/.treeman-install-test" >> "$TEST_HOME/.bashrc"
+
+# A second valid block verifies matching remains correct across markers.
+printf '# TreeMan\nexport PATH="%s/bin:$PATH"\neval "$(treeman init zsh)"\n' "$TEST_HOME/.treeman-install-test" >> "$TEST_HOME/.bashrc"
+
+# An unrelated line after the integration blocks must survive removal.
+printf 'export UNRELATED_SHELL_SETTING=keep\n' >> "$TEST_HOME/.bashrc"
 
 # Uninstall.
 TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-install-test" \
@@ -135,7 +150,11 @@ TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-install-test" \
   bash "$SCRIPT_DIR/uninstall.sh"
 
 assert_missing "$TEST_HOME/.treeman-install-test"
-assert_file_not_contains "$TEST_HOME/.bashrc" '# TreeMan'
+assert_file_count "$TEST_HOME/.bashrc" '# TreeMan' '2'
+assert_file_contains "$TEST_HOME/.bashrc" 'export PATH="/opt/unrelated/bin:$PATH"'
+assert_file_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init fish)"'
+assert_file_not_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init zsh)"'
+assert_file_contains "$TEST_HOME/.bashrc" 'export UNRELATED_SHELL_SETTING=keep'
 assert_file_not_contains "$LAZYGIT_CONFIG_DIR/config.yml" '# TreeMan'
 
 # ---------------------------------------------------------------------------
@@ -300,6 +319,7 @@ GITLAB_REMOTE_REPO="$TMP_DIR/gl-remote.git"
 GITLAB_MAIN_REPO="$TMP_DIR/gl-project"
 GITLAB_MR_SOURCE="$TMP_DIR/gl-mr-source"
 GITLAB_REVIEW_WT="$GITLAB_MAIN_REPO/.worktrees/feature-mr-gamma"
+GITLAB_BRANCH_WT="$GITLAB_MAIN_REPO/.worktrees/feature-gitlab-remote-only"
 
 git init --bare "$GITLAB_REMOTE_REPO" >/dev/null
 git clone "$GITLAB_REMOTE_REPO" "$GITLAB_MAIN_REPO" >/dev/null
@@ -318,6 +338,13 @@ git -C "$GITLAB_MR_SOURCE" commit -m "gamma mr" >/dev/null
 git -C "$GITLAB_MR_SOURCE" push -u origin feature/mr-gamma >/dev/null
 git -C "$GITLAB_MR_SOURCE" push origin HEAD:refs/merge-requests/42/head >/dev/null
 
+git -C "$GITLAB_MR_SOURCE" switch main >/dev/null
+git -C "$GITLAB_MR_SOURCE" switch -c feature/gitlab-remote-only >/dev/null
+printf 'gitlab remote only\n' > "$GITLAB_MR_SOURCE/gitlab-remote-only.txt"
+git -C "$GITLAB_MR_SOURCE" add gitlab-remote-only.txt
+git -C "$GITLAB_MR_SOURCE" commit -m "gitlab remote only" >/dev/null
+git -C "$GITLAB_MR_SOURCE" push -u origin feature/gitlab-remote-only >/dev/null
+
 cat > "$MOCK_BIN/glab" <<'GLABEOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -332,6 +359,10 @@ if [[ "${1:-}" == "api" ]]; then
       printf '%s\n' "${MOCK_GLAB_LIST:-}"
       exit 0
       ;;
+    *"repository/branches?per_page=100"*)
+      printf '%s\n' "${MOCK_GLAB_BRANCHES:-[]}"
+      exit 0
+      ;;
   esac
 fi
 echo "unsupported glab invocation: $*" >&2
@@ -339,13 +370,13 @@ exit 1
 GLABEOF
 chmod +x "$MOCK_BIN/glab"
 
-# jq is required by glab integration — provide a passthrough mock if absent.
-if ! command -v jq >/dev/null 2>&1; then
-  cat > "$MOCK_BIN/jq" <<'EOF'
-#!/usr/bin/env bash
-cat
-EOF
-  chmod +x "$MOCK_BIN/jq"
+# Use a minimal PATH for GitLab commands to prove jq is not required.
+mkdir -p "$NO_JQ_BIN"
+ln -s "$(command -v bash)" "$NO_JQ_BIN/bash"
+ln -s "$(command -v git)" "$NO_JQ_BIN/git"
+NO_JQ_PATH="$TEST_HOME/.treeman/bin:$MOCK_BIN:$NO_JQ_BIN"
+if PATH="$NO_JQ_PATH" command -v jq >/dev/null 2>&1; then
+  fail "Expected jq to be absent from GitLab test PATH"
 fi
 
 echo "==> review worktree create (GitLab wtmr)"
@@ -354,14 +385,24 @@ cd "$GITLAB_MAIN_REPO"
 export _TREEMAN_FORGE="gitlab"
 unset _TREEMAN_GH_REPO
 export _TREEMAN_REMOTE_URL="git@gitlab.company.com:acme/frontend/gl-project.git"
-export MOCK_GLAB_VIEW_42='{"iid":42,"title":"Gamma MR","source_branch":"feature/mr-gamma","author":{"username":"testuser"}}'
+export MOCK_GLAB_VIEW_42='{"iid":42,"title":"Gamma MR","source_branch":"feature/mr-gamma"}'
 
-wtmr 42
+PATH="$NO_JQ_PATH" wtmr 42
 assert_exists "$GITLAB_REVIEW_WT"
 assert_exists "$GITLAB_REVIEW_WT/gamma.txt"
 [[ "$(pwd)" == "$GITLAB_REVIEW_WT" ]] || fail "Expected wtmr to cd into GitLab review worktree"
 git -C "$GITLAB_MAIN_REPO" show-ref --verify --quiet refs/heads/feature/mr-gamma \
   || fail "Expected feature/mr-gamma branch"
+
+echo "==> branch worktree create (GitLab wtb without jq)"
+
+cd "$GITLAB_MAIN_REPO"
+export MOCK_GLAB_BRANCHES='[{"name":"feature/gitlab-remote-only","commit":{"committed_date":"2026-01-01T00:00:00Z"}},{"name":"main","commit":{"committed_date":"2026-01-01T00:00:00Z"}}]'
+export MOCK_GLAB_LIST='[]'
+PATH="$NO_JQ_PATH" wtb feature/gitlab-remote-only
+assert_exists "$GITLAB_BRANCH_WT"
+assert_exists "$GITLAB_BRANCH_WT/gitlab-remote-only.txt"
+[[ "$(pwd)" == "$GITLAB_BRANCH_WT" ]] || fail "Expected wtb to cd into GitLab branch worktree"
 
 # Guard: non-numeric MR number.
 cd "$GITLAB_MAIN_REPO"
