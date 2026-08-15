@@ -45,23 +45,23 @@ Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs
 
 ### Terminal integration
 
-https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/01-terminal-intro.mp4
+https://github.com/user-attachments/assets/9e17dcde-7ed4-413f-b38e-f1992ed4d7b9
 
 ### Switch worktrees
 
-https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/02-switch-worktrees.mp4
+https://github.com/user-attachments/assets/53c63aa4-bfb0-48e7-9a85-f933d6640233
 
 ### Create a worktree
 
-https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/03-create-worktree.mp4
+https://github.com/user-attachments/assets/5c619d70-ad0f-4c04-84cb-28bc5640a83c
 
 ### Add a remote branch worktree
 
-https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/04-remote-branch-picker.mp4
+https://github.com/user-attachments/assets/cdf9dba3-59ee-415e-950c-be98080c2fd8
 
 ### Review a pull request
 
-https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/05-review-pull-request.mp4
+https://github.com/user-attachments/assets/1c91d745-1524-4be8-9a30-b4bf1296f4c3
 
 > [!warning]
 > `wtd` starts background deletion. It uses forced Git worktree and branch removal. Uncommitted and untracked files can be removed.
