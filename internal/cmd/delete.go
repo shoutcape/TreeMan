@@ -12,10 +12,7 @@ import (
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
-	"github.com/shoutcape/treeman/internal/terminal"
-	_ "github.com/shoutcape/treeman/internal/terminal/ghostty"
 	"github.com/shoutcape/treeman/internal/ui"
-	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -257,28 +254,15 @@ func runDeleteBackground(dest, branch string) error {
 		return logDeleteError(branch, err.Error())
 	}
 
-	// Load config for database/terminal cleanup.
+	// Load config for database cleanup.
 	cfgResult := config.Load(mainRoot)
 	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-	termCfg := config.MergeTerminalConfig(
-		config.LoadGlobal("").Config.Terminal,
-		cfgResult.Config.Terminal,
-	)
 
 	// Drop branch-specific database (best-effort).
 	if dbEnvKey != "" {
 		if err := database.CleanupBranchDB(dest, dbEnvKey); err != nil {
 			logDeleteError(branch, fmt.Sprintf("database cleanup failed: %v", err))
 		}
-	}
-
-	// Close terminals for this worktree (best-effort).
-	if mgr := terminal.NewManager(termCfg); mgr != nil {
-		mgr.Close(terminal.WorktreeInfo{
-			Path:   dest,
-			Branch: branch,
-			Slug:   worktree.BranchSlug(branch),
-		})
 	}
 
 	// Remove worktree.

@@ -27,10 +27,19 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "wts()")
 	assert.Contains(t, out, "wtd()")
 	assert.Contains(t, out, "lg()")
+	assert.NotContains(t, out, "wto()")
 	assert.Contains(t, out, "treeman create")
 	assert.Contains(t, out, "treeman review")
 	assert.Contains(t, out, "treeman switch")
 	assert.Contains(t, out, "treeman delete")
+}
+
+func TestRootCmd_HasNoOpenCommand(t *testing.T) {
+	root := New("test", "", "")
+	cmd, _, err := root.Find([]string{"open"})
+
+	assert.Error(t, err)
+	assert.Equal(t, root, cmd)
 }
 
 func TestInitCmd_Zsh(t *testing.T) {

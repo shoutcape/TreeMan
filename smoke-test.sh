@@ -58,6 +58,18 @@ assert_eq() {
   [[ "$expected" == "$actual" ]] || fail "$label: expected '$expected', got '$actual'"
 }
 
+wait_for_missing() {
+  local path="$1"
+  local attempts=50
+
+  while [[ -e "$path" && "$attempts" -gt 0 ]]; do
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+
+  assert_missing "$path"
+}
+
 # --- Environment setup -------------------------------------------------------
 
 mkdir -p "$TEST_HOME"
@@ -460,7 +472,7 @@ treeman delete \
   --branch feature/test \
   --yes
 
-assert_missing "$WORKTREE_REPO"
+wait_for_missing "$WORKTREE_REPO"
 if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/test; then
   fail "Expected feature/test branch to be deleted"
 fi

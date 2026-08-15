@@ -1,4 +1,4 @@
-// Package ui provides terminal output helpers for treeman.
+// Package ui provides ANSI output helpers for treeman.
 package ui
 
 // TreeMan brand color ANSI escape sequences (24-bit / true color).
@@ -13,7 +13,7 @@ const (
 	// ColorPR is a golden yellow (#F2EA72) used for PR/MR numbers.
 	ColorPR = "\033[38;2;242;234;114m"
 
-	// ColorReset resets all terminal attributes.
+	// ColorReset resets all ANSI attributes.
 	ColorReset = "\033[0m"
 )
 

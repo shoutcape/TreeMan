@@ -13,16 +13,12 @@ import (
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
-	"github.com/shoutcape/treeman/internal/terminal"
-	_ "github.com/shoutcape/treeman/internal/terminal/ghostty"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
 func newBranchCmd() *cobra.Command {
-	var flagNoOpen bool
-
 	cmd := &cobra.Command{
 		Use:   "branch [query]",
 		Short: "Create a worktree from a remote branch",
@@ -46,16 +42,14 @@ can cd into it.`,
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runBranch(cmd, query, flagNoOpen)
+			return runBranch(cmd, query)
 		},
 	}
-
-	cmd.Flags().BoolVarP(&flagNoOpen, "no-open", "n", false, "Skip opening a terminal tab/pane")
 
 	return cmd
 }
 
-func runBranch(cmd *cobra.Command, query string, noOpen bool) error {
+func runBranch(cmd *cobra.Command, query string) error {
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -224,27 +218,6 @@ func runBranch(cmd *cobra.Command, query string, noOpen bool) error {
 		}
 	}
 
-	// Open terminal for the new worktree (best-effort).
-	terminalOpened := false
-	if !noOpen {
-		termCfg := config.MergeTerminalConfig(
-			config.LoadGlobal("").Config.Terminal,
-			cfgResult.Config.Terminal,
-		)
-		if mgr := terminal.NewManager(termCfg); mgr != nil {
-			fmt.Fprintln(os.Stderr, "Opening terminal...")
-			if openErr := mgr.Open(terminal.WorktreeInfo{
-				Path:   worktreePath,
-				Branch: branch,
-				Slug:   worktree.BranchSlug(branch),
-			}); openErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not open terminal: %v\n", openErr)
-			} else {
-				terminalOpened = true
-			}
-		}
-	}
-
 	// Print summary to stderr.
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Worktree ready:")
@@ -255,10 +228,7 @@ func runBranch(cmd *cobra.Command, query string, noOpen bool) error {
 	fmt.Fprintf(os.Stderr, "  Path:   %s\n", worktreePath)
 
 	// Print path to stdout so the shell wrapper can cd into it.
-	// Skip when a terminal was opened -- the user is already there.
-	if !terminalOpened {
-		fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
-	}
+	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
 
 	return nil
 }
