@@ -1,0 +1,106 @@
+# Command Reference
+
+Run `treeman --help` for current command help. TreeMan sends status and warnings to stderr. Commands that select or create worktrees can send a path to stdout.
+
+Shell wrappers use stdout to change the current shell directory. Native commands never change the caller directory.
+
+## Commands
+
+| Native command | Shell wrapper | Purpose |
+| --- | --- | --- |
+| `treeman create <branch>` | `wt` | Create a branch and worktree |
+| `treeman branch [query]` | `wtb` | Add a remote branch worktree |
+| `treeman review [number]` | `wtpr`, `wtmr` | Add a PR or MR worktree |
+| `treeman switch [query]` | `wts` | Select a worktree path |
+| `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
+| `treeman init <shell>` | None | Print shell wrappers |
+| `treeman version` | None | Print build data |
+
+## `create`
+
+```text
+treeman create <branch-name>
+```
+
+Create a local branch from the fetched default branch. TreeMan supports only `main` and `master` as default branch names.
+
+The command fails when the branch or target directory exists. It creates `.worktrees/<branch-slug>`. The branch slug changes `/` to `-`.
+
+TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
+
+## `branch`
+
+```text
+treeman branch [query]
+```
+
+`branch` has alias `wtb`. It gets remote branches from the detected forge. An exact query selects a branch without `fzf`. Other queries use `fzf`.
+
+TreeMan excludes the default branch and local branches. It does not exclude protected branches.
+
+After selection, TreeMan fetches the branch, creates a local branch, and tries to set upstream tracking. It then runs the create post-actions.
+
+## `review`
+
+```text
+treeman review [pr-number]
+```
+
+`review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
+
+Give a numeric PR or MR number. Without a number, TreeMan uses `fzf` to select an open PR or MR.
+
+TreeMan fetches the review head into a new worktree. It runs environment, database, dependency, and hook actions.
+
+`0` passes current numeric validation. Use a positive PR or MR number.
+
+## `switch`
+
+```text
+treeman switch [query]
+```
+
+`switch` has alias `wts`. It requires `fzf`.
+
+It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. The `wts` wrapper changes directory when it receives a path.
+
+## `delete`
+
+```text
+treeman delete [query]
+treeman delete --path <path> --branch <branch> [--yes]
+```
+
+`delete` has alias `wtd`. Interactive deletion requires `fzf`. It excludes the main worktree.
+
+`--path` and `--branch` use direct mode. Direct mode requires both flags. `--yes` and `-y` skip confirmation.
+
+TreeMan protects the main worktree and detected default branch. It then starts a detached deletion process. The process cleans a branch database, removes the worktree, and deletes the branch.
+
+> [!warning]
+> Direct mode does not verify that the supplied path is a linked worktree. Use it only with trusted paths and branches.
+
+`--background` is an internal hidden flag. Do not use it directly.
+
+## `init`
+
+```text
+treeman init bash
+treeman init zsh
+```
+
+This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
+
+`lg` starts lazygit. It changes the directory when lazygit writes a new-directory file.
+
+## `version`
+
+```text
+treeman version
+```
+
+This command prints version, commit, and build date when build data exists.
+
+## Picker Rules
+
+Interactive `branch`, `review`, `switch`, and `delete` commands use `fzf`. Cancellation is a successful no-op for `switch` and `delete`. Cancellation is an error for `branch` and `review`.
