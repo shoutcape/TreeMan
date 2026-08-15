@@ -41,6 +41,28 @@ wtd
 
 Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs/reference/cli.md).
 
+## Usage Examples
+
+### Terminal integration
+
+https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/01-terminal-intro.mp4
+
+### Switch worktrees
+
+https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/02-switch-worktrees.mp4
+
+### Create a worktree
+
+https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/03-create-worktree.mp4
+
+### Add a remote branch worktree
+
+https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/04-remote-branch-picker.mp4
+
+### Review a pull request
+
+https://github.com/shoutcape/TreeMan/raw/main/docs/assets/videos/05-review-pull-request.mp4
+
 > [!warning]
 > `wtd` starts background deletion. It uses forced Git worktree and branch removal. Uncommitted and untracked files can be removed.
 
