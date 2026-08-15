@@ -12,6 +12,7 @@ TreeMan makes and manages Git worktrees. It uses a local branch for each worktre
 
 ## Integrations
 
+- [Use TreeMan with agents](integrations/agents.md)
 - [Use GitHub and GitLab](integrations/github-gitlab.md)
 - [Use branch databases](integrations/postgresql.md)
 

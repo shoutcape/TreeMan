@@ -4,6 +4,7 @@ Use these terms with the specified meaning.
 
 | Term | Meaning |
 | --- | --- |
+| Agent Skill | Directory with instructions that extend an AI agent behavior |
 | branch database | PostgreSQL database for one worktree branch |
 | branch slug | Branch name with `/` changed to `-` for a worktree path |
 | default branch | `main` or `master` branch detected from `origin` |

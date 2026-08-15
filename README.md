@@ -41,6 +41,16 @@ wtd
 
 Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs/reference/cli.md).
 
+## Agents
+
+TreeMan has an Agent Skill for OpenCode, Claude Code, Codex, and other supported agents.
+
+```bash
+npx skills add shoutcape/TreeMan --skill treeman -g -a opencode
+```
+
+Read [Use TreeMan with agents](docs/integrations/agents.md) for installation and safety rules.
+
 ## Usage Examples
 
 ### Terminal integration
@@ -72,6 +82,7 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 - [Workflows](docs/guides/workflows.md)
 - [Configuration](docs/reference/configuration.md)
 - [GitHub and GitLab](docs/integrations/github-gitlab.md)
+- [Agents](docs/integrations/agents.md)
 - [PostgreSQL branch databases](docs/integrations/postgresql.md)
 - [Troubleshooting](docs/operations/troubleshooting.md)
 - [Known limitations](docs/known-limitations.md)
