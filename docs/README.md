@@ -28,6 +28,7 @@ TreeMan makes and manages Git worktrees. It uses a local branch for each worktre
 - [Read command lifecycles](architecture/lifecycles.md)
 - [Read package details](architecture/packages.md)
 - [Set up development](development/setup.md)
+- [Understand CI](development/ci.md)
 - [Run tests](development/testing.md)
 - [Make releases](development/releases.md)
 
