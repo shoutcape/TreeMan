@@ -162,6 +162,22 @@ func WorktreeList() ([]WorktreeEntry, error) {
 	return parseWorktreePorcelain(out), nil
 }
 
+// MergedBranches returns local branches that are ancestors of target.
+func MergedBranches(target string) (map[string]bool, error) {
+	out, err := run("branch", "--merged", target, "--format=%(refname:short)")
+	if err != nil {
+		return nil, fmt.Errorf("could not list branches merged into %q: %w", target, err)
+	}
+
+	branches := make(map[string]bool)
+	for _, branch := range strings.Split(out, "\n") {
+		if branch != "" {
+			branches[branch] = true
+		}
+	}
+	return branches, nil
+}
+
 // parseWorktreePorcelain parses the output of `git worktree list --porcelain`
 // into WorktreeEntry values.
 func parseWorktreePorcelain(out string) []WorktreeEntry {

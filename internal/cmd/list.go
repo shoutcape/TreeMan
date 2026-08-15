@@ -18,6 +18,7 @@ type listEntry struct {
 	Current  bool   `json:"current"`
 	Dirty    bool   `json:"dirty"`
 	Detached bool   `json:"detached"`
+	Merged   bool   `json:"merged"`
 }
 
 func newListCmd() *cobra.Command {
@@ -51,6 +52,13 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 	if err != nil {
 		return err
 	}
+	defaultBranch := ""
+	mergedBranches := map[string]bool{}
+	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
+		if mergedBranches, err = git.MergedBranches("origin/" + defaultBranch); err != nil {
+			mergedBranches = map[string]bool{}
+		}
+	}
 
 	result := make([]listEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -65,6 +73,7 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 			Current:  samePath(entry.Path, currentRoot),
 			Dirty:    dirty,
 			Detached: entry.Branch == "",
+			Merged:   defaultBranch != "" && entry.Branch != defaultBranch && mergedBranches[entry.Branch],
 		})
 	}
 
@@ -83,8 +92,8 @@ func writeListJSON(cmd *cobra.Command, entries []listEntry) error {
 func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "\n%sWORKTREES%s\n\n", ui.ColorCyan, ui.ColorReset)
-	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-27s  %-25s\n", ui.ColorDim, "MARKERS", ui.ColorReset, "STATUS", "BRANCH", "PATH")
-	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-27s  %-25s\n", ui.ColorDim, "───────", ui.ColorReset, "──────", "───────────────────────────", "─────────────────────────")
+	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-6s  %-27s  %-25s\n", ui.ColorDim, "MARKERS", ui.ColorReset, "STATUS", "MERGED", "BRANCH", "PATH")
+	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-6s  %-27s  %-25s\n", ui.ColorDim, "───────", ui.ColorReset, "──────", "──────", "───────────────────────────", "─────────────────────────")
 	for _, entry := range entries {
 		branch := entry.Branch
 		if entry.Detached {
@@ -98,9 +107,14 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 		if entry.Current {
 			markers += "▶"
 		}
-		fmt.Fprintf(out, "    %s%-8s%s %s%-8s%s  %s%-27s%s  %s%s%s\n",
+		merged := ""
+		if entry.Merged {
+			merged = "YES"
+		}
+		fmt.Fprintf(out, "    %s%-8s%s %s%-8s%s  %-6s  %s%-27s%s  %s%s%s\n",
 			ui.ColorDim, markers, ui.ColorReset,
 			statusColor, truncateListCell(status, 8), ui.ColorReset,
+			merged,
 			ui.ColorBranch, truncateListCell(branch, 27), ui.ColorReset,
 			ui.ColorPath, displayListPath(entry.Path), ui.ColorReset,
 		)

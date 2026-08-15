@@ -88,7 +88,7 @@ When the deleted worktree is the current directory, TreeMan prints the main work
 treeman list [--json]
 ```
 
-List the repository worktrees with branch, path, main, current, and dirty state. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, and `detached` fields for scripts and agents.
+List the repository worktrees with branch, path, main, current, dirty, and merged state. A `YES` value in the `MERGED` column means the local branch is merged into the default branch on `origin`. If `origin` is unavailable, merged state is left blank. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields for scripts and agents.
 
 `wtl` is a shell shortcut for `treeman list`.
 

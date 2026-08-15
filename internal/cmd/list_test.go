@@ -18,11 +18,11 @@ func TestWriteListHuman(t *testing.T) {
 
 	writeListHuman(cmd, []listEntry{
 		{Path: "/repo", Branch: "main", Main: true, Current: true},
-		{Path: "/repo/.worktrees/feature", Branch: "feature", Dirty: true},
+		{Path: "/repo/.worktrees/feature", Branch: "feature", Dirty: true, Merged: true},
 		{Path: "/repo/.worktrees/review", Detached: true},
 	})
 
-	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    BRANCH                       PATH                     \n    ───────  ──────    ───────────────────────────  ─────────────────────────\n    M▶       CLEAN     main                         /repo\n             DIRTY     feature                      /repo/.worktrees/feature\n             DETACHED  (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
+	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                       PATH                     \n    ───────  ──────    ──────  ───────────────────────────  ─────────────────────────\n    M▶       CLEAN             main                         /repo\n             DIRTY     YES     feature                      /repo/.worktrees/feature\n             DETACHED          (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
 }
 
 func TestWriteListJSON(t *testing.T) {
