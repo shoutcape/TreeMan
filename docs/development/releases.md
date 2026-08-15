@@ -25,16 +25,18 @@ The Makefile gets version data from Git. It puts version, short commit, and UTC 
 
 GoReleaser uses release version, commit, and date values for the same variables.
 
-## Publish a Release
+## Automatic Releases
 
-1. Run `make test`.
-2. Run `make lint`.
-3. Run `make build`.
-4. Run `./smoke-test.sh`.
-5. Create and push a tag that starts with `v`.
-6. Check the GitHub Actions release result.
-7. Download and test each release archive.
+Merging a pull request into `main` automatically publishes a release. The workflow finds the latest `vMAJOR.MINOR.PATCH` tag, increments its patch number, creates the new tag on the merge commit, and runs GoReleaser.
 
-The release workflow runs only for pushed `v*` tags. It uses GoReleaser v2 and `GITHUB_TOKEN`.
+For example, the release after `v0.3.0` is `v0.3.1`.
+
+CI runs the test, lint, build, and smoke-test checks before a pull request can be merged. After the release workflow completes, download and test the relevant archive if needed.
+
+## Manual Releases
+
+Pushing a `v*` tag still starts the release workflow. Use this to publish an explicitly chosen version, such as a minor or major release.
+
+The release workflow uses GoReleaser v2 and `GITHUB_TOKEN`.
 
 GoReleaser excludes `docs:`, `test:`, `chore:`, and merge commits from the generated changelog.
