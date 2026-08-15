@@ -25,13 +25,17 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "wtpr()")
 	assert.Contains(t, out, "wtmr()")
 	assert.Contains(t, out, "wts()")
+	assert.Contains(t, out, "wtl()")
 	assert.Contains(t, out, "wtd()")
 	assert.Contains(t, out, "lg()")
 	assert.NotContains(t, out, "wto()")
 	assert.Contains(t, out, "treeman create")
 	assert.Contains(t, out, "treeman review")
 	assert.Contains(t, out, "treeman switch")
+	assert.Contains(t, out, "treeman list")
 	assert.Contains(t, out, "treeman delete")
+	assert.Contains(t, out, "_tm_dir=$(treeman delete \"$@\") || return $?")
+	assert.Contains(t, out, "[ -n \"$_tm_dir\" ] && cd \"$_tm_dir\"")
 }
 
 func TestRootCmd_HasNoOpenCommand(t *testing.T) {
@@ -40,6 +44,38 @@ func TestRootCmd_HasNoOpenCommand(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Equal(t, root, cmd)
+}
+
+func TestRootCmd_VersionFlags(t *testing.T) {
+	for _, flag := range []string{"--version", "-v"} {
+		t.Run(flag, func(t *testing.T) {
+			root := New("test", "abc123", "2026-01-01")
+			buf := &bytes.Buffer{}
+			root.SetOut(buf)
+			root.SetArgs([]string{flag})
+
+			require.NoError(t, root.Execute())
+			assert.Equal(t, "treeman test\ncommit  abc123\nbuilt   2026-01-01\n", buf.String())
+		})
+	}
+}
+
+func TestRootCmd_OverviewDiffersFromHelp(t *testing.T) {
+	overviewRoot := New("test", "", "")
+	overview := &bytes.Buffer{}
+	overviewRoot.SetOut(overview)
+	require.NoError(t, overviewRoot.Execute())
+
+	helpRoot := New("test", "", "")
+	help := &bytes.Buffer{}
+	helpRoot.SetOut(help)
+	helpRoot.SetArgs([]string{"--help"})
+	require.NoError(t, helpRoot.Execute())
+
+	assert.Contains(t, overview.String(), "TreeMan manages isolated Git worktrees.")
+	assert.Contains(t, overview.String(), "treeman --help")
+	assert.Contains(t, help.String(), "Usage:")
+	assert.NotEqual(t, overview.String(), help.String())
 }
 
 func TestInitCmd_Zsh(t *testing.T) {

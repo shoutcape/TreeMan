@@ -29,7 +29,6 @@ flowchart TD
 | Environment files | Main and linked worktrees |
 | Project configuration | `.treeman.toml` |
 | Branch databases | Docker PostgreSQL |
-| Deferred delete failures | Delete error log |
 
 ## Failure Boundaries
 
@@ -37,7 +36,7 @@ TreeMan stops commands for input errors, repository errors, required tool errors
 
 TreeMan reports warnings and continues for `.gitignore` updates, environment copies, database actions, dependency installs, hooks, and upstream setup.
 
-Deletion is different. The parent command starts a detached child. The child writes later errors to the delete error log.
+Deletion validates the linked worktree, branch, protected state, and dirty state before it begins. Git removal and branch deletion complete before the command returns.
 
 ## External Programs
 

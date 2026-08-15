@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
@@ -20,342 +19,207 @@ func newDeleteCmd() *cobra.Command {
 	var flagPath string
 	var flagBranch string
 	var flagYes bool
-	var flagBackground bool
+	var flagForce bool
 
 	cmd := &cobra.Command{
-		Use:   "delete [query]",
-		Short: "Delete a worktree and its branch via fzf",
-		Long: `Open an interactive fzf picker listing all deletable worktrees.
-
-The main worktree and the default branch are protected from deletion.
-An optional query pre-filters the list.
-
-After confirmation, the selected worktree is removed and its branch is
-deleted with git branch -D. Deletion runs in the background so the
-command returns immediately.
-
-Non-interactive mode (for lazygit / scripts):
-  treeman delete --path <path> --branch <branch> --yes`,
+		Use:     "delete [query]",
+		Short:   "Delete a worktree and its branch via fzf",
 		Aliases: []string{"wtd"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Background mode: we are the detached child, do the actual work.
-			if flagBackground {
-				return runDeleteBackground(flagPath, flagBranch)
-			}
-
-			// Non-interactive mode: --path + --branch provided directly.
 			if flagPath != "" || flagBranch != "" {
-				return runDeleteDirect(flagPath, flagBranch, flagYes)
+				return runDeleteDirect(cmd, flagPath, flagBranch, flagYes, flagForce)
 			}
-
 			query := ""
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runDelete(cmd, query, flagYes)
+			return runDelete(cmd, query, flagYes, flagForce)
 		},
 	}
 
 	cmd.Flags().StringVar(&flagPath, "path", "", "Worktree path to delete (skips fzf picker)")
 	cmd.Flags().StringVar(&flagBranch, "branch", "", "Branch to delete (skips fzf picker)")
 	cmd.Flags().BoolVarP(&flagYes, "yes", "y", false, "Skip confirmation prompt")
-	cmd.Flags().BoolVar(&flagBackground, "background", false, "Run deletion in background (internal flag)")
-	cmd.Flags().MarkHidden("background")
-
+	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a dirty worktree or unmerged branch")
 	return cmd
 }
 
-// runDeleteDirect deletes a worktree by explicit path + branch, used by
-// lazygit keybindings where fzf is not available and targets are known.
-func runDeleteDirect(path, branch string, skipConfirm bool) error {
+func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force bool) error {
 	if path == "" || branch == "" {
 		return fmt.Errorf("--path and --branch are both required in non-interactive mode")
 	}
-
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
-
 	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
 		return err
 	}
-
 	if !skipConfirm {
-		fmt.Fprintf(os.Stderr, "About to delete:\n")
-		fmt.Fprintf(os.Stderr, "  Worktree: %s\n", path)
-		fmt.Fprintf(os.Stderr, "  Branch:   %s\n", branch)
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprint(os.Stderr, "Are you sure? [y/N] ")
-		scanner := bufio.NewScanner(os.Stdin)
-		if scanner.Scan() {
-			if !strings.EqualFold(strings.TrimSpace(scanner.Text()), "y") {
-				fmt.Fprintln(os.Stderr, "Cancelled.")
-				return nil
-			}
+		printDeleteConfirmation(path, branch)
+		if !confirmYN(cmd, "Are you sure? [y/N] ") {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
 		}
 	}
-
-	return spawnBackgroundDelete(path, branch, mainRoot)
+	return deleteWorktree(cmd, path, branch, mainRoot, force)
 }
 
-func runDelete(cmd *cobra.Command, query string, skipConfirm bool) error {
+func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return fmt.Errorf("fzf is required for delete. Install it from https://github.com/junegunn/fzf")
 	}
-
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
-
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return err
 	}
-	if len(entries) == 0 {
-		return fmt.Errorf("no worktrees found")
-	}
-	if len(entries) == 1 {
+	if len(entries) <= 1 {
 		fmt.Fprintln(os.Stderr, "Only one worktree exists -- nothing to delete.")
 		return nil
 	}
-
 	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
 		return err
 	}
 
-	// Build display rows, excluding the main worktree.
-	var displayLines []string
-	var fullPaths []string
-	var branches []string
-
-	for _, e := range entries {
-		if e.Path == mainRoot {
+	var displayLines, paths, branches []string
+	for _, entry := range entries {
+		if samePath(entry.Path, mainRoot) {
 			continue
 		}
-		displayLines = append(displayLines, ui.WorktreeRow(e.Path, e.Branch))
-		fullPaths = append(fullPaths, e.Path)
-		branches = append(branches, e.Branch)
+		displayLines = append(displayLines, ui.WorktreeRow(entry.Path, entry.Branch))
+		paths = append(paths, entry.Path)
+		branches = append(branches, entry.Branch)
 	}
-
 	if len(displayLines) == 0 {
 		fmt.Fprintln(os.Stderr, "No deletable worktrees -- only the main worktree exists.")
 		return nil
 	}
 
-	display := strings.Join(displayLines, "\n")
-
-	fzfArgs := []string{
-		"--ansi",
-		"--border-label", " delete worktree ",
-		"--prompt=delete > ",
-		"--select-1",
-		"--exit-0",
-	}
+	args := []string{"--ansi", "--border-label", " delete worktree ", "--prompt=delete > ", "--select-1", "--exit-0"}
 	if query != "" {
-		fzfArgs = append(fzfArgs, "--query", query)
+		args = append(args, "--query", query)
 	}
-
-	fzfCmd := exec.Command("fzf", fzfArgs...)
-	fzfCmd.Stdin = strings.NewReader(display)
+	fzfCmd := exec.Command("fzf", args...)
+	fzfCmd.Stdin = strings.NewReader(strings.Join(displayLines, "\n"))
 	fzfCmd.Stderr = os.Stderr
-
 	out, err := fzfCmd.Output()
 	if err != nil {
-		// User cancelled.
 		return nil
 	}
-
 	selection := strings.TrimSpace(string(out))
 	if selection == "" {
 		return nil
 	}
-
-	// Map selection back to path + branch.
 	idx := matchIndex(displayLines, selection)
 	if idx < 0 {
 		return fmt.Errorf("could not map fzf selection to a worktree")
 	}
-	dest := fullPaths[idx]
-	branch := branches[idx]
-
-	// Confirm deletion (unless --yes was passed).
-	fmt.Fprintf(os.Stderr, "About to delete:\n")
-	fmt.Fprintf(os.Stderr, "  Worktree: %s\n", dest)
-	fmt.Fprintf(os.Stderr, "  Branch:   %s\n", branch)
-	fmt.Fprintln(os.Stderr, "")
-
-	if !skipConfirm && !confirmYN(cmd, "Are you sure? [y/N] ") {
-		fmt.Fprintln(os.Stderr, "Cancelled.")
-		return nil
+	if !skipConfirm {
+		printDeleteConfirmation(paths[idx], branches[idx])
+		if !confirmYN(cmd, "Are you sure? [y/N] ") {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
 	}
-
-	return spawnBackgroundDelete(dest, branch, mainRoot)
+	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force)
 }
 
-// spawnBackgroundDelete validates guards, then spawns a detached subprocess
-// to perform the actual deletion. The parent returns immediately.
-func spawnBackgroundDelete(dest, branch, mainRoot string) error {
-	// Run guards before spawning so the user gets immediate feedback.
-	if dest == mainRoot {
+func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
+	entry, err := findWorktree(dest)
+	if err != nil {
+		return err
+	}
+	if samePath(entry.Path, mainRoot) {
 		return fmt.Errorf("cannot delete the main worktree")
 	}
-
+	if entry.Branch != branch {
+		return fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
+	}
 	defaultBranch, _ := git.DetectDefaultBranch()
 	if defaultBranch != "" && branch == defaultBranch {
 		return fmt.Errorf("cannot delete the default branch %q", branch)
 	}
-
-	// Find our own executable.
-	self, err := os.Executable()
+	dirty, err := git.WorktreeDirty(entry.Path)
 	if err != nil {
-		return fmt.Errorf("could not find treeman executable: %w", err)
+		return err
 	}
-
-	// Spawn detached child process.
-	child := exec.Command(self, "delete",
-		"--path", dest,
-		"--branch", branch,
-		"--yes",
-		"--background",
-	)
-	// Set working directory to mainRoot so git commands work.
-	child.Dir = mainRoot
-	// Detach from parent: no stdin/stdout/stderr, new process group.
-	child.Stdin = nil
-	child.Stdout = nil
-	child.Stderr = nil
-	child.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
+	if dirty && !force {
+		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 	}
-
-	if err := child.Start(); err != nil {
-		return fmt.Errorf("could not start background deletion: %w", err)
+	if !force {
+		canDelete, err := git.BranchCanDelete(mainRoot, branch)
+		if err != nil {
+			return err
+		}
+		if !canDelete {
+			return fmt.Errorf("branch %q is not fully merged; use --force to delete it", branch)
+		}
 	}
-
-	// Release the child so it isn't reaped when we exit.
-	child.Process.Release()
-
-	fmt.Fprintf(os.Stderr, "deleting: %s\n", branch)
-	return nil
-}
-
-// runDeleteBackground performs the actual deletion in a background subprocess.
-// Errors are written to a log file for reporting on the next treeman command.
-func runDeleteBackground(dest, branch string) error {
-	if !git.IsInsideRepo() {
-		return logDeleteError(branch, "not inside a git repository")
-	}
-
-	mainRoot, err := git.MainWorktreeRoot()
+	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
-		return logDeleteError(branch, err.Error())
+		return err
 	}
 
-	// Load config for database cleanup.
+	// All destructive checks have passed. Database cleanup remains best-effort.
 	cfgResult := config.Load(mainRoot)
-	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-
-	// Drop branch-specific database (best-effort).
-	if dbEnvKey != "" {
-		if err := database.CleanupBranchDB(dest, dbEnvKey); err != nil {
-			logDeleteError(branch, fmt.Sprintf("database cleanup failed: %v", err))
+	if dbEnvKey := cfgResult.Config.DatabaseEnvKey(); dbEnvKey != "" {
+		if err := database.CleanupBranchDB(entry.Path, dbEnvKey); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: database cleanup failed: %v\n", err)
 		}
 	}
-
-	// Remove worktree.
-	if err := git.WorktreeRemove(dest); err != nil {
-		// If directory is already gone, treat as success.
-		if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
-			return logDeleteError(branch, err.Error())
-		}
+	if err := git.WorktreeRemove(entry.Path, force); err != nil {
+		return err
 	}
-
-	// Delete branch.
-	if err := git.DeleteBranch(branch); err != nil {
-		if !strings.Contains(err.Error(), "not found") {
-			return logDeleteError(branch, err.Error())
-		}
+	if err := git.DeleteBranch(mainRoot, branch, force); err != nil {
+		return err
 	}
-
+	fmt.Fprintf(os.Stderr, "Deleted worktree and branch: %s\n", branch)
+	if samePath(currentRoot, entry.Path) {
+		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
+	}
 	return nil
 }
 
-// logDeleteError writes an error to the delete log file so it can be
-// reported on the next treeman command.
-func logDeleteError(branch, msg string) error {
-	logPath := deleteLogPath()
-	if logPath == "" {
-		return fmt.Errorf("%s", msg)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		return fmt.Errorf("%s", msg)
-	}
-
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func findWorktree(path string) (git.WorktreeEntry, error) {
+	entries, err := git.WorktreeList()
 	if err != nil {
-		return fmt.Errorf("%s", msg)
+		return git.WorktreeEntry{}, err
 	}
-	defer f.Close()
-
-	fmt.Fprintf(f, "delete %s: %s\n", branch, msg)
-	return fmt.Errorf("%s", msg)
+	for _, entry := range entries {
+		if samePath(entry.Path, path) {
+			return entry, nil
+		}
+	}
+	return git.WorktreeEntry{}, fmt.Errorf("path %q is not a linked worktree", path)
 }
 
-// deleteLogPath returns the path to the delete error log.
-func deleteLogPath() string {
-	dir := dataDir()
-	if dir == "" {
-		return ""
-	}
-	return filepath.Join(dir, "delete-errors.log")
+func samePath(a, b string) bool {
+	return canonicalPath(a) == canonicalPath(b)
 }
 
-// dataDir returns the treeman data directory, respecting $XDG_DATA_HOME.
-func dataDir() string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
-		return filepath.Join(xdg, "treeman")
-	}
-	home, err := os.UserHomeDir()
+func canonicalPath(path string) string {
+	abs, err := filepath.Abs(path)
 	if err != nil {
-		return ""
+		return filepath.Clean(path)
 	}
-	return filepath.Join(home, ".local", "share", "treeman")
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(abs)
 }
 
-// reportDeleteErrors reads and displays any errors from background deletions,
-// then clears the log. Called from root PersistentPreRunE.
-func reportDeleteErrors() {
-	logPath := deleteLogPath()
-	if logPath == "" {
-		return
-	}
-
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		return // no log file = no errors
-	}
-
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		return
-	}
-
-	fmt.Fprintf(os.Stderr, "Background deletion error(s):\n")
-	for _, line := range strings.Split(content, "\n") {
-		fmt.Fprintf(os.Stderr, "  %s\n", line)
-	}
-	fmt.Fprintln(os.Stderr, "")
-
-	// Clear the log.
-	os.Remove(logPath)
+func printDeleteConfirmation(path, branch string) {
+	fmt.Fprintln(os.Stderr, "About to delete:")
+	fmt.Fprintf(os.Stderr, "  Worktree: %s\n", path)
+	fmt.Fprintf(os.Stderr, "  Branch:   %s\n\n", branch)
 }
 
-// matchIndex returns the index in displayLines that matches the fzf selection,
-// using ANSI-stripped comparison.
 func matchIndex(displayLines []string, selection string) int {
 	plainSelection := ui.StripANSI(strings.TrimSpace(selection))
 	for i, line := range displayLines {
@@ -366,13 +230,11 @@ func matchIndex(displayLines []string, selection string) int {
 	return -1
 }
 
-// confirmYN prints prompt and reads a y/Y response from stdin.
 func confirmYN(cmd *cobra.Command, prompt string) bool {
 	fmt.Fprint(os.Stderr, prompt)
 	scanner := bufio.NewScanner(cmd.InOrStdin())
 	if scanner.Scan() {
-		answer := strings.TrimSpace(scanner.Text())
-		return strings.EqualFold(answer, "y")
+		return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y")
 	}
 	return false
 }

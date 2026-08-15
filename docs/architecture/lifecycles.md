@@ -48,17 +48,15 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant Parent as TreeMan parent
-    participant Child as Detached delete process
+    participant TreeMan
     participant Git
     participant DB as Branch database
-    Parent->>Parent: protect main worktree and default branch
-    Parent->>Child: start delete with path and branch
-    Parent-->>Parent: return to user
-    Child->>DB: try database cleanup
-    Child->>Git: worktree remove --force
-    Child->>Git: branch -D
-    Child->>Child: append failures to delete error log
+    TreeMan->>Git: verify linked worktree and branch
+    TreeMan->>TreeMan: protect main and default branch; inspect dirty state
+    TreeMan->>DB: try database cleanup
+    TreeMan->>Git: worktree remove
+    TreeMan->>Git: branch -d
+    TreeMan-->>TreeMan: return success or error
 ```
 
-The child reads the environment file before Git removes the worktree.
+TreeMan reads the environment file before Git removes the worktree. `--force` permits deletion of dirty worktrees and unmerged branches.

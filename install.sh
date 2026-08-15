@@ -85,6 +85,50 @@ detect_lazygit_config_dir() {
   fi
 }
 
+download_file() {
+  local url="$1"
+  local destination="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$destination"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$destination" "$url"
+  else
+    echo "Error: curl or wget is required to install TreeMan." >&2
+    exit 1
+  fi
+}
+
+verify_checksum() {
+  local archive="$1"
+  local checksums="$2"
+  local expected
+  local actual
+
+  expected=$(awk -v archive="$(basename "$archive")" '$2 == archive { print $1; exit }' "$checksums")
+  if [[ -z "$expected" ]]; then
+    echo "Error: checksum for $(basename "$archive") was not found." >&2
+    exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$archive" | awk '{ print $1 }')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$archive" | awk '{ print $1 }')
+  else
+    echo "Error: sha256sum or shasum is required to verify the download." >&2
+    exit 1
+  fi
+
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Error: checksum verification failed for $(basename "$archive")." >&2
+    exit 1
+  fi
+}
+
+if [[ "${TREEMAN_INSTALLER_LIB_ONLY:-}" == "1" ]]; then
+  return 0
+fi
+
 # --- Download binary ----------------------------------------------------------
 
 print_step "Installing TreeMan to $BIN_DIR..."
@@ -102,14 +146,9 @@ else
   TMP_DIR=$(mktemp -d)
   trap 'rm -rf "$TMP_DIR"' EXIT
 
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/$TARBALL"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$TMP_DIR/$TARBALL" "$DOWNLOAD_URL"
-  else
-    echo "Error: curl or wget is required to install TreeMan." >&2
-    exit 1
-  fi
+  download_file "$DOWNLOAD_URL" "$TMP_DIR/$TARBALL"
+  download_file "${RELEASE_BASE}/treeman_checksums.txt" "$TMP_DIR/treeman_checksums.txt"
+  verify_checksum "$TMP_DIR/$TARBALL" "$TMP_DIR/treeman_checksums.txt"
 
   tar -xzf "$TMP_DIR/$TARBALL" -C "$TMP_DIR"
   install -m 755 "$TMP_DIR/treeman" "$BINARY"
@@ -241,5 +280,6 @@ echo "  wtb [query]          Check out a remote branch into a worktree"
 echo "  wtpr [pr-number]     Create a review worktree from a GitHub PR"
 echo "  wtmr [pr-number]     Create a review worktree from a GitLab MR"
 echo "  wts  [query]         Switch between worktrees (requires fzf)"
+echo "  wtl                  List worktrees and their state"
 echo "  wtd  [query]         Delete a worktree and its branch (requires fzf)"
 echo "  lg                   Run lazygit with auto-cd"

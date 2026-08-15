@@ -12,6 +12,7 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 | `treeman branch [query]` | `wtb` | Add a remote branch worktree |
 | `treeman review [number]` | `wtpr`, `wtmr` | Add a PR or MR worktree |
 | `treeman switch [query]` | `wts` | Select a worktree path |
+| `treeman list [--json]` | `wtl` | List worktrees and their status |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman init <shell>` | None | Print shell wrappers |
 | `treeman version` | None | Print build data |
@@ -68,19 +69,28 @@ It prints the selected path to stdout. It returns success without output when yo
 
 ```text
 treeman delete [query]
-treeman delete --path <path> --branch <branch> [--yes]
+treeman delete --path <path> --branch <branch> [--yes] [--force]
 ```
 
 `delete` has alias `wtd`. Interactive deletion requires `fzf`. It excludes the main worktree.
 
 `--path` and `--branch` use direct mode. Direct mode requires both flags. `--yes` and `-y` skip confirmation.
 
-TreeMan protects the main worktree and detected default branch. It then starts a detached deletion process. The process cleans a branch database, removes the worktree, and deletes the branch.
+TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion cleans a branch database, removes the worktree, and deletes the branch before the command returns.
 
-> [!warning]
-> Direct mode does not verify that the supplied path is a linked worktree. Use it only with trusted paths and branches.
+TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files. `--yes` skips the confirmation prompt but does not bypass safety checks.
 
-`--background` is an internal hidden flag. Do not use it directly.
+When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so the `wtd` shell wrapper can change directory safely.
+
+## `list`
+
+```text
+treeman list [--json]
+```
+
+List the repository worktrees with branch, path, main, current, and dirty state. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, and `detached` fields for scripts and agents.
+
+`wtl` is a shell shortcut for `treeman list`.
 
 ## `init`
 
@@ -89,7 +99,7 @@ treeman init bash
 treeman init zsh
 ```
 
-This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
+This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
 
 `lg` starts lazygit. It changes the directory when lazygit writes a new-directory file.
 

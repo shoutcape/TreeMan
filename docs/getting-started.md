@@ -66,9 +66,9 @@ Select a linked worktree.
 wtd
 ```
 
-TreeMan asks for confirmation. It starts deletion in a detached process. The command can return before deletion ends.
+TreeMan asks for confirmation and completes deletion before it returns. When you delete the current worktree, the `wtd` wrapper changes back to the main worktree.
 
 > [!warning]
-> Deletion uses `git worktree remove --force` and `git branch -D`. It can remove uncommitted and untracked files.
+> TreeMan refuses to delete a dirty worktree or unmerged branch. Use `--force` only when you intend to remove changed or untracked files.
 
 Read [Workflows](guides/workflows.md) before you use direct deletion in a script.

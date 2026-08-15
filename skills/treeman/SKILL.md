@@ -50,16 +50,19 @@ Capture the printed path and use it as the working directory. TreeMan detects Gi
 
 `treeman switch` prints a path but cannot change an agent's parent shell directory. Use the selected or known path through the tool working-directory option instead.
 
+## List Worktrees
+
+Use `treeman list --json` to discover existing worktrees. It reports stable path, branch, main, current, dirty, and detached fields without an interactive picker.
+
 ## Delete a Worktree
 
-Deletion uses forced Git removal and can remove uncommitted and untracked files. Do not delete a worktree unless the user explicitly asks.
+Do not delete a worktree unless the user explicitly asks. TreeMan refuses dirty worktrees and unmerged branches unless `--force` is specified.
 
 Before direct deletion:
 
-1. Confirm the supplied path and branch occur together in `git worktree list --porcelain`.
+1. Use `treeman list --json` to identify the exact path and branch.
 2. Confirm the target is not the main worktree or default branch.
-3. Check for uncommitted and untracked files in the target worktree.
-4. Ask for confirmation when files would be removed.
+3. Do not add `--force` unless the user explicitly accepts removal of changed and untracked files.
 
 After confirmation, run:
 

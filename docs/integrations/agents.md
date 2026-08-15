@@ -30,9 +30,11 @@ The `skills` command uses the open Agent Skills format. The TreeMan skill source
 
 The skill tells an agent to use native `treeman` commands. Shell wrappers cannot change an agent parent shell directory.
 
+Use `treeman list --json` when an agent needs to discover existing worktrees. The command reports each path, branch, main and current markers, dirty state, and detached state without requiring an interactive picker.
+
 For a new feature, the agent runs `treeman create <branch>`. It reads the printed worktree path. It uses that path for later commands.
 
-The skill does not permit deletion without an explicit user request. It requires checks before direct deletion because TreeMan uses forced Git removal.
+The skill does not permit deletion without an explicit user request. TreeMan verifies direct deletion targets and refuses dirty worktrees unless the command explicitly uses `--force`.
 
 ## Requirements
 
