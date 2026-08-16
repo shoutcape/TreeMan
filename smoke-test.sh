@@ -175,16 +175,20 @@ assert_missing "$TEST_HOME/.config/fish/config.fish"
 # and changes directory without requiring a Git repository.
 FISH_WRAPPER_TARGET="$TMP_DIR/fish-wrapper-target"
 mkdir -p "$FISH_WRAPPER_TARGET"
-fish -c '
-  source "$argv[1]"
-  function treeman
-    test "$argv[1]" = create; or return 1
-    test "$argv[2]" = fish-test; or return 1
-    printf "%s\\n" "$argv[3]"
-  end
-  wt fish-test "$argv[2]"
-  test (pwd) = "$argv[2]"
-' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET"
+if command -v fish >/dev/null 2>&1; then
+  fish -c '
+    source "$argv[1]"
+    function treeman
+      test "$argv[1]" = create; or return 1
+      test "$argv[2]" = fish-test; or return 1
+      printf "%s\\n" "$argv[3]"
+    end
+    wt fish-test "$argv[2]"
+    test (pwd) = "$argv[2]"
+  ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET"
+else
+  echo "warning: Fish is not installed. Skipping Fish wrapper runtime test."
+fi
 
 # A Fish-like line with a different install path must survive removal.
 printf '# TreeMan\nset -gx PATH "/opt/unrelated/bin" $PATH\ntreeman init fish | source\n' >> "$FISH_CONFIG"
