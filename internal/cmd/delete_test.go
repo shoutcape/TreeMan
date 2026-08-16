@@ -22,6 +22,6 @@ func TestPickerSelectionIndex_InvalidIdentity(t *testing.T) {
 	assert.Equal(t, -1, pickerSelectionIndex("worktree\tnot-a-number", 2))
 }
 
-func TestPickerArgs_ExplainControls(t *testing.T) {
-	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--header=enter: select | esc: cancel")
+func TestPickerArgs_PreservePrompt(t *testing.T) {
+	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--prompt=switch > ")
 }

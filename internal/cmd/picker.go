@@ -16,7 +16,6 @@ func pickerArgs(label, prompt string) []string {
 		"--delimiter=\t",
 		"--with-nth=1",
 		"--border-label", label,
-		"--header=enter: select | esc: cancel",
 		"--prompt=" + prompt,
 		"--select-1",
 		"--exit-0",
