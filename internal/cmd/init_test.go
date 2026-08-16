@@ -48,6 +48,14 @@ func TestRootCmd_HasNoOpenCommand(t *testing.T) {
 	assert.Equal(t, root, cmd)
 }
 
+func TestRootCmd_HasDoctorCommand(t *testing.T) {
+	root := New("test", "", "")
+	command, _, err := root.Find([]string{"doctor"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "doctor", command.Name())
+}
+
 func TestRootCmd_VersionFlags(t *testing.T) {
 	for _, flag := range []string{"--version", "-v"} {
 		t.Run(flag, func(t *testing.T) {
