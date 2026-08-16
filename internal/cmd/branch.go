@@ -20,6 +20,7 @@ import (
 )
 
 func newBranchCmd() *cobra.Command {
+	var setupOptions creationSetupOptions
 	cmd := &cobra.Command{
 		Use:   "branch [query]",
 		Short: "Create a worktree from a remote branch",
@@ -43,14 +44,19 @@ can cd into it.`,
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runBranch(cmd, query)
+			return runBranchWithSetup(cmd, query, setupOptions)
 		},
 	}
+	addCreationSetupFlags(cmd, &setupOptions)
 
 	return cmd
 }
 
 func runBranch(cmd *cobra.Command, query string) error {
+	return runBranchWithSetup(cmd, query, creationSetupOptions{})
+}
+
+func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions) error {
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -151,60 +157,71 @@ func runBranch(cmd *cobra.Command, query string) error {
 	}
 
 	// Copy .env* files.
-	envResult, envErr := envfile.Copy(mainRoot, worktreePath)
-	if envErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not copy env files: %v\n", envErr)
-	} else if len(envResult.Copied) > 0 {
-		for _, f := range envResult.Copied {
-			fmt.Fprintf(os.Stderr, "  Copied %s\n", f)
+	if !setupOptions.skipEnv {
+		envResult, envErr := envfile.Copy(mainRoot, worktreePath)
+		if envErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not copy env files: %v\n", envErr)
+		} else if len(envResult.Copied) > 0 {
+			for _, f := range envResult.Copied {
+				fmt.Fprintf(os.Stderr, "  Copied %s\n", f)
+			}
+			fmt.Fprintf(os.Stderr, "Copied %d env file(s) from main worktree.\n", len(envResult.Copied))
 		}
-		fmt.Fprintf(os.Stderr, "Copied %d env file(s) from main worktree.\n", len(envResult.Copied))
 	}
 
 	// Load project config for database management.
-	cfgResult := config.Load(mainRoot)
-	if cfgResult.Warning != "" {
-		fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
+	var cfgResult config.LoadResult
+	if !setupOptions.skipDatabase || !setupOptions.skipHooks {
+		cfgResult = config.Load(mainRoot)
+		if cfgResult.Warning != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
+		}
 	}
 
 	// Set up branch-specific database (best-effort, non-fatal).
-	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-	dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
-	switch {
-	case dbErr != nil:
-		fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
-	case dbResult.Skipped:
-		// No config, no env key, or not a postgres URI -- silently skip.
-	default:
-		fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+	if !setupOptions.skipDatabase {
+		dbEnvKey := cfgResult.Config.DatabaseEnvKey()
+		dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
+		switch {
+		case dbErr != nil:
+			fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
+		case dbResult.Skipped:
+			// No config, no env key, or not a postgres URI -- silently skip.
+		default:
+			fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+		}
 	}
 
 	// Install dependencies.
-	fmt.Fprintln(os.Stderr, "Detecting dependencies...")
-	installResult, installErr := deps.Install(worktreePath)
-	switch {
-	case installErr != nil:
-		fmt.Fprintf(os.Stderr, "Warning: dependency installation failed: %v\n", installErr)
-	case installResult.Python:
-		fmt.Fprintln(os.Stderr, "Detected Python project -- skipping auto-install (activate your venv manually).")
-	case installResult.Skipped:
-		fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
-	case installResult.Installer != nil:
-		fmt.Fprintf(os.Stderr, "Detected %s -- running %s %s...\n",
-			installResult.Installer.Lockfile,
-			installResult.Installer.Binary,
-			joinArgs(installResult.Installer.Args),
-		)
+	if !setupOptions.skipDeps {
+		fmt.Fprintln(os.Stderr, "Detecting dependencies...")
+		installResult, installErr := deps.Install(worktreePath)
+		switch {
+		case installErr != nil:
+			fmt.Fprintf(os.Stderr, "Warning: dependency installation failed: %v\n", installErr)
+		case installResult.Python:
+			fmt.Fprintln(os.Stderr, "Detected Python project -- skipping auto-install (activate your venv manually).")
+		case installResult.Skipped:
+			fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
+		case installResult.Installer != nil:
+			fmt.Fprintf(os.Stderr, "Detected %s -- running %s %s...\n",
+				installResult.Installer.Lockfile,
+				installResult.Installer.Binary,
+				joinArgs(installResult.Installer.Args),
+			)
+		}
 	}
 
 	// Run post-create hooks (best-effort, non-fatal).
-	if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-		fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
-		for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
-			if r.Err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: hook %q failed: %v\n", r.Command, r.Err)
-			} else {
-				fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
+	if !setupOptions.skipHooks {
+		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
+			fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
+			for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
+				if r.Err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: hook %q failed: %v\n", r.Command, r.Err)
+				} else {
+					fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
+				}
 			}
 		}
 	}
@@ -217,6 +234,7 @@ func runBranch(cmd *cobra.Command, query string) error {
 		fmt.Fprintf(os.Stderr, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
 	fmt.Fprintf(os.Stderr, "  Path:   %s\n", worktreePath)
+	setupOptions.printSkipped(os.Stderr)
 
 	// Print path to stdout so the shell wrapper can cd into it.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)

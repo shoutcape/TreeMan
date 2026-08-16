@@ -22,7 +22,7 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 ## `create`
 
 ```text
-treeman create <branch-name>
+treeman create <branch-name> [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
 Create a local branch from the fetched default branch. TreeMan supports only `main` and `master` as default branch names.
@@ -31,10 +31,12 @@ The command fails when the branch or target directory exists. It creates `.workt
 
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
+Use any `--skip-*` flag to omit its named optional setup action. Requested skips appear in the final summary.
+
 ## `branch`
 
 ```text
-treeman branch [query]
+treeman branch [query] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
 `branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all paginated remote branches from the detected forge and uses `fzf`.
@@ -46,7 +48,7 @@ After selection, TreeMan fetches the branch, creates a local branch, and tries t
 ## `review`
 
 ```text
-treeman review [pr-number]
+treeman review [pr-number] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
 `review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
