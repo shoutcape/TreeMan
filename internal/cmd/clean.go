@@ -41,18 +41,14 @@ func runClean(cmd *cobra.Command, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	currentRoot, err := git.CurrentWorktreeRoot()
-	if err != nil {
-		return err
-	}
 	mergedBranches, err := git.MergedBranches("origin/" + defaultBranch)
 	if err != nil {
 		return err
 	}
 
-	removed := 0
+	var candidates []git.WorktreeEntry
 	for _, entry := range entries {
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || samePath(entry.Path, currentRoot) || !mergedBranches[entry.Branch] {
+		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || !mergedBranches[entry.Branch] {
 			continue
 		}
 		dirty, err := git.WorktreeDirty(entry.Path)
@@ -62,6 +58,24 @@ func runClean(cmd *cobra.Command, dryRun bool) error {
 		if dirty {
 			continue
 		}
+		candidates = append(candidates, entry)
+	}
+
+	// Remove the current worktree last. Removing it invalidates the process
+	// working directory, but deleteWorktree emits mainRoot for the shell wrapper.
+	currentRoot, err := git.CurrentWorktreeRoot()
+	if err != nil {
+		return err
+	}
+	for i := range candidates {
+		if samePath(candidates[i].Path, currentRoot) {
+			candidates = append(append(candidates[:i:i], candidates[i+1:]...), candidates[i])
+			break
+		}
+	}
+
+	removed := 0
+	for _, entry := range candidates {
 		if dryRun {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", entry.Path)
 			removed++

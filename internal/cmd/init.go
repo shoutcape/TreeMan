@@ -54,7 +54,9 @@ wtl() {
 }
 
 wtc() {
-  treeman clean "$@"
+  local _tm_dir
+  _tm_dir=$(treeman clean "$@") || return $?
+  [ -n "$_tm_dir" ] && cd "$_tm_dir"
 }
 
 wtd() {
