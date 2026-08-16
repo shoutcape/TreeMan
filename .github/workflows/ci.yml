@@ -19,6 +19,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install Fish
+        run: sudo apt-get update && sudo apt-get install --yes fish
+
       - name: Format check
         run: test -z "$(gofmt -l .)"
 

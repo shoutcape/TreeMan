@@ -50,6 +50,8 @@ detect_platform() {
 detect_shell_rc() {
   if [[ -n "$ZSH_VERSION" ]] || [[ "$SHELL" == */zsh ]]; then
     echo "$HOME/.zshrc"
+  elif [[ "$SHELL" == */fish ]]; then
+    echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
   elif [[ -n "$BASH_VERSION" ]] || [[ "$SHELL" == */bash ]]; then
     if [[ -f "$HOME/.bashrc" ]]; then
       echo "$HOME/.bashrc"
@@ -69,6 +71,8 @@ detect_shell_rc() {
 detect_shell_name() {
   if [[ -n "$ZSH_VERSION" ]] || [[ "$SHELL" == */zsh ]]; then
     echo "zsh"
+  elif [[ "$SHELL" == */fish ]]; then
+    echo "fish"
   else
     echo "bash"
   fi
@@ -161,12 +165,18 @@ print_done
 SOURCE_MARKER="# TreeMan"
 PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
 EVAL_LINE="eval \"\$(treeman init ${SHELL_NAME})\""
+if [[ "$SHELL_NAME" == "fish" ]]; then
+  PATH_LINE="set -gx PATH \"${BIN_DIR}\" \$PATH"
+  EVAL_LINE="treeman init fish | source"
+fi
 
 print_step "Adding TreeMan to $SHELL_RC..."
 
 if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
   print_warn "TreeMan already present in $SHELL_RC, skipping."
 else
+  mkdir -p "$(dirname "$SHELL_RC")"
+  touch "$SHELL_RC"
   printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$EVAL_LINE" >> "$SHELL_RC"
   print_done
 fi

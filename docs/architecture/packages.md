@@ -16,7 +16,7 @@
 | `internal/cmd/review.go` | PR and MR review worktrees |
 | `internal/cmd/switch.go` | Worktree path selection |
 | `internal/cmd/delete.go` | Interactive and direct worktree deletion |
-| `internal/cmd/init.go` | Bash and Zsh wrapper text |
+| `internal/cmd/init.go` | Bash, Zsh, and Fish wrapper text |
 | `internal/cmd/version.go` | Version output |
 
 ## Domain and Runtime Packages

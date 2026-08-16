@@ -36,6 +36,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "treeman list")
 	assert.Contains(t, out, "treeman clean")
 	assert.Contains(t, out, "treeman delete")
+	assert.Contains(t, out, "if [ \"${1:-}\" = \"--dry-run\" ]; then")
 	assert.Contains(t, out, "_tm_dir=$(treeman clean \"$@\") || return $?")
 	assert.Contains(t, out, "_tm_dir=$(treeman delete \"$@\") || return $?")
 	assert.Contains(t, out, "[ -n \"$_tm_dir\" ] && cd \"$_tm_dir\"")
@@ -95,9 +96,26 @@ func TestInitCmd_Zsh(t *testing.T) {
 	assert.Contains(t, out, "~/.zshrc")
 }
 
+func TestInitCmd_Fish(t *testing.T) {
+	root := New("test", "", "")
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetArgs([]string{"init", "fish"})
+	require.NoError(t, root.Execute())
+
+	out := buf.String()
+	assert.Contains(t, out, "treeman init fish | source")
+	assert.Contains(t, out, "function wt")
+	assert.Contains(t, out, "set -l _tm_dir (treeman create $argv); or return $status")
+	assert.Contains(t, out, "test -n \"$_tm_dir\"; and cd \"$_tm_dir\"")
+	assert.Contains(t, out, "if contains -- --dry-run $argv")
+	assert.Contains(t, out, "set -l _tm_dir (treeman clean $argv); or return $status")
+	assert.Contains(t, out, "function lg")
+}
+
 func TestInitCmd_UnsupportedShell(t *testing.T) {
 	root := New("test", "", "")
-	root.SetArgs([]string{"init", "fish"})
+	root.SetArgs([]string{"init", "powershell"})
 	err := root.Execute()
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "unsupported shell"))

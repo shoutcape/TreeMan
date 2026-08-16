@@ -4,7 +4,7 @@
 
 TreeMan creates runnable, isolated Git worktrees for developers and coding agents. It copies environment files, installs dependencies, runs hooks, and can create a branch-specific PostgreSQL database.
 
-TreeMan has one compiled binary. Shell wrappers support Bash and Zsh.
+TreeMan has one compiled binary. Shell wrappers support Bash, Zsh, and Fish.
 
 ## Install
 

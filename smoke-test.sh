@@ -157,6 +157,47 @@ assert_file_not_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init zsh)"'
 assert_file_contains "$TEST_HOME/.bashrc" 'export UNRELATED_SHELL_SETTING=keep'
 assert_file_not_contains "$LAZYGIT_CONFIG_DIR/config.yml" '# TreeMan'
 
+# Fish integration uses XDG_CONFIG_HOME and is removable.
+FISH_CONFIG="$TEST_HOME/nonstandard-config/fish/config.fish"
+SHELL=/usr/bin/fish \
+  TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
+  TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
+  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
+  XDG_CONFIG_HOME="$TEST_HOME/nonstandard-config" \
+  bash "$SCRIPT_DIR/install.sh"
+
+assert_file_contains "$FISH_CONFIG" '# TreeMan'
+assert_file_contains "$FISH_CONFIG" "set -gx PATH \"$TEST_HOME/.treeman-fish-install-test/bin\" \$PATH"
+assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
+assert_missing "$TEST_HOME/.config/fish/config.fish"
+
+# Source the installed Fish configuration. Verify a wrapper forwards arguments
+# and changes directory without requiring a Git repository.
+FISH_WRAPPER_TARGET="$TMP_DIR/fish-wrapper-target"
+mkdir -p "$FISH_WRAPPER_TARGET"
+fish -c '
+  source "$argv[1]"
+  function treeman
+    test "$argv[1]" = create; or return 1
+    test "$argv[2]" = fish-test; or return 1
+    printf "%s\\n" "$argv[3]"
+  end
+  wt fish-test "$argv[2]"
+  test (pwd) = "$argv[2]"
+' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET"
+
+# A Fish-like line with a different install path must survive removal.
+printf '# TreeMan\nset -gx PATH "/opt/unrelated/bin" $PATH\ntreeman init fish | source\n' >> "$FISH_CONFIG"
+
+TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
+  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
+  XDG_CONFIG_HOME="$TEST_HOME/nonstandard-config" \
+  bash "$SCRIPT_DIR/uninstall.sh"
+
+assert_file_count "$FISH_CONFIG" '# TreeMan' '1'
+assert_file_contains "$FISH_CONFIG" 'set -gx PATH "/opt/unrelated/bin" $PATH'
+assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
+
 # ---------------------------------------------------------------------------
 # repository setup
 # ---------------------------------------------------------------------------
