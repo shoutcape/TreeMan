@@ -1,6 +1,7 @@
 package validate_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/validate"
@@ -48,29 +49,47 @@ func TestBranchName_Invalid(t *testing.T) {
 }
 
 func TestPRNumber_Valid(t *testing.T) {
-	valid := []string{"1", "123", "9999"}
-	for _, s := range valid {
-		t.Run(s, func(t *testing.T) {
-			assert.NoError(t, validate.PRNumber(s))
+	maxInt := int(^uint(0) >> 1)
+	valid := []struct {
+		input string
+		want  int
+	}{
+		{"1", 1},
+		{"123", 123},
+		{"9999", 9999},
+		{strconv.Itoa(maxInt), maxInt},
+	}
+	for _, tt := range valid {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := validate.PRNumber(tt.input)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 func TestPRNumber_Invalid(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
+		name    string
+		input   string
+		wantErr string
 	}{
-		{"empty string", ""},
-		{"letters", "abc"},
-		{"decimal", "12.3"},
-		{"negative", "-1"},
-		{"mixed", "12abc"},
-		{"leading hash", "#123"},
+		{"empty string", "", ""},
+		{"zero", "0", ""},
+		{"letters", "abc", ""},
+		{"decimal", "12.3", ""},
+		{"negative", "-1", ""},
+		{"mixed", "12abc", ""},
+		{"leading hash", "#123", ""},
+		{"overflow", "999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999", "too large"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Error(t, validate.PRNumber(tt.input))
+			_, err := validate.PRNumber(tt.input)
+			assert.Error(t, err)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+			}
 		})
 	}
 }

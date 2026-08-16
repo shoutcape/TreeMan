@@ -84,10 +84,10 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 			return err
 		}
 	} else {
-		if err := validate.PRNumber(prArg); err != nil {
+		prNumber, err = validate.PRNumber(prArg)
+		if err != nil {
 			return fmt.Errorf("usage: treeman review [pr-number]\n%w", err)
 		}
-		prNumber, _ = strconv.Atoi(prArg)
 	}
 
 	// Fetch PR/MR metadata.
