@@ -26,7 +26,6 @@ TMP_DIR=$(cd "$TMP_DIR" && pwd -P)
 
 TEST_HOME="$TMP_DIR/home"
 LAZYGIT_CONFIG_DIR="$TMP_DIR/lazygit"
-FISH_CONFIG="$TEST_HOME/.config/fish/config.fish"
 MOCK_BIN="$TMP_DIR/bin"
 NO_JQ_BIN="$TMP_DIR/no-jq-bin"
 REMOTE_REPO="$TMP_DIR/remote.git"
@@ -158,7 +157,8 @@ assert_file_not_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init zsh)"'
 assert_file_contains "$TEST_HOME/.bashrc" 'export UNRELATED_SHELL_SETTING=keep'
 assert_file_not_contains "$LAZYGIT_CONFIG_DIR/config.yml" '# TreeMan'
 
-# Fish integration creates its missing configuration directory and is removable.
+# Fish integration uses XDG_CONFIG_HOME and is removable.
+FISH_CONFIG="$TEST_HOME/nonstandard-config/fish/config.fish"
 SHELL=/usr/bin/fish \
   TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
   TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
@@ -169,7 +169,22 @@ SHELL=/usr/bin/fish \
 assert_file_contains "$FISH_CONFIG" '# TreeMan'
 assert_file_contains "$FISH_CONFIG" "set -gx PATH \"$TEST_HOME/.treeman-fish-install-test/bin\" \$PATH"
 assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
-assert_missing "$TEST_HOME/nonstandard-config/fish/config.fish"
+assert_missing "$TEST_HOME/.config/fish/config.fish"
+
+# Source the installed Fish configuration. Verify a wrapper forwards arguments
+# and changes directory without requiring a Git repository.
+FISH_WRAPPER_TARGET="$TMP_DIR/fish-wrapper-target"
+mkdir -p "$FISH_WRAPPER_TARGET"
+fish -c '
+  source "$argv[1]"
+  function treeman
+    test "$argv[1]" = create; or return 1
+    test "$argv[2]" = fish-test; or return 1
+    printf "%s\\n" "$argv[3]"
+  end
+  wt fish-test "$argv[2]"
+  test (pwd) = "$argv[2]"
+' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET"
 
 # A Fish-like line with a different install path must survive removal.
 printf '# TreeMan\nset -gx PATH "/opt/unrelated/bin" $PATH\ntreeman init fish | source\n' >> "$FISH_CONFIG"

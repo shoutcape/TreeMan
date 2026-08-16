@@ -30,7 +30,7 @@ Add one command to your shell startup file.
 eval "$(treeman init zsh)"
 ```
 
-Use `bash` instead of `zsh` for Bash. For Fish, add this command to `~/.config/fish/config.fish`.
+Use `bash` instead of `zsh` for Bash. For Fish, add this command to `$XDG_CONFIG_HOME/fish/config.fish`. Use `~/.config/fish/config.fish` when `XDG_CONFIG_HOME` is not set.
 
 ```fish
 treeman init fish | source

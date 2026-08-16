@@ -51,7 +51,7 @@ detect_shell_rc() {
   if [[ -n "$ZSH_VERSION" ]] || [[ "$SHELL" == */zsh ]]; then
     echo "$HOME/.zshrc"
   elif [[ "$SHELL" == */fish ]]; then
-    echo "$HOME/.config/fish/config.fish"
+    echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
   elif [[ -n "$BASH_VERSION" ]] || [[ "$SHELL" == */bash ]]; then
     if [[ -f "$HOME/.bashrc" ]]; then
       echo "$HOME/.bashrc"

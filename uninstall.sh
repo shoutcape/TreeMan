@@ -54,7 +54,7 @@ remove_from_rc() {
 remove_from_rc "$HOME/.zshrc"
 remove_from_rc "$HOME/.bashrc"
 remove_from_rc "$HOME/.bash_profile"
-remove_from_rc "$HOME/.config/fish/config.fish"
+remove_from_rc "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
 
 print_step "Removing $INSTALL_DIR..."
 if [[ -d "$INSTALL_DIR" ]]; then
