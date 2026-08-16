@@ -17,6 +17,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const databaseDocsURL = "https://github.com/shoutcape/TreeMan/blob/main/docs/integrations/postgresql.md"
+
 func newCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <branch-name>",
@@ -114,17 +116,19 @@ func runCreate(cmd *cobra.Command, branch string) error {
 
 	// Set up branch-specific database (best-effort, non-fatal).
 	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-	dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
-	databaseStatus := "skipped"
-	switch {
-	case dbErr != nil:
-		fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
-		databaseStatus = fmt.Sprintf("failed: %v", dbErr)
-	case dbResult.Skipped:
-		// No config, no env key, or not a postgres URI -- silently skip.
-	default:
-		fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
-		databaseStatus = fmt.Sprintf("completed: created %s", dbResult.DBName)
+	databaseStatus := "skipped (database management not configured)"
+	if dbEnvKey != "" {
+		dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
+		switch {
+		case dbErr != nil:
+			fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
+			databaseStatus = fmt.Sprintf("failed: %v", dbErr)
+		case dbResult.Skipped:
+			databaseStatus = fmt.Sprintf("skipped (no PostgreSQL URI found for %s)", dbEnvKey)
+		default:
+			fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+			databaseStatus = fmt.Sprintf("completed: created %s", dbResult.DBName)
+		}
 	}
 
 	// Install dependencies.
@@ -171,6 +175,7 @@ func runCreate(cmd *cobra.Command, branch string) error {
 		dependencies: dependenciesStatus,
 		database:     databaseStatus,
 		hooks:        hooksStatus,
+		databaseDocs: strings.HasPrefix(databaseStatus, "skipped"),
 	})
 	fmt.Fprintln(os.Stderr, "Worktree ready:")
 	fmt.Fprintf(os.Stderr, "  Branch: %s\n", branch)
@@ -187,6 +192,7 @@ type setupSummary struct {
 	dependencies string
 	database     string
 	hooks        string
+	databaseDocs bool
 }
 
 func printSetupSummary(w io.Writer, summary setupSummary) {
@@ -195,6 +201,9 @@ func printSetupSummary(w io.Writer, summary setupSummary) {
 	fmt.Fprintf(w, "  Dependencies: %s\n", summary.dependencies)
 	fmt.Fprintf(w, "  Database:     %s\n", summary.database)
 	fmt.Fprintf(w, "  Hooks:        %s\n", summary.hooks)
+	if summary.databaseDocs {
+		fmt.Fprintf(w, "  Configure:    %s\n", databaseDocsURL)
+	}
 }
 
 func summarizeHooks(results []hooks.RunResult) string {

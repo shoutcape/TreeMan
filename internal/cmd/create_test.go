@@ -40,3 +40,17 @@ func TestSummarizeHooks_AllSucceed(t *testing.T) {
 
 	assert.Equal(t, "completed: 1 succeeded", status)
 }
+
+func TestPrintSetupSummary_DatabaseSkippedIncludesConfigurationLink(t *testing.T) {
+	var output bytes.Buffer
+
+	printSetupSummary(&output, setupSummary{
+		environment:  "skipped (no environment files found)",
+		dependencies: "skipped",
+		database:     "skipped (database management not configured)",
+		hooks:        "skipped (no post-create hooks configured)",
+		databaseDocs: true,
+	})
+
+	assert.Contains(t, output.String(), "  Configure:    "+databaseDocsURL+"\n")
+}
