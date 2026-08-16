@@ -94,6 +94,8 @@ func writeListJSON(cmd *cobra.Command, entries []listEntry) error {
 func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "\n%sWORKTREES%s\n\n", ui.ColorCyan, ui.ColorReset)
+	fmt.Fprintln(out, "Markers: M main worktree; ▶ current worktree. Status: CLEAN no changes; DIRTY changes; DETACHED no branch.")
+	fmt.Fprintln(out)
 	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-6s  %-27s  %-25s\n", ui.ColorDim, "MARKERS", ui.ColorReset, "STATUS", "MERGED", "BRANCH", "PATH")
 	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-6s  %-27s  %-25s\n", ui.ColorDim, "───────", ui.ColorReset, "──────", "──────", "───────────────────────────", "─────────────────────────")
 	for _, entry := range entries {

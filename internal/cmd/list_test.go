@@ -24,7 +24,19 @@ func TestWriteListHuman(t *testing.T) {
 		{Path: "/repo/.worktrees/review", Detached: true},
 	})
 
-	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                       PATH                     \n    ───────  ──────    ──────  ───────────────────────────  ─────────────────────────\n    M▶       CLEAN             main                         /repo\n             DIRTY     YES     feature                      /repo/.worktrees/feature\n             DETACHED          (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
+	assert.Equal(t, "\nWORKTREES\n\nMarkers: M main worktree; ▶ current worktree. Status: CLEAN no changes; DIRTY changes; DETACHED no branch.\n\n    MARKERS  STATUS    MERGED  BRANCH                       PATH                     \n    ───────  ──────    ──────  ───────────────────────────  ─────────────────────────\n    M▶       CLEAN             main                         /repo\n             DIRTY     YES     feature                      /repo/.worktrees/feature\n             DETACHED          (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
+}
+
+func TestWriteListHumanWithoutColor(t *testing.T) {
+	require.NoError(t, ui.ConfigureColor("never", &bytes.Buffer{}, false))
+	t.Cleanup(func() { require.NoError(t, ui.ConfigureColor("always", &bytes.Buffer{}, false)) })
+
+	buf := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+	writeListHuman(cmd, []listEntry{{Path: "/repo", Branch: "main"}})
+
+	assert.NotContains(t, buf.String(), "\033[")
 }
 
 func TestWriteListJSON(t *testing.T) {

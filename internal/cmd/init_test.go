@@ -82,6 +82,15 @@ func TestRootCmd_OverviewDiffersFromHelp(t *testing.T) {
 	assert.NotEqual(t, overview.String(), help.String())
 }
 
+func TestRootCmd_RejectsInvalidColorMode(t *testing.T) {
+	root := New("test", "", "")
+	root.SetArgs([]string{"--color=sometimes", "init", "bash"})
+
+	err := root.Execute()
+
+	assert.EqualError(t, err, `invalid color mode "sometimes": use auto, always, or never`)
+}
+
 func TestInitCmd_Zsh(t *testing.T) {
 	root := New("test", "", "")
 	buf := &bytes.Buffer{}

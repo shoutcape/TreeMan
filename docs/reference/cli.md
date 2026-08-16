@@ -1,6 +1,6 @@
 # Command Reference
 
-Run `treeman --help` for current command help. TreeMan sends status and warnings to stderr. Commands that select or create worktrees can send a path to stdout.
+Run `treeman --help` for current command help. TreeMan sends status and warnings to stderr. Commands that select or create worktrees can send a path to stdout. Use `--color auto`, `--color always`, or `--color never` to control ANSI color. `auto` uses color only on a terminal. A non-empty `NO_COLOR` disables color for all modes.
 
 Shell wrappers use stdout to change the current shell directory. Native commands never change the caller directory.
 
@@ -89,7 +89,7 @@ When the deleted worktree is the current directory, TreeMan prints the main work
 treeman list [--json]
 ```
 
-List the repository worktrees with branch, path, main, current, dirty, and merged state. TreeMan fetches the default branch before checking merge state. A `YES` value in the `MERGED` column means the local branch is merged into the default branch on `origin`. If `origin` is unavailable, merged state is left blank. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields for scripts and agents.
+List the repository worktrees with branch, path, main, current, dirty, and merged state. `M` marks the main worktree and `▶` marks the current worktree. `CLEAN` means no changes, `DIRTY` means changes, and `DETACHED` means no branch. TreeMan fetches the default branch before checking merge state. A `YES` value in the `MERGED` column means the local branch is merged into the default branch on `origin`. If `origin` is unavailable, merged state is left blank. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields for scripts and agents.
 
 `wtl` is a shell shortcut for `treeman list`.
 
