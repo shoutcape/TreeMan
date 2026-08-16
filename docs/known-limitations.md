@@ -29,4 +29,4 @@ This document describes current behavior. It is not a product roadmap.
 ## Platform Support
 
 - Release binaries support Linux and macOS only.
-- Shell wrappers support Bash and Zsh only.
+- Shell wrappers support Bash, Zsh, and Fish.

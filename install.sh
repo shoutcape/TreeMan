@@ -166,6 +166,7 @@ SOURCE_MARKER="# TreeMan"
 PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
 EVAL_LINE="eval \"\$(treeman init ${SHELL_NAME})\""
 if [[ "$SHELL_NAME" == "fish" ]]; then
+  PATH_LINE="set -gx PATH \"${BIN_DIR}\" \$PATH"
   EVAL_LINE="treeman init fish | source"
 fi
 

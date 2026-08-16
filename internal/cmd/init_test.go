@@ -107,6 +107,7 @@ func TestInitCmd_Fish(t *testing.T) {
 	assert.Contains(t, out, "function wt")
 	assert.Contains(t, out, "set -l _tm_dir (treeman create $argv); or return $status")
 	assert.Contains(t, out, "test -n \"$_tm_dir\"; and cd \"$_tm_dir\"")
+	assert.Contains(t, out, "set -l _tm_dir (treeman clean $argv); or return $status")
 	assert.Contains(t, out, "function lg")
 }
 

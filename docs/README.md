@@ -42,6 +42,6 @@ TreeMan makes and manages Git worktrees. It uses a local branch for each worktre
 | Item | Support |
 | --- | --- |
 | Release binaries | Linux and macOS on amd64 and arm64 |
-| Shell wrappers | Bash and Zsh |
+| Shell wrappers | Bash, Zsh, and Fish |
 | Forge services | GitHub and GitLab |
 | Branch database | PostgreSQL in Docker |

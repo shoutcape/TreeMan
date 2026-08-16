@@ -122,7 +122,8 @@ function wtl
 end
 
 function wtc
-  treeman clean $argv
+  set -l _tm_dir (treeman clean $argv); or return $status
+  test -n "$_tm_dir"; and cd "$_tm_dir"
 end
 
 function wtd

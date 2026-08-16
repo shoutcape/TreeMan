@@ -166,17 +166,18 @@ SHELL=/usr/bin/fish \
   bash "$SCRIPT_DIR/install.sh"
 
 assert_file_contains "$FISH_CONFIG" '# TreeMan'
+assert_file_contains "$FISH_CONFIG" "set -gx PATH \"$TEST_HOME/.treeman-fish-install-test/bin\" \$PATH"
 assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
 
 # A Fish-like line with a different install path must survive removal.
-printf '# TreeMan\nexport PATH="/opt/unrelated/bin:$PATH"\ntreeman init fish | source\n' >> "$FISH_CONFIG"
+printf '# TreeMan\nset -gx PATH "/opt/unrelated/bin" $PATH\ntreeman init fish | source\n' >> "$FISH_CONFIG"
 
 TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
   TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
   bash "$SCRIPT_DIR/uninstall.sh"
 
 assert_file_count "$FISH_CONFIG" '# TreeMan' '1'
-assert_file_contains "$FISH_CONFIG" 'export PATH="/opt/unrelated/bin:$PATH"'
+assert_file_contains "$FISH_CONFIG" 'set -gx PATH "/opt/unrelated/bin" $PATH'
 assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
 
 # ---------------------------------------------------------------------------

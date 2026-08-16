@@ -25,6 +25,7 @@ detect_lazygit_config_dir() {
 #   export PATH="<install-dir>/bin:$PATH"
 #   eval "$(treeman init bash)"
 # or:
+#   set -gx PATH "<install-dir>/bin" $PATH
 #   treeman init fish | source
 # Do not remove a marker unless both following lines match the install format.
 remove_from_rc() {
@@ -34,11 +35,11 @@ remove_from_rc() {
   fi
   if grep -qF "$SOURCE_MARKER" "$rc_file" 2>/dev/null; then
     print_step "Removing TreeMan from $rc_file..."
-    awk -v marker="$SOURCE_MARKER" -v path_line="export PATH=\"$INSTALL_DIR/bin:\$PATH\"" '
+    awk -v marker="$SOURCE_MARKER" -v path_line="export PATH=\"$INSTALL_DIR/bin:\$PATH\"" -v fish_path_line="set -gx PATH \"$INSTALL_DIR/bin\" \$PATH" '
       { lines[NR] = $0 }
       END {
         for (i = 1; i <= NR; i++) {
-          if (lines[i] == marker && lines[i + 1] == path_line && (lines[i + 2] ~ /^eval "\$\(treeman init (bash|zsh)\)"$/ || lines[i + 2] == "treeman init fish | source")) {
+          if (lines[i] == marker && ((lines[i + 1] == path_line && lines[i + 2] ~ /^eval "\$\(treeman init (bash|zsh)\)"$/) || (lines[i + 1] == fish_path_line && lines[i + 2] == "treeman init fish | source"))) {
             i += 2
             continue
           }

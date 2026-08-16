@@ -47,4 +47,4 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Worktree directories | Git and file system |
 | Environment values | `.env*` files |
 | Branch databases | Docker PostgreSQL container |
-| Shell directory change | Bash or Zsh wrapper |
+| Shell directory change | Bash, Zsh, or Fish wrapper |
