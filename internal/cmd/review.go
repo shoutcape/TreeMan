@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,6 +75,10 @@ func runReview(cmd *cobra.Command, prArg string) error {
 	if prArg == "" {
 		prNumber, err = pickPRNumber(forgeType, repoSlug, host)
 		if err != nil {
+			if errors.Is(err, errPickerCancelled) {
+				fmt.Fprintln(os.Stderr, "Cancelled.")
+				return nil
+			}
 			return err
 		}
 	} else {
@@ -227,47 +232,35 @@ func pickPRNumber(forgeType forge.Type, repoSlug, host string) (int, error) {
 	var sb strings.Builder
 	sb.WriteString(ui.PRHeader())
 	sb.WriteByte('\n')
-	for _, pr := range prs {
-		sb.WriteString(ui.PRRow(pr.Number, pr.Branch, pr.Title))
+	for i, pr := range prs {
+		sb.WriteString(pickerRow(ui.PRRow(pr.Number, pr.Branch, pr.Title), i))
 		sb.WriteByte('\n')
 	}
 
 	// Pipe to fzf.
-	fzfCmd := exec.Command("fzf",
-		"--ansi",
-		"--border-label", " open prs / mrs ",
-		"--header-lines=1",
-		"--prompt=review > ",
-		"--select-1",
-		"--exit-0",
-	)
+	fzfArgs := append(pickerArgs(" open prs / mrs ", "review > "), "--header-lines=1")
+	fzfCmd := exec.Command("fzf", fzfArgs...)
 	fzfCmd.Stdin = strings.NewReader(sb.String())
 	fzfCmd.Stderr = os.Stderr
 
 	out, err := fzfCmd.Output()
 	if err != nil {
-		// Exit code 130 = user cancelled (Ctrl-C / Esc).
-		return 0, fmt.Errorf("no PR/MR selected")
+		if pickerCancelled(err) {
+			return 0, errPickerCancelled
+		}
+		return 0, fmt.Errorf("fzf failed while selecting a PR/MR: %w", err)
 	}
 
 	selection := strings.TrimSpace(string(out))
 	if selection == "" {
-		return 0, fmt.Errorf("no PR/MR selected")
+		return 0, errPickerCancelled
 	}
 
-	// Strip ANSI codes and extract the first field "#<number>".
-	plain := ui.StripANSI(selection)
-	fields := strings.Fields(plain)
-	if len(fields) == 0 {
-		return 0, fmt.Errorf("could not parse fzf selection")
+	index := pickerSelectionIndex(selection, len(prs))
+	if index < 0 {
+		return 0, fmt.Errorf("could not map fzf selection to a PR/MR")
 	}
-
-	numStr := strings.TrimPrefix(fields[0], "#")
-	n, err := strconv.Atoi(numStr)
-	if err != nil {
-		return 0, fmt.Errorf("could not parse PR/MR number from selection %q", fields[0])
-	}
-	return n, nil
+	return prs[index].Number, nil
 }
 
 func cliInstallURL(f forge.Type) string {

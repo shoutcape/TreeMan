@@ -91,7 +91,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 		if samePath(entry.Path, mainRoot) {
 			continue
 		}
-		displayLines = append(displayLines, ui.WorktreeRow(entry.Path, entry.Branch))
+		displayLines = append(displayLines, pickerRow(ui.WorktreeRow(entry.Path, entry.Branch), len(paths)))
 		paths = append(paths, entry.Path)
 		branches = append(branches, entry.Branch)
 	}
@@ -100,7 +100,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 		return nil
 	}
 
-	args := []string{"--ansi", "--border-label", " delete worktree ", "--prompt=delete > ", "--select-1", "--exit-0"}
+	args := pickerArgs(" delete worktree ", "delete > ")
 	if query != "" {
 		args = append(args, "--query", query)
 	}
@@ -109,13 +109,18 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 	fzfCmd.Stderr = os.Stderr
 	out, err := fzfCmd.Output()
 	if err != nil {
-		return nil
+		if pickerCancelled(err) {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+		return fmt.Errorf("fzf failed while selecting a worktree: %w", err)
 	}
 	selection := strings.TrimSpace(string(out))
 	if selection == "" {
+		fmt.Fprintln(os.Stderr, "Cancelled.")
 		return nil
 	}
-	idx := matchIndex(displayLines, selection)
+	idx := pickerSelectionIndex(selection, len(paths))
 	if idx < 0 {
 		return fmt.Errorf("could not map fzf selection to a worktree")
 	}
@@ -218,16 +223,6 @@ func printDeleteConfirmation(path, branch string) {
 	fmt.Fprintln(os.Stderr, "About to delete:")
 	fmt.Fprintf(os.Stderr, "  Worktree: %s\n", path)
 	fmt.Fprintf(os.Stderr, "  Branch:   %s\n\n", branch)
-}
-
-func matchIndex(displayLines []string, selection string) int {
-	plainSelection := ui.StripANSI(strings.TrimSpace(selection))
-	for i, line := range displayLines {
-		if ui.StripANSI(line) == plainSelection {
-			return i
-		}
-	}
-	return -1
 }
 
 func confirmYN(cmd *cobra.Command, prompt string) bool {
