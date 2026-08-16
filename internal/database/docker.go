@@ -73,6 +73,16 @@ func DropDatabase(container, baseURI, dbName string) error {
 	return nil
 }
 
+// ListDatabases returns non-template database names from the PostgreSQL container.
+func ListDatabases(container, baseURI string) ([]string, error) {
+	args := buildListArgs(container, baseURI)
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("list databases failed: %s", strings.TrimSpace(string(out)))
+	}
+	return parseDatabaseNames(string(out)), nil
+}
+
 // extractUser extracts the username from a postgres URI.
 // Falls back to "postgres" if parsing fails.
 func extractUser(baseURI string) string {
@@ -107,6 +117,24 @@ func buildDropArgs(container, baseURI, dbName string) []string {
 		"psql", "-U", user,
 		"-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, dbName),
 	}
+}
+
+func buildListArgs(container, baseURI string) []string {
+	return []string{
+		"exec", container,
+		"psql", "-U", extractUser(baseURI), "-At",
+		"-c", "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
+	}
+}
+
+func parseDatabaseNames(output string) []string {
+	var names []string
+	for _, line := range strings.Split(output, "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // parseContainerName extracts the first non-empty line from docker ps output.

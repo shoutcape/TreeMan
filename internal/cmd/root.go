@@ -34,6 +34,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 	root.AddCommand(newListCmd())
 	root.AddCommand(newCleanCmd())
 	root.AddCommand(newDeleteCmd())
+	root.AddCommand(newDatabaseCmd())
 	root.AddCommand(newInitCmd())
 
 	return root
@@ -49,6 +50,7 @@ func printOverview(cmd *cobra.Command) {
   treeman list [--json]    List worktrees and state
   treeman clean            Remove clean worktrees merged into default branch
   treeman delete [query]   Remove a worktree and branch
+  treeman database         Inspect or repair branch databases
 
 Run "treeman --help" for full command and flag reference.
 `))

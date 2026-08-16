@@ -83,6 +83,17 @@ TreeMan refuses deletion when the worktree has staged, modified, or untracked fi
 
 When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so the `wtd` shell wrapper can change directory safely.
 
+## `database`
+
+```text
+treeman database inspect
+treeman database repair <database> [--yes]
+```
+
+`inspect` reads the configured PostgreSQL database state without making changes. It reports only databases whose names are derived from exactly one linked worktree branch. A database is `active` when that worktree environment points to it; otherwise it is `orphaned`.
+
+`repair` removes only an orphan reported by `inspect`. It identifies the database, branch, and worktree before prompting. Use `--yes` only for deliberate non-interactive confirmation. Databases not attributable to one linked worktree are never shown or removable.
+
 ## `list`
 
 ```text

@@ -40,6 +40,17 @@ func TestBuildDropArgs(t *testing.T) {
 	})
 }
 
+func TestBuildListArgs(t *testing.T) {
+	assert.Equal(t, []string{
+		"exec", "pg-1", "psql", "-U", "myuser", "-At",
+		"-c", "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
+	}, buildListArgs("pg-1", "postgres://myuser:pass@host:5432"))
+}
+
+func TestParseDatabaseNames(t *testing.T) {
+	assert.Equal(t, []string{"app", "app__feature"}, parseDatabaseNames(" app\n\napp__feature \n"))
+}
+
 func TestExtractUser(t *testing.T) {
 	tests := []struct {
 		name    string
