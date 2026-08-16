@@ -54,6 +54,11 @@ wtl() {
 }
 
 wtc() {
+  if [ "${1:-}" = "--dry-run" ]; then
+    treeman clean "$@"
+    return $?
+  fi
+
   local _tm_dir
   _tm_dir=$(treeman clean "$@") || return $?
   [ -n "$_tm_dir" ] && cd "$_tm_dir"
@@ -122,6 +127,11 @@ function wtl
 end
 
 function wtc
+  if contains -- --dry-run $argv
+    treeman clean $argv
+    return $status
+  end
+
   set -l _tm_dir (treeman clean $argv); or return $status
   test -n "$_tm_dir"; and cd "$_tm_dir"
 end
