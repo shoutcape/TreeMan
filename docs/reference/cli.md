@@ -36,7 +36,7 @@ TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, se
 treeman branch [query]
 ```
 
-`branch` has alias `wtb`. It gets remote branches from the detected forge. An exact query selects a branch without `fzf`. Other queries use `fzf`.
+`branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all paginated remote branches from the detected forge and uses `fzf`.
 
 TreeMan excludes the default branch and local branches. It does not exclude protected branches.
 
@@ -62,7 +62,7 @@ TreeMan fetches the review head into a new worktree. It runs environment, databa
 treeman switch [query]
 ```
 
-`switch` has alias `wts`. It requires `fzf`.
+`switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
 
 It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. The `wts` wrapper changes directory when it receives a path.
 

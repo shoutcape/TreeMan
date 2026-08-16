@@ -125,6 +125,12 @@ func BranchExists(branch string) bool {
 	return err == nil
 }
 
+// RemoteBranchExists reports whether origin has a branch with the exact name.
+func RemoteBranchExists(branch string) bool {
+	_, err := run("ls-remote", "--exit-code", "--heads", "origin", branch)
+	return err == nil
+}
+
 // Fetch runs `git fetch origin <refspec>`.
 func Fetch(refspec string) error {
 	_, err := run("fetch", "origin", refspec)

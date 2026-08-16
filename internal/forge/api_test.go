@@ -32,6 +32,13 @@ func TestCLITool(t *testing.T) {
 	assert.Equal(t, "", CLITool(Type("unknown")))
 }
 
+func TestForgeAPIArgsPaginate(t *testing.T) {
+	assert.Equal(t, []string{"api", "repos/owner/repo/branches?per_page=100", "--paginate"},
+		ghAPIArgs("repos/owner/repo/branches?per_page=100"))
+	assert.Equal(t, []string{"api", "projects/group%2Frepo/merge_requests?per_page=100", "--hostname", "gitlab.example", "--paginate"},
+		glabAPIArgs("gitlab.example", "projects/group%2Frepo/merge_requests?per_page=100"))
+}
+
 func TestResolveFromRemote_GitHub(t *testing.T) {
 	forgeType, repoSlug, host, err := ResolveFromRemote("git@github.com:owner/my-repo.git")
 	require.NoError(t, err)

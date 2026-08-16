@@ -59,67 +59,60 @@ func runBranch(cmd *cobra.Command, query string) error {
 		return err
 	}
 
-	// Detect forge from origin remote.
-	remoteURL, err := git.OriginRemoteURL()
-	if err != nil {
-		return err
-	}
-
-	forgeType, repoSlug, host, err := forge.ResolveFromRemote(remoteURL)
-	if err != nil {
-		return err
-	}
-
-	// Ensure the CLI tool for this forge is available.
-	cliTool := forge.CLITool(forgeType)
-	if _, err := exec.LookPath(cliTool); err != nil {
-		return fmt.Errorf("%s is required for branch listing with %s repos. Install it from %s",
-			cliTool, forgeType, cliInstallURL(forgeType))
-	}
-
-	// Fetch branches from forge API.
-	fmt.Fprintln(os.Stderr, "Fetching remote branches...")
-	allBranches, err := forge.BranchList(forgeType, repoSlug, host)
-	if err != nil {
-		return fmt.Errorf("failed to list remote branches: %w", err)
-	}
-
-	// Detect default branch to exclude it.
-	defaultBranch, _ := git.DetectDefaultBranch()
-
-	// Filter out the default branch and locally existing branches.
-	var branches []forge.BranchInfo
-	for _, b := range allBranches {
-		if b.Name == defaultBranch {
-			continue
-		}
-		if git.BranchExists(b.Name) {
-			continue
-		}
-		branches = append(branches, b)
-	}
-
-	if len(branches) == 0 {
-		return fmt.Errorf("no remote branches available (all already exist locally or only default branch found)")
-	}
-
-	// Fetch open MRs/PRs and build a map by branch name.
-	fmt.Fprintln(os.Stderr, "Checking open MRs/PRs...")
+	var selected forge.BranchInfo
 	prMap := make(map[string]forge.PRInfo)
-	prs, err := forge.PRList(forgeType, repoSlug, host)
-	if err != nil {
-		// Non-fatal: show branches without MR info.
-		fmt.Fprintf(os.Stderr, "Warning: could not fetch MRs/PRs: %v\n", err)
+	if query != "" && git.RemoteBranchExists(query) {
+		// An exact branch name can be fetched by git without forge discovery or fzf.
+		selected.Name = query
 	} else {
-		for _, pr := range prs {
-			prMap[pr.Branch] = pr
+		// Detect forge from origin remote.
+		remoteURL, err := git.OriginRemoteURL()
+		if err != nil {
+			return err
 		}
-	}
 
-	// Pick a branch.
-	selected, err := pickBranch(branches, query, prMap)
-	if err != nil {
-		return err
+		forgeType, repoSlug, host, err := forge.ResolveFromRemote(remoteURL)
+		if err != nil {
+			return err
+		}
+
+		cliTool := forge.CLITool(forgeType)
+		if _, err := exec.LookPath(cliTool); err != nil {
+			return fmt.Errorf("%s is required for branch listing with %s repos. Install it from %s",
+				cliTool, forgeType, cliInstallURL(forgeType))
+		}
+
+		fmt.Fprintln(os.Stderr, "Fetching remote branches...")
+		allBranches, err := forge.BranchList(forgeType, repoSlug, host)
+		if err != nil {
+			return fmt.Errorf("failed to list remote branches: %w", err)
+		}
+
+		defaultBranch, _ := git.DetectDefaultBranch()
+		var branches []forge.BranchInfo
+		for _, b := range allBranches {
+			if b.Name != defaultBranch && !git.BranchExists(b.Name) {
+				branches = append(branches, b)
+			}
+		}
+		if len(branches) == 0 {
+			return fmt.Errorf("no remote branches available (all already exist locally or only default branch found)")
+		}
+
+		fmt.Fprintln(os.Stderr, "Checking open MRs/PRs...")
+		prs, err := forge.PRList(forgeType, repoSlug, host)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not fetch MRs/PRs: %v\n", err)
+		} else {
+			for _, pr := range prs {
+				prMap[pr.Branch] = pr
+			}
+		}
+
+		selected, err = pickBranch(branches, query, prMap)
+		if err != nil {
+			return err
+		}
 	}
 
 	branch := selected.Name
