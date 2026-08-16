@@ -98,6 +98,42 @@ func TestRunDeleteDirect_ForceRemovesDirtyWorktreeAndBranch(t *testing.T) {
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/remove")
 }
 
+func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/remove-failure")
+	chdirForTest(t, repo)
+	restoreRemove := removeWorktree
+	removeWorktree = func(string, bool) error { return assert.AnError }
+	t.Cleanup(func() { removeWorktree = restoreRemove })
+
+	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/remove-failure", true, false)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "Completed: none.")
+	assert.Contains(t, err.Error(), `Remaining: worktree "`+worktree+`", branch "feature/remove-failure".`)
+	assert.Contains(t, err.Error(), `Recovery: resolve the error, then retry: treeman delete --path "`+worktree+`" --branch "feature/remove-failure" --yes`)
+	assert.DirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/remove-failure")
+}
+
+func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/branch-failure")
+	chdirForTest(t, repo)
+	restoreDelete := deleteBranch
+	deleteBranch = func(string, string, bool) error { return assert.AnError }
+	t.Cleanup(func() { deleteBranch = restoreDelete })
+
+	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/branch-failure", true, true)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), `Completed: removed worktree "`+worktree+`".`)
+	assert.Contains(t, err.Error(), `Remaining: branch "feature/branch-failure".`)
+	assert.Contains(t, err.Error(), `Recovery: git -C "`+repo+`" branch -D "feature/branch-failure"`)
+	assert.NoDirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/branch-failure")
+}
+
 func TestRunDeleteDirect_PrintsMainWorktreeWhenDeletingCurrentWorktree(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/current")
 	chdirForTest(t, worktree)
