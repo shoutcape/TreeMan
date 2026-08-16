@@ -11,4 +11,5 @@ func TestNewCleanCmd(t *testing.T) {
 
 	assert.Equal(t, "clean", cmd.Name())
 	assert.NotNil(t, cmd.Flags().Lookup("dry-run"))
+	assert.NotNil(t, cmd.Flags().Lookup("yes"))
 }
