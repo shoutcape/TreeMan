@@ -54,4 +54,4 @@ Database actions are warning-only. TreeMan can create a database and then fail t
 Use `docker exec` and `psql` to remove an orphan database after you verify its name.
 
 > [!warning]
-> TreeMan puts a database identifier into SQL text. Do not use untrusted database names or branch names.
+> TreeMan safely escapes branch database names before using them as PostgreSQL identifiers.

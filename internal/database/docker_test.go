@@ -26,6 +26,11 @@ func TestBuildPsqlArgs(t *testing.T) {
 		}
 		assert.Equal(t, expected, args)
 	})
+
+	t.Run("quotes identifier-sensitive names", func(t *testing.T) {
+		args := buildPsqlArgs("pg-1", "postgres://postgres@host:5432", `myapp"; DROP DATABASE postgres; --`)
+		assert.Equal(t, `CREATE DATABASE "myapp""; DROP DATABASE postgres; --"`, args[6])
+	})
 }
 
 func TestBuildDropArgs(t *testing.T) {
@@ -37,6 +42,11 @@ func TestBuildDropArgs(t *testing.T) {
 			"-c", `DROP DATABASE IF EXISTS "myapp__jd_fix_123"`,
 		}
 		assert.Equal(t, expected, args)
+	})
+
+	t.Run("quotes identifier-sensitive names", func(t *testing.T) {
+		args := buildDropArgs("pg-1", "postgres://postgres@host:5432", `myapp"; DROP DATABASE postgres; --`)
+		assert.Equal(t, `DROP DATABASE IF EXISTS "myapp""; DROP DATABASE postgres; --"`, args[6])
 	})
 }
 
