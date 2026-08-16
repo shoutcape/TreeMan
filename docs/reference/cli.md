@@ -99,7 +99,7 @@ List the repository worktrees with branch, path, main, current, dirty, and merge
 treeman clean [--dry-run]
 ```
 
-`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main or current, it has no changes, and its branch is merged into `origin/main` or `origin/master`. It does not remove detached worktrees or the default branch. Use `--dry-run` to print candidate paths without deleting them.
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into `origin/main` or `origin/master`. It does not remove detached worktrees or the default branch. If it removes the current worktree, it prints the main worktree path so the `wtc` shell wrapper returns there safely. Use `--dry-run` to print candidate paths without deleting them.
 
 ## `init`
 

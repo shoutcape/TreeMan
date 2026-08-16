@@ -36,6 +36,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "treeman list")
 	assert.Contains(t, out, "treeman clean")
 	assert.Contains(t, out, "treeman delete")
+	assert.Contains(t, out, "_tm_dir=$(treeman clean \"$@\") || return $?")
 	assert.Contains(t, out, "_tm_dir=$(treeman delete \"$@\") || return $?")
 	assert.Contains(t, out, "[ -n \"$_tm_dir\" ] && cd \"$_tm_dir\"")
 }

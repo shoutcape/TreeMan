@@ -79,7 +79,7 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 > [!note]
 > Deletion completes before TreeMan returns. TreeMan refuses dirty worktrees and unmerged branches unless you explicitly use `--force`.
 
-`wtc` fetches the default branch, then removes non-current linked worktrees only when their branch is merged into it and the worktree is clean. Use `wtc --dry-run` to inspect candidates first.
+`wtc` fetches the default branch, then removes linked worktrees when their branch is merged into it and the worktree is clean. If it removes the current worktree, it returns the shell to the main worktree. Use `wtc --dry-run` to inspect candidates first.
 
 ## Documentation
 
