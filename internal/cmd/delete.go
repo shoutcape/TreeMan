@@ -15,6 +15,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	removeWorktree = git.WorktreeRemove
+	deleteBranch   = git.DeleteBranch
+)
+
 func newDeleteCmd() *cobra.Command {
 	var flagPath string
 	var flagBranch string
@@ -177,17 +182,35 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 			fmt.Fprintf(os.Stderr, "Warning: database cleanup failed: %v\n", err)
 		}
 	}
-	if err := git.WorktreeRemove(entry.Path, force); err != nil {
-		return err
+	if err := removeWorktree(entry.Path, force); err != nil {
+		return deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
 	}
-	if err := git.DeleteBranch(mainRoot, branch, force); err != nil {
-		return err
+	if err := deleteBranch(mainRoot, branch, force); err != nil {
+		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(force), branch))
 	}
 	fmt.Fprintf(os.Stderr, "Deleted worktree and branch: %s\n", branch)
 	if samePath(currentRoot, entry.Path) {
 		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
 	}
 	return nil
+}
+
+func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {
+	return fmt.Errorf("%w\nCompleted: %s.\nRemaining: %s.\nRecovery: %s", err, completed, remaining, recovery)
+}
+
+func forceFlag(force bool) string {
+	if force {
+		return " --force"
+	}
+	return ""
+}
+
+func deleteBranchFlag(force bool) string {
+	if force {
+		return "-D"
+	}
+	return "-d"
 }
 
 func findWorktree(path string) (git.WorktreeEntry, error) {
