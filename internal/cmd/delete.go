@@ -140,8 +140,11 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 	if entry.Branch != branch {
 		return fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
 	}
-	defaultBranch, _ := git.DetectDefaultBranch()
-	if defaultBranch != "" && branch == defaultBranch {
+	defaultBranch, err := git.DetectDefaultBranch()
+	if err != nil {
+		return fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
+	}
+	if branch == defaultBranch {
 		return fmt.Errorf("cannot delete the default branch %q", branch)
 	}
 	dirty, err := git.WorktreeDirty(entry.Path)
