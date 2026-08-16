@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
@@ -92,13 +94,16 @@ func runCreate(cmd *cobra.Command, branch string) error {
 
 	// Copy .env* files (best-effort, non-fatal).
 	result, err := envfile.Copy(mainRoot, worktreePath)
+	environmentStatus := "skipped (no environment files found)"
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not copy env files: %v\n", err)
+		environmentStatus = fmt.Sprintf("failed: %v", err)
 	} else if len(result.Copied) > 0 {
 		for _, f := range result.Copied {
 			fmt.Fprintf(os.Stderr, "  Copied %s\n", f)
 		}
 		fmt.Fprintf(os.Stderr, "Copied %d env file(s) from main worktree.\n", len(result.Copied))
+		environmentStatus = fmt.Sprintf("completed: copied %d file(s)", len(result.Copied))
 	}
 
 	// Load project config for database management.
@@ -110,23 +115,29 @@ func runCreate(cmd *cobra.Command, branch string) error {
 	// Set up branch-specific database (best-effort, non-fatal).
 	dbEnvKey := cfgResult.Config.DatabaseEnvKey()
 	dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
+	databaseStatus := "skipped"
 	switch {
 	case dbErr != nil:
 		fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
+		databaseStatus = fmt.Sprintf("failed: %v", dbErr)
 	case dbResult.Skipped:
 		// No config, no env key, or not a postgres URI -- silently skip.
 	default:
 		fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+		databaseStatus = fmt.Sprintf("completed: created %s", dbResult.DBName)
 	}
 
 	// Install dependencies.
 	fmt.Fprintln(os.Stderr, "Detecting dependencies...")
 	installResult, installErr := deps.Install(worktreePath)
+	dependenciesStatus := "skipped"
 	switch {
 	case installErr != nil:
 		fmt.Fprintf(os.Stderr, "Warning: dependency installation failed: %v\n", installErr)
+		dependenciesStatus = fmt.Sprintf("failed: %v", installErr)
 	case installResult.Python:
 		fmt.Fprintln(os.Stderr, "Detected Python project — skipping auto-install (activate your venv manually).")
+		dependenciesStatus = "skipped (Python project requires manual venv activation)"
 	case installResult.Skipped:
 		fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
 	case installResult.Installer != nil:
@@ -135,22 +146,32 @@ func runCreate(cmd *cobra.Command, branch string) error {
 			installResult.Installer.Binary,
 			joinArgs(installResult.Installer.Args),
 		)
+		dependenciesStatus = fmt.Sprintf("completed: installed with %s", installResult.Installer.Binary)
 	}
 
 	// Run post-create hooks (best-effort, non-fatal).
+	hooksStatus := "skipped (no post-create hooks configured)"
 	if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
 		fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
-		for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
+		hookResults := hooks.RunPostCreate(worktreePath, postCreateCmds)
+		for _, r := range hookResults {
 			if r.Err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: hook %q failed: %v\n", r.Command, r.Err)
 			} else {
 				fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
 			}
 		}
+		hooksStatus = summarizeHooks(hookResults)
 	}
 
 	// Print result to stderr for the user.
 	fmt.Fprintln(os.Stderr, "")
+	printSetupSummary(os.Stderr, setupSummary{
+		environment:  environmentStatus,
+		dependencies: dependenciesStatus,
+		database:     databaseStatus,
+		hooks:        hooksStatus,
+	})
 	fmt.Fprintln(os.Stderr, "Worktree ready:")
 	fmt.Fprintf(os.Stderr, "  Branch: %s\n", branch)
 	fmt.Fprintf(os.Stderr, "  Path:   %s\n", worktreePath)
@@ -159,6 +180,38 @@ func runCreate(cmd *cobra.Command, branch string) error {
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
 
 	return nil
+}
+
+type setupSummary struct {
+	environment  string
+	dependencies string
+	database     string
+	hooks        string
+}
+
+func printSetupSummary(w io.Writer, summary setupSummary) {
+	fmt.Fprintln(w, "Setup:")
+	fmt.Fprintf(w, "  Environment:  %s\n", summary.environment)
+	fmt.Fprintf(w, "  Dependencies: %s\n", summary.dependencies)
+	fmt.Fprintf(w, "  Database:     %s\n", summary.database)
+	fmt.Fprintf(w, "  Hooks:        %s\n", summary.hooks)
+}
+
+func summarizeHooks(results []hooks.RunResult) string {
+	succeeded := 0
+	var failures []string
+	for _, result := range results {
+		if result.Err != nil {
+			failures = append(failures, fmt.Sprintf("%q: %v", result.Command, result.Err))
+			continue
+		}
+		succeeded++
+	}
+
+	if len(failures) == 0 {
+		return fmt.Sprintf("completed: %d succeeded", succeeded)
+	}
+	return fmt.Sprintf("completed: %d succeeded, %d failed: %s", succeeded, len(failures), strings.Join(failures, "; "))
 }
 
 func joinArgs(args []string) string {
