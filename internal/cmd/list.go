@@ -55,7 +55,9 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 	defaultBranch := ""
 	mergedBranches := map[string]bool{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
-		if mergedBranches, err = git.MergedBranches("origin/" + defaultBranch); err != nil {
+		if err = git.Fetch("refs/heads/" + defaultBranch + ":refs/remotes/origin/" + defaultBranch); err != nil {
+			defaultBranch = ""
+		} else if mergedBranches, err = git.MergedBranches("origin/" + defaultBranch); err != nil {
 			mergedBranches = map[string]bool{}
 		}
 	}
