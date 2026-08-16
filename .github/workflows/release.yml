@@ -38,6 +38,9 @@ jobs:
           # Release tokens cannot write to the Actions cache.
           cache: false
 
+      - name: Install Fish
+        run: sudo apt-get update && sudo apt-get install --yes fish
+
       - name: Format check
         run: test -z "$(gofmt -l .)"
 
