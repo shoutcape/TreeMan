@@ -68,6 +68,6 @@ Use this command:
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
 ```
 
-The script removes TreeMan blocks from common Bash, Zsh, and Fish startup files. It removes the installation directory. It also tries to remove TreeMan lazygit commands.
+The script removes TreeMan blocks from common Bash, Zsh, and Fish startup files and removes the installation directory.
 
 Set `TREEMAN_INSTALL_DIR` when you used a custom directory.

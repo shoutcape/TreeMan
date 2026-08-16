@@ -11,14 +11,6 @@ print_step() { echo "==> $1"; }
 print_done() { echo "    done."; }
 print_warn() { echo "    warning: $1"; }
 
-detect_lazygit_config_dir() {
-  if [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
-    echo "$TREEMAN_LAZYGIT_CONFIG_DIR"
-  elif command -v lazygit >/dev/null 2>&1; then
-    lazygit -cd 2>/dev/null || true
-  fi
-}
-
 # Remove exact TreeMan integration blocks from a shell rc file.
 # The current block is:
 #   # TreeMan
@@ -66,56 +58,6 @@ fi
 
 echo ""
 echo "TreeMan uninstalled."
-
-if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
-  config_dir=$(detect_lazygit_config_dir)
-  if [[ -n "$config_dir" ]]; then
-    config_file="$config_dir/config.yml"
-    if [[ -f "$config_file" ]] && grep -q "$SOURCE_MARKER" "$config_file" 2>/dev/null; then
-      print_step "Removing lazygit integration..."
-      tmp=$(mktemp)
-      awk -v marker="$SOURCE_MARKER" '
-        BEGIN { skipping = 0 }
-        index($0, marker) { skipping = 1; next }
-        skipping {
-          if (/^  - / || /^[a-zA-Z]/) { skipping = 0 }
-          else { next }
-        }
-        { print }
-      ' "$config_file" > "$tmp"
-
-      awk '
-        {
-          lines[NR] = $0
-          suppress[NR] = 0
-        }
-        END {
-          for (i = 1; i <= NR; i++) {
-            if (lines[i] ~ /^customCommands:$/) {
-              j = i + 1
-              while (j <= NR && lines[j] ~ /^[[:space:]]*$/) j++
-              if (j > NR || lines[j] ~ /^[a-zA-Z]/) {
-                for (k = i; k < j; k++) suppress[k] = 1
-                if (i > 1 && lines[i-1] ~ /# TreeMan/) {
-                  suppress[i-1] = 1
-                  if (i > 2 && lines[i-2] ~ /^[[:space:]]*$/) suppress[i-2] = 1
-                }
-              }
-            }
-          }
-          for (i = 1; i <= NR; i++) {
-            if (!suppress[i]) print lines[i]
-          }
-        }
-      ' "$tmp" > "${tmp}.2"
-
-      awk 'NF { last = NR } { lines[NR] = $0 } END { for (i = 1; i <= last; i++) print lines[i] }' "${tmp}.2" > "${tmp}.3"
-      { cat "${tmp}.3"; echo; } > "$config_file"
-      rm -f "$tmp" "${tmp}.2" "${tmp}.3" 2>/dev/null
-      print_done
-    fi
-  fi
-fi
 
 echo "Reload your shell to complete removal:"
 echo "  exec \$SHELL"

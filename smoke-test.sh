@@ -25,7 +25,6 @@ TMP_DIR=$(mktemp -d)
 TMP_DIR=$(cd "$TMP_DIR" && pwd -P)
 
 TEST_HOME="$TMP_DIR/home"
-LAZYGIT_CONFIG_DIR="$TMP_DIR/lazygit"
 MOCK_BIN="$TMP_DIR/bin"
 NO_JQ_BIN="$TMP_DIR/no-jq-bin"
 REMOTE_REPO="$TMP_DIR/remote.git"
@@ -100,7 +99,6 @@ export _TREEMAN_FORGE="github"
 export _TREEMAN_GH_REPO="shoutcape/TreeMan"
 
 mkdir -p "$XDG_CONFIG_HOME"
-mkdir -p "$LAZYGIT_CONFIG_DIR"
 
 # Put the treeman binary on PATH for subshell invocations.
 mkdir -p "$TEST_HOME/.treeman/bin"
@@ -119,7 +117,6 @@ echo "==> install/uninstall"
 TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
   TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-install-test" \
   TREEMAN_SHELL_RC="$TEST_HOME/.bashrc" \
-  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
   bash "$SCRIPT_DIR/install.sh"
 
 # Binary should be in the install dir.
@@ -129,10 +126,6 @@ assert_exists "$TEST_HOME/.treeman-install-test/bin/treeman"
 assert_file_contains "$TEST_HOME/.bashrc" '# TreeMan'
 assert_file_contains "$TEST_HOME/.bashrc" '.treeman-install-test/bin'
 assert_file_contains "$TEST_HOME/.bashrc" 'treeman init'
-
-# Lazygit config must reference the treeman binary.
-assert_file_contains "$LAZYGIT_CONFIG_DIR/config.yml" 'treeman create'
-assert_file_contains "$LAZYGIT_CONFIG_DIR/config.yml" 'treeman delete'
 
 # Malformed integration blocks must survive removal.
 printf '# TreeMan\nexport PATH="/opt/unrelated/bin:$PATH"\neval "$(treeman init bash)"\n' >> "$TEST_HOME/.bashrc"
@@ -146,7 +139,6 @@ printf 'export UNRELATED_SHELL_SETTING=keep\n' >> "$TEST_HOME/.bashrc"
 
 # Uninstall.
 TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-install-test" \
-  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
   bash "$SCRIPT_DIR/uninstall.sh"
 
 assert_missing "$TEST_HOME/.treeman-install-test"
@@ -155,14 +147,12 @@ assert_file_contains "$TEST_HOME/.bashrc" 'export PATH="/opt/unrelated/bin:$PATH
 assert_file_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init fish)"'
 assert_file_not_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init zsh)"'
 assert_file_contains "$TEST_HOME/.bashrc" 'export UNRELATED_SHELL_SETTING=keep'
-assert_file_not_contains "$LAZYGIT_CONFIG_DIR/config.yml" '# TreeMan'
 
 # Fish integration uses XDG_CONFIG_HOME and is removable.
 FISH_CONFIG="$TEST_HOME/nonstandard-config/fish/config.fish"
 SHELL=/usr/bin/fish \
   TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
   TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
-  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
   XDG_CONFIG_HOME="$TEST_HOME/nonstandard-config" \
   bash "$SCRIPT_DIR/install.sh"
 
@@ -194,7 +184,6 @@ fi
 printf '# TreeMan\nset -gx PATH "/opt/unrelated/bin" $PATH\ntreeman init fish | source\n' >> "$FISH_CONFIG"
 
 TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
-  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
   XDG_CONFIG_HOME="$TEST_HOME/nonstandard-config" \
   bash "$SCRIPT_DIR/uninstall.sh"
 
