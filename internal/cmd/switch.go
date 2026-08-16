@@ -59,23 +59,17 @@ func runSwitch(cmd *cobra.Command, query string) error {
 		return fmt.Errorf("fzf is required for switch. Install it from https://github.com/junegunn/fzf")
 	}
 
-	// Build parallel display-rows and full-paths slices.
+	// Keep fzf's visible label separate from its stable row identity.
 	var displayLines []string
 	var fullPaths []string
-	for _, e := range entries {
-		displayLines = append(displayLines, ui.WorktreeRow(e.Path, e.Branch))
+	for i, e := range entries {
+		displayLines = append(displayLines, pickerRow(ui.WorktreeRow(e.Path, e.Branch), i))
 		fullPaths = append(fullPaths, e.Path)
 	}
 
 	display := strings.Join(displayLines, "\n")
 
-	fzfArgs := []string{
-		"--ansi",
-		"--border-label", " worktrees ",
-		"--prompt=switch > ",
-		"--select-1",
-		"--exit-0",
-	}
+	fzfArgs := pickerArgs(" worktrees ", "switch > ")
 	if query != "" {
 		fzfArgs = append(fzfArgs, "--query", query)
 	}
@@ -86,18 +80,20 @@ func runSwitch(cmd *cobra.Command, query string) error {
 
 	out, err := fzfCmd.Output()
 	if err != nil {
-		// User cancelled — not an error.
-		return nil
+		if pickerCancelled(err) {
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return nil
+		}
+		return fmt.Errorf("fzf failed while selecting a worktree: %w", err)
 	}
 
 	selection := strings.TrimSpace(string(out))
 	if selection == "" {
+		fmt.Fprintln(os.Stderr, "Cancelled.")
 		return nil
 	}
 
-	// Map selection back to a full path by stripping ANSI and matching against
-	// the plain-text versions of our display rows.
-	idx := matchIndex(displayLines, selection)
+	idx := pickerSelectionIndex(selection, len(fullPaths))
 	if idx < 0 {
 		return fmt.Errorf("could not map fzf selection to a worktree path")
 	}

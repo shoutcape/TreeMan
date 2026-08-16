@@ -7,33 +7,21 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMatchIndex_Found(t *testing.T) {
-	displayLines := []string{
-		ui.WorktreeRow("/home/user/repo.feature-a", "feature/a"),
-		ui.WorktreeRow("/home/user/repo.fix-b", "fix/b"),
-	}
+func TestPickerSelectionIndex_DuplicateDisplayRows(t *testing.T) {
+	display := ui.WorktreeRow("/home/user/repo.feature-a", "feature/a")
+	first := pickerRow(display, 0)
+	second := pickerRow(display, 1)
 
-	// fzf returns the display line for "feature/a" (possibly with ANSI already
-	// stripped since fzf --ansi returns plain text).
-	plain := ui.StripANSI(displayLines[0])
-	idx := matchIndex(displayLines, plain)
-	assert.Equal(t, 0, idx)
+	assert.Equal(t, 0, pickerSelectionIndex(first, 2))
+	assert.Equal(t, 1, pickerSelectionIndex(second, 2))
 }
 
-func TestMatchIndex_Second(t *testing.T) {
-	displayLines := []string{
-		ui.WorktreeRow("/home/user/repo.feature-a", "feature/a"),
-		ui.WorktreeRow("/home/user/repo.fix-b", "fix/b"),
-	}
-	plain := ui.StripANSI(displayLines[1])
-	idx := matchIndex(displayLines, plain)
-	assert.Equal(t, 1, idx)
+func TestPickerSelectionIndex_InvalidIdentity(t *testing.T) {
+	assert.Equal(t, -1, pickerSelectionIndex("worktree", 2))
+	assert.Equal(t, -1, pickerSelectionIndex("worktree\t2", 2))
+	assert.Equal(t, -1, pickerSelectionIndex("worktree\tnot-a-number", 2))
 }
 
-func TestMatchIndex_NotFound(t *testing.T) {
-	displayLines := []string{
-		ui.WorktreeRow("/home/user/repo.feature-a", "feature/a"),
-	}
-	idx := matchIndex(displayLines, "does-not-exist")
-	assert.Equal(t, -1, idx)
+func TestPickerArgs_ExplainControls(t *testing.T) {
+	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--header=enter: select | esc: cancel")
 }

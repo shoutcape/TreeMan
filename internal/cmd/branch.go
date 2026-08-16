@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,6 +112,10 @@ func runBranch(cmd *cobra.Command, query string) error {
 
 		selected, err = pickBranch(branches, query, prMap)
 		if err != nil {
+			if errors.Is(err, errPickerCancelled) {
+				fmt.Fprintln(os.Stderr, "Cancelled.")
+				return nil
+			}
 			return err
 		}
 	}
@@ -244,24 +249,17 @@ func pickBranch(branches []forge.BranchInfo, query string, prMap map[string]forg
 	var sb strings.Builder
 	sb.WriteString(ui.BranchHeader())
 	sb.WriteByte('\n')
-	for _, b := range branches {
+	for i, b := range branches {
 		mrNumber := 0
 		if pr, ok := prMap[b.Name]; ok {
 			mrNumber = pr.Number
 		}
-		sb.WriteString(ui.BranchRow(b.Name, b.Date, mrNumber))
+		sb.WriteString(pickerRow(ui.BranchRow(b.Name, b.Date, mrNumber), i))
 		sb.WriteByte('\n')
 	}
 
 	// Pipe to fzf.
-	fzfArgs := []string{
-		"--ansi",
-		"--border-label", " remote branches ",
-		"--header-lines=1",
-		"--prompt=branch > ",
-		"--select-1",
-		"--exit-0",
-	}
+	fzfArgs := append(pickerArgs(" remote branches ", "branch > "), "--header-lines=1")
 	if query != "" {
 		fzfArgs = append(fzfArgs, "--query", query)
 	}
@@ -272,24 +270,20 @@ func pickBranch(branches []forge.BranchInfo, query string, prMap map[string]forg
 
 	out, err := fzfCmd.Output()
 	if err != nil {
-		return forge.BranchInfo{}, fmt.Errorf("no branch selected")
+		if pickerCancelled(err) {
+			return forge.BranchInfo{}, errPickerCancelled
+		}
+		return forge.BranchInfo{}, fmt.Errorf("fzf failed while selecting a branch: %w", err)
 	}
 
 	selection := strings.TrimSpace(string(out))
 	if selection == "" {
-		return forge.BranchInfo{}, fmt.Errorf("no branch selected")
+		return forge.BranchInfo{}, errPickerCancelled
 	}
 
-	// Strip ANSI codes and extract the branch name (first field).
-	plain := ui.StripANSI(selection)
-	branchName := strings.TrimSpace(strings.Fields(plain)[0])
-
-	// Find the matching BranchInfo.
-	for _, b := range branches {
-		if b.Name == branchName {
-			return b, nil
-		}
+	index := pickerSelectionIndex(selection, len(branches))
+	if index < 0 {
+		return forge.BranchInfo{}, fmt.Errorf("could not map fzf selection to a branch")
 	}
-
-	return forge.BranchInfo{}, fmt.Errorf("could not match selection %q to a branch", branchName)
+	return branches[index], nil
 }
