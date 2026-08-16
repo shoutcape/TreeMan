@@ -106,9 +106,12 @@ treeman clean [--dry-run]
 ```text
 treeman init bash
 treeman init zsh
+treeman init fish
 ```
 
-This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
+This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, `wtd`, and `lg` shell functions. For Bash or Zsh, add its output through `eval` in your shell startup file.
+
+For Fish, add its output with `treeman init fish | source`.
 
 `lg` starts lazygit. It changes the directory when lazygit writes a new-directory file.
 

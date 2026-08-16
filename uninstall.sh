@@ -24,6 +24,8 @@ detect_lazygit_config_dir() {
 #   # TreeMan
 #   export PATH="<install-dir>/bin:$PATH"
 #   eval "$(treeman init bash)"
+# or:
+#   treeman init fish | source
 # Do not remove a marker unless both following lines match the install format.
 remove_from_rc() {
   local rc_file="$1"
@@ -36,7 +38,7 @@ remove_from_rc() {
       { lines[NR] = $0 }
       END {
         for (i = 1; i <= NR; i++) {
-          if (lines[i] == marker && lines[i + 1] == path_line && lines[i + 2] ~ /^eval "\$\(treeman init (bash|zsh)\)"$/) {
+          if (lines[i] == marker && lines[i + 1] == path_line && (lines[i + 2] ~ /^eval "\$\(treeman init (bash|zsh)\)"$/ || lines[i + 2] == "treeman init fish | source")) {
             i += 2
             continue
           }
@@ -51,6 +53,7 @@ remove_from_rc() {
 remove_from_rc "$HOME/.zshrc"
 remove_from_rc "$HOME/.bashrc"
 remove_from_rc "$HOME/.bash_profile"
+remove_from_rc "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
 
 print_step "Removing $INSTALL_DIR..."
 if [[ -d "$INSTALL_DIR" ]]; then

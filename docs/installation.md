@@ -30,7 +30,11 @@ Add one command to your shell startup file.
 eval "$(treeman init zsh)"
 ```
 
-Use `bash` instead of `zsh` for Bash.
+Use `bash` instead of `zsh` for Bash. For Fish, add this command to `~/.config/fish/config.fish`.
+
+```fish
+treeman init fish | source
+```
 
 ## Build From Source
 
@@ -49,7 +53,7 @@ For repository development, read [Development Setup](development/setup.md).
 | Feature | Required program |
 | --- | --- |
 | All Git worktree actions | `git` |
-| Shell wrappers | `bash` or `zsh` |
+| Shell wrappers | `bash`, `zsh`, or `fish` |
 | Interactive selection | `fzf` |
 | GitHub branches and reviews | `gh` |
 | GitLab branches and reviews | `glab` |
@@ -64,6 +68,6 @@ Use this command:
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash
 ```
 
-The script removes TreeMan blocks from common Bash and Zsh startup files. It removes the installation directory. It also tries to remove TreeMan lazygit commands.
+The script removes TreeMan blocks from common Bash, Zsh, and Fish startup files. It removes the installation directory. It also tries to remove TreeMan lazygit commands.
 
 Set `TREEMAN_INSTALL_DIR` when you used a custom directory.

@@ -26,6 +26,7 @@ TMP_DIR=$(cd "$TMP_DIR" && pwd -P)
 
 TEST_HOME="$TMP_DIR/home"
 LAZYGIT_CONFIG_DIR="$TMP_DIR/lazygit"
+FISH_CONFIG="$TEST_HOME/.config/fish/config.fish"
 MOCK_BIN="$TMP_DIR/bin"
 NO_JQ_BIN="$TMP_DIR/no-jq-bin"
 REMOTE_REPO="$TMP_DIR/remote.git"
@@ -156,6 +157,27 @@ assert_file_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init fish)"'
 assert_file_not_contains "$TEST_HOME/.bashrc" 'eval "$(treeman init zsh)"'
 assert_file_contains "$TEST_HOME/.bashrc" 'export UNRELATED_SHELL_SETTING=keep'
 assert_file_not_contains "$LAZYGIT_CONFIG_DIR/config.yml" '# TreeMan'
+
+# Fish integration creates its missing configuration directory and is removable.
+SHELL=/usr/bin/fish \
+  TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
+  TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
+  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
+  bash "$SCRIPT_DIR/install.sh"
+
+assert_file_contains "$FISH_CONFIG" '# TreeMan'
+assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
+
+# A Fish-like line with a different install path must survive removal.
+printf '# TreeMan\nexport PATH="/opt/unrelated/bin:$PATH"\ntreeman init fish | source\n' >> "$FISH_CONFIG"
+
+TREEMAN_INSTALL_DIR="$TEST_HOME/.treeman-fish-install-test" \
+  TREEMAN_LAZYGIT_CONFIG_DIR="$LAZYGIT_CONFIG_DIR" \
+  bash "$SCRIPT_DIR/uninstall.sh"
+
+assert_file_count "$FISH_CONFIG" '# TreeMan' '1'
+assert_file_contains "$FISH_CONFIG" 'export PATH="/opt/unrelated/bin:$PATH"'
+assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
 
 # ---------------------------------------------------------------------------
 # repository setup
