@@ -35,10 +35,6 @@ can cd into it.`,
 }
 
 func runSwitch(cmd *cobra.Command, query string) error {
-	if _, err := exec.LookPath("fzf"); err != nil {
-		return fmt.Errorf("fzf is required for switch. Install it from https://github.com/junegunn/fzf")
-	}
-
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return fmt.Errorf("not in a git repository or no worktrees found")
@@ -49,6 +45,18 @@ func runSwitch(cmd *cobra.Command, query string) error {
 	if len(entries) == 1 {
 		fmt.Fprintln(os.Stderr, "Only one worktree exists — nothing to switch to.")
 		return nil
+	}
+
+	if query != "" {
+		for _, entry := range entries {
+			if entry.Path == query || entry.Branch == query {
+				return printSwitchDestination(cmd, entry.Path)
+			}
+		}
+	}
+
+	if _, err := exec.LookPath("fzf"); err != nil {
+		return fmt.Errorf("fzf is required for switch. Install it from https://github.com/junegunn/fzf")
 	}
 
 	// Build parallel display-rows and full-paths slices.
@@ -95,6 +103,10 @@ func runSwitch(cmd *cobra.Command, query string) error {
 	}
 	dest := fullPaths[idx]
 
+	return printSwitchDestination(cmd, dest)
+}
+
+func printSwitchDestination(cmd *cobra.Command, dest string) error {
 	// Determine current directory to detect same-worktree selection.
 	cwd, _ := os.Getwd()
 	if dest == cwd {

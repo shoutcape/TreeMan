@@ -148,7 +148,7 @@ func githubPRList(repoSlug string) ([]PRInfo, error) {
 }
 
 func ghAPI(endpoint string) ([]byte, error) {
-	cmd := exec.Command("gh", "api", endpoint)
+	cmd := exec.Command("gh", ghAPIArgs(endpoint)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -156,6 +156,10 @@ func ghAPI(endpoint string) ([]byte, error) {
 		return nil, fmt.Errorf("gh api %s: %s", endpoint, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+func ghAPIArgs(endpoint string) []string {
+	return []string{"api", endpoint, "--paginate"}
 }
 
 func githubBranchList(repoSlug string) ([]BranchInfo, error) {
@@ -246,7 +250,7 @@ func gitlabMRList(repoSlug, host string) ([]PRInfo, error) {
 }
 
 func glabAPI(host, endpoint string) ([]byte, error) {
-	cmd := exec.Command("glab", "api", endpoint, "--hostname", host)
+	cmd := exec.Command("glab", glabAPIArgs(host, endpoint)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -254,6 +258,10 @@ func glabAPI(host, endpoint string) ([]byte, error) {
 		return nil, fmt.Errorf("glab api %s: %s", endpoint, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+func glabAPIArgs(host, endpoint string) []string {
+	return []string{"api", endpoint, "--hostname", host, "--paginate"}
 }
 
 func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
