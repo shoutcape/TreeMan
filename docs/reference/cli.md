@@ -31,7 +31,7 @@ The command fails when the branch or target directory exists. It creates `.workt
 
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
-Use any `--skip-*` flag to omit its named optional setup action. Requested skips appear in the final summary.
+Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.
 
 ## `branch`
 
