@@ -154,10 +154,28 @@ func collectShellDiagnostic() diagnostic {
 	if shell != "bash" && shell != "zsh" {
 		shell = "bash"
 	}
-	return diagnostic{
-		status: diagnosticInfo, name: "Shell integration", message: "Cannot verify from a subprocess",
-		hint: fmt.Sprintf("To enable future shells, add to ~/.%src:\neval \"$(treeman init %s)\"", shell, shell),
+	configPath := filepath.Join("~", "."+shell+"rc")
+	if home, err := os.UserHomeDir(); err == nil {
+		path := filepath.Join(home, "."+shell+"rc")
+		if data, err := os.ReadFile(path); err == nil && hasShellIntegration(string(data), shell) {
+			return diagnostic{status: diagnosticPass, name: "Shell integration", message: "Configured in " + configPath}
+		}
 	}
+	return diagnostic{
+		status: diagnosticInfo, name: "Shell integration", message: "Not configured",
+		hint: fmt.Sprintf("Add to ~/.%src:\neval \"$(treeman init %s)\"", shell, shell),
+	}
+}
+
+func hasShellIntegration(contents, shell string) bool {
+	command := "treeman init " + shell
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#") && strings.Contains(line, command) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics []diagnostic) {

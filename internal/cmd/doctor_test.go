@@ -18,6 +18,7 @@ func TestRunDoctor_ReportsReadyRepository(t *testing.T) {
 	chdirForTest(t, repo)
 	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/example/repo.git")
 	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("HOME", t.TempDir())
 	stubLookPath(t, func(string) error { return nil })
 
 	buf := &bytes.Buffer{}
@@ -31,10 +32,23 @@ func TestRunDoctor_ReportsReadyRepository(t *testing.T) {
 	assert.Contains(t, out, "○  Database setup       Not configured; add [database] to enable")
 	assert.Contains(t, out, "✓  Interactive picker   fzf installed")
 	assert.Contains(t, out, "✓  Container support    Docker installed; daemon unchecked")
-	assert.Contains(t, out, "○  Shell integration    Cannot verify from a subprocess")
-	assert.Contains(t, out, "To enable future shells, add to ~/.zshrc:")
+	assert.Contains(t, out, "○  Shell integration    Not configured")
+	assert.Contains(t, out, "Add to ~/.zshrc:")
 	assert.Contains(t, out, "eval \"$(treeman init zsh)\"")
 	assert.Contains(t, out, "4 passed · 3 informational")
+}
+
+func TestCollectShellDiagnostic_DetectsConfiguredShellIntegration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".zshrc"), []byte(`eval "$(treeman init zsh)"`), 0o600))
+
+	diagnostic := collectShellDiagnostic()
+
+	assert.Equal(t, diagnosticPass, diagnostic.status)
+	assert.Equal(t, "Shell integration", diagnostic.name)
+	assert.Equal(t, "Configured in ~/.zshrc", diagnostic.message)
 }
 
 func TestRunDoctor_ReportsMissingOptionalToolsWithRecovery(t *testing.T) {
