@@ -95,7 +95,7 @@ func buildPsqlArgs(container, baseURI, dbName string) []string {
 	return []string{
 		"exec", container,
 		"psql", "-U", user,
-		"-c", fmt.Sprintf(`CREATE DATABASE "%s"`, dbName),
+		"-c", fmt.Sprintf("CREATE DATABASE %s", quoteIdentifier(dbName)),
 	}
 }
 
@@ -105,8 +105,13 @@ func buildDropArgs(container, baseURI, dbName string) []string {
 	return []string{
 		"exec", container,
 		"psql", "-U", user,
-		"-c", fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, dbName),
+		"-c", fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdentifier(dbName)),
 	}
+}
+
+// quoteIdentifier returns name as one PostgreSQL identifier.
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // parseContainerName extracts the first non-empty line from docker ps output.
