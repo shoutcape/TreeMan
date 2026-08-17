@@ -157,6 +157,35 @@ func TestRunDeleteDirect_RejectsMismatchedBranch(t *testing.T) {
 	assert.DirExists(t, worktree)
 }
 
+func TestRunDeleteDirect_RejectsDeletionWhenDefaultBranchDetectionFails(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/no-origin")
+	gitTest(t, repo, "remote", "remove", "origin")
+	chdirForTest(t, repo)
+
+	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/no-origin", true, true)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default branch could not be detected")
+	assert.DirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/no-origin")
+}
+
+func TestRunDeleteDirect_RejectsKnownDefaultBranch(t *testing.T) {
+	repo, _ := createTestWorktree(t, "feature/linked")
+	worktree := filepath.Join(filepath.Dir(repo), "default-worktree")
+	gitTest(t, repo, "branch", "master")
+	gitTest(t, repo, "push", "origin", "master")
+	gitTest(t, repo, "push", "origin", "--delete", "main")
+	gitTest(t, repo, "worktree", "add", worktree, "master")
+	chdirForTest(t, repo)
+
+	err := runDeleteDirect(&cobra.Command{}, worktree, "master", true, true)
+
+	require.EqualError(t, err, "cannot delete the default branch \"master\"")
+	assert.DirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/master")
+}
+
 func TestRunDeleteDirect_RejectsUnmergedBranchBeforeRemovingWorktree(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/unmerged")
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "feature.txt"), []byte("feature\n"), 0o644))
@@ -209,6 +238,10 @@ func createTestWorktree(t *testing.T, branch string) (string, string) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644))
 	gitTest(t, repo, "add", "README.md")
 	gitTest(t, repo, "commit", "-m", "initial")
+	origin := filepath.Join(parent, "origin.git")
+	gitTest(t, parent, "init", "--bare", origin)
+	gitTest(t, repo, "remote", "add", "origin", origin)
+	gitTest(t, repo, "push", "-u", "origin", "main")
 
 	worktree := filepath.Join(parent, "worktree")
 	gitTest(t, repo, "worktree", "add", "-b", branch, worktree)
