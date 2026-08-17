@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,8 +56,10 @@ func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
 	cmd.SetOut(output)
 	require.NoError(t, runClean(cmd, false, true))
 
-	assert.Contains(t, output.String(), "feature\t"+worktree)
-	assert.Contains(t, output.String(), repo+"\n")
+	cleanOutput := ui.StripANSI(output.String())
+	assert.Contains(t, cleanOutput, "feature")
+	assert.Contains(t, cleanOutput, worktree)
+	assert.Contains(t, cleanOutput, repo+"\n")
 	_, err := os.Stat(worktree)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	checkBranch := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
@@ -102,7 +105,13 @@ func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 	cmd.SetOut(&output)
 	require.NoError(t, runClean(cmd, true, false))
 
-	assert.Contains(t, output.String(), "feature\t"+worktree)
+	cleanOutput := ui.StripANSI(output.String())
+	assert.Contains(t, cleanOutput, "Cleanup candidates")
+	assert.Contains(t, cleanOutput, "Merged, clean worktrees and branches to remove")
+	assert.Contains(t, cleanOutput, "BRANCH")
+	assert.Contains(t, cleanOutput, "WORKTREE")
+	assert.Contains(t, cleanOutput, "feature")
+	assert.Contains(t, cleanOutput, worktree)
 	_, err := os.Stat(worktree)
 	require.NoError(t, err)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")

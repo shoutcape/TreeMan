@@ -4,8 +4,25 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/spf13/cobra"
+)
+
+var (
+	cleanTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#6FB8D2"))
+	cleanDescriptionStyle = lipgloss.NewStyle().
+				Faint(true)
+	cleanHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Faint(true)
+	cleanBranchStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#B2B644")).
+				Width(40)
+	cleanPathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C4915E"))
 )
 
 func newCleanCmd() *cobra.Command {
@@ -75,8 +92,16 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		}
 	}
 
-	for _, entry := range candidates {
-		fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", entry.Branch, entry.Path)
+	if len(candidates) > 0 {
+		out := cmd.OutOrStdout()
+		fmt.Fprintln(out, cleanTitleStyle.Render("Cleanup candidates"))
+		fmt.Fprintln(out, cleanDescriptionStyle.Render("Merged, clean worktrees and branches to remove"))
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  %s  %s\n", cleanHeaderStyle.Width(40).Render("BRANCH"), cleanHeaderStyle.Render("WORKTREE"))
+		for _, entry := range candidates {
+			fmt.Fprintf(out, "  %s  %s\n", cleanBranchStyle.Render(entry.Branch), cleanPathStyle.Render(entry.Path))
+		}
+		fmt.Fprintln(out)
 	}
 	if dryRun {
 		fmt.Fprintf(os.Stderr, "Would remove %d merged, clean worktree(s).\n", len(candidates))
