@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
@@ -15,6 +16,13 @@ import (
 )
 
 var lookPath = exec.LookPath
+
+var dockerDaemonReady = func() error {
+	// docker info checks daemon connectivity without listing or changing containers.
+	return exec.Command("docker", "info", "--format", "{{.ServerVersion}}").Run()
+}
+
+var shellIntegrationPattern = regexp.MustCompile(`^\s*eval\s+(?:"\$\(\s*treeman\s+init\s+%s\s*\)"|'\$\(\s*treeman\s+init\s+%s\s*\)'|\$\(\s*treeman\s+init\s+%s\s*\))\s*(?:#.*)?$`)
 
 type diagnosticStatus int
 
@@ -37,13 +45,19 @@ func newDoctorCmd() *cobra.Command {
 		Use:   "doctor",
 		Short: "Check repository readiness and configuration",
 		Args:  cobra.NoArgs,
-		Run:   runDoctor,
+		RunE:  runDoctor,
 	}
 }
 
-func runDoctor(cmd *cobra.Command, _ []string) {
+func runDoctor(cmd *cobra.Command, _ []string) error {
 	diagnostics := collectDiagnostics()
-	writeDiagnostics(cmd.OutOrStdout(), diagnostics)
+	writeDiagnostics(cmd.ErrOrStderr(), diagnostics)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.status == diagnosticFail {
+			return fmt.Errorf("doctor found failed diagnostics; resolve them and rerun")
+		}
+	}
+	return nil
 }
 
 func collectDiagnostics() []diagnostic {
@@ -64,8 +78,8 @@ func collectDiagnostics() []diagnostic {
 		diagnostics = append(diagnostics, collectConfigDiagnostics()...)
 	}
 
-	diagnostics = append(diagnostics, collectToolDiagnostic("fzf"))
-	diagnostics = append(diagnostics, collectToolDiagnostic("docker"))
+	diagnostics = append(diagnostics, collectFzfDiagnostic())
+	diagnostics = append(diagnostics, collectDockerDiagnostic())
 	diagnostics = append(diagnostics, collectShellDiagnostic())
 	return diagnostics
 }
@@ -135,31 +149,44 @@ func collectConfigDiagnostics() []diagnostic {
 	}
 }
 
-func collectToolDiagnostic(tool string) diagnostic {
-	if tool == "fzf" {
-		if _, err := lookPath(tool); err != nil {
-			return diagnostic{status: diagnosticWarn, name: "Interactive picker", message: "fzf not installed", hint: "Install fzf: https://github.com/junegunn/fzf"}
-		}
-		return diagnostic{status: diagnosticPass, name: "Interactive picker", message: "fzf installed"}
+func collectFzfDiagnostic() diagnostic {
+	if _, err := lookPath("fzf"); err != nil {
+		return diagnostic{status: diagnosticWarn, name: "Interactive picker", message: "fzf not installed", hint: "Install fzf: https://github.com/junegunn/fzf"}
 	}
+	return diagnostic{status: diagnosticPass, name: "Interactive picker", message: "fzf installed"}
+}
 
-	if _, err := lookPath(tool); err != nil {
+func collectDockerDiagnostic() diagnostic {
+	if _, err := lookPath("docker"); err != nil {
 		return diagnostic{status: diagnosticWarn, name: "Container support", message: "Docker not installed", hint: "Install and start Docker: https://docs.docker.com/get-docker/"}
 	}
-	return diagnostic{status: diagnosticPass, name: "Container support", message: "Docker installed; daemon unchecked"}
+	if err := dockerDaemonReady(); err != nil {
+		return diagnostic{status: diagnosticWarn, name: "Container support", message: "Docker installed; daemon unavailable", hint: "Start Docker, then rerun treeman doctor."}
+	}
+	return diagnostic{status: diagnosticPass, name: "Container support", message: "Docker installed; daemon ready"}
 }
 
 func collectShellDiagnostic() diagnostic {
-	shell := filepath.Base(os.Getenv("SHELL"))
+	shellPath := os.Getenv("SHELL")
+	if shellPath == "" {
+		return diagnostic{status: diagnosticInfo, name: "Shell integration", message: "SHELL is not set; integration cannot be verified"}
+	}
+
+	shell := filepath.Base(shellPath)
 	if shell != "bash" && shell != "zsh" {
-		shell = "bash"
+		return diagnostic{status: diagnosticInfo, name: "Shell integration", message: "Unsupported shell " + shell + "; only bash and zsh can be verified"}
 	}
 	configPath := filepath.Join("~", "."+shell+"rc")
-	if home, err := os.UserHomeDir(); err == nil {
-		path := filepath.Join(home, "."+shell+"rc")
-		if data, err := os.ReadFile(path); err == nil && hasShellIntegration(string(data), shell) {
-			return diagnostic{status: diagnosticPass, name: "Shell integration", message: "Configured in " + configPath}
-		}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return diagnostic{status: diagnosticInfo, name: "Shell integration", message: "Home directory unavailable; integration cannot be verified"}
+	}
+	data, err := os.ReadFile(filepath.Join(home, "."+shell+"rc"))
+	if err == nil && hasShellIntegration(string(data), shell) {
+		return diagnostic{status: diagnosticPass, name: "Shell integration", message: "Configured in " + configPath}
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return diagnostic{status: diagnosticInfo, name: "Shell integration", message: "Unable to read " + configPath + "; integration cannot be verified"}
 	}
 	return diagnostic{
 		status: diagnosticInfo, name: "Shell integration", message: "Not configured",
@@ -168,10 +195,9 @@ func collectShellDiagnostic() diagnostic {
 }
 
 func hasShellIntegration(contents, shell string) bool {
-	command := "treeman init " + shell
+	pattern := regexp.MustCompile(fmt.Sprintf(shellIntegrationPattern.String(), regexp.QuoteMeta(shell), regexp.QuoteMeta(shell), regexp.QuoteMeta(shell)))
 	for _, line := range strings.Split(contents, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "#") && strings.Contains(line, command) {
+		if pattern.MatchString(line) {
 			return true
 		}
 	}

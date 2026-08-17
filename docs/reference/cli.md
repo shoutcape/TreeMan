@@ -16,6 +16,7 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 | `treeman clean [--dry-run]` | `wtc` | Remove clean worktrees merged into the default branch |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman init <shell>` | None | Print shell wrappers |
+| `treeman doctor` | None | Check repository readiness and configuration |
 | `treeman version` | None | Print build data |
 
 ## `create`
@@ -111,6 +112,20 @@ treeman init zsh
 This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, `wtd`, and `lg` shell functions. Add its output through `eval` in your shell startup file.
 
 `lg` starts lazygit. It changes the directory when lazygit writes a new-directory file.
+
+## `doctor`
+
+```text
+treeman doctor
+```
+
+Check Git repository, forge CLI, optional configuration and database setup, `fzf`, Docker, and shell integration readiness. The diagnostic report, including hints and its summary, is written to stderr; `doctor` writes no stdout output.
+
+`doctor` exits non-zero after rendering the full report when any diagnostic fails. Warnings and informational diagnostics do not cause a non-zero exit.
+
+Docker readiness uses a read-only daemon connectivity check. It does not inspect containers or connect to PostgreSQL. A missing Docker executable or unavailable daemon is a warning.
+
+Shell integration is checked only when `SHELL` identifies active `bash` or `zsh`. TreeMan recognizes an enabled startup-file entry such as `eval "$(treeman init zsh)"`, including ordinary whitespace and quote variants. Missing or unsupported `SHELL` values are informational and are not treated as bash.
 
 ## `version`
 
