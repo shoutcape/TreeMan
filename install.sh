@@ -81,14 +81,6 @@ detect_shell_name() {
 SHELL_RC="${TREEMAN_SHELL_RC:-$(detect_shell_rc)}"
 SHELL_NAME=$(detect_shell_name)
 
-detect_lazygit_config_dir() {
-  if [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
-    echo "$TREEMAN_LAZYGIT_CONFIG_DIR"
-  elif command -v lazygit >/dev/null 2>&1; then
-    lazygit -cd 2>/dev/null || true
-  fi
-}
-
 download_file() {
   local url="$1"
   local destination="$2"
@@ -193,89 +185,6 @@ if ! command -v gh >/dev/null 2>&1; then
   echo "    Install it from: https://cli.github.com/"
 fi
 
-# --- Lazygit integration -----------------------------------------------------
-
-if command -v lazygit >/dev/null 2>&1 || [[ -n "${TREEMAN_LAZYGIT_CONFIG_DIR:-}" ]]; then
-  print_step "Checking lazygit integration..."
-  config_dir=$(detect_lazygit_config_dir)
-  if [[ -n "$config_dir" ]]; then
-    config_file="$config_dir/config.yml"
-
-    if [ ! -f "$config_file" ]; then
-      mkdir -p "$config_dir"
-      touch "$config_file"
-    fi
-
-    if grep -q "$SOURCE_MARKER" "$config_file" 2>/dev/null; then
-      print_warn "TreeMan lazygit integration is already installed. Skipping."
-    else
-      print_step "Installing lazygit integration..."
-      ENTRY=$(cat <<EOF
-  - key: 'W' # TreeMan
-    description: 'Create new worktree (TreeMan)'
-    context: 'localBranches'
-    output: logWithPty
-    command: "treeman create {{.Form.BranchName | quote}}"
-    loadingText: 'Creating worktree...'
-    prompts:
-      - type: 'input'
-        title: 'New branch name:'
-        key: 'BranchName'
-  - key: 'D' # TreeMan
-    description: 'Delete worktree and branch (TreeMan)'
-    context: 'worktrees'
-    output: logWithPty
-    command: "treeman delete --path {{.SelectedWorktree.Path | quote}} --branch {{.SelectedWorktree.Branch | quote}} --yes"
-    loadingText: 'Removing worktree...'
-    prompts:
-      - type: 'confirm'
-        title: 'Delete worktree and branch?'
-        body: 'This will remove the worktree at {{.SelectedWorktree.Path}} and delete branch "{{.SelectedWorktree.Branch}}". Continue?'
-  - key: 'D' # TreeMan
-    description: 'Delete worktree and branch (TreeMan)'
-    context: 'localBranches'
-    output: logWithPty
-    command: "treeman delete --branch {{.SelectedLocalBranch.Name | quote}} --yes"
-    loadingText: 'Removing worktree...'
-    prompts:
-      - type: 'confirm'
-        title: 'Delete worktree and branch?'
-        body: 'This will remove the worktree and delete branch "{{.SelectedLocalBranch.Name}}". Continue?'
-EOF
-)
-
-      if ! grep -q '^customCommands:' "$config_file"; then
-        tmp=$(mktemp)
-        grep -v '^{}$' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
-        cat >> "$config_file" << EOF
-
-# TreeMan — worktree keybindings (W: create, D: delete)
-customCommands:
-$ENTRY
-EOF
-      elif grep -q '^customCommands: \[\]' "$config_file"; then
-        tmp=$(mktemp)
-        awk -v entry="$ENTRY" '
-          /^customCommands: \[\]/ { print "customCommands:\n" entry; next }
-          { print }
-        ' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
-      else
-        tmp=$(mktemp)
-        awk -v entry="$ENTRY" '
-          BEGIN { in_custom = 0; done = 0 }
-          /^customCommands:/ { in_custom = 1; print; next }
-          in_custom && !done && /^[a-zA-Z]/ { print entry "\n"; in_custom = 0; done = 1 }
-          { print }
-          END { if (in_custom && !done) { print "\n" entry } }
-        ' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
-      fi
-      print_done
-    fi
-  fi
-else
-  print_warn "lazygit is not installed. Skipping lazygit integration."
-fi
-
 # --- Final message -----------------------------------------------------------
 
 echo ""
@@ -292,4 +201,3 @@ echo "  wtmr [pr-number]     Create a review worktree from a GitLab MR"
 echo "  wts  [query]         Switch between worktrees (requires fzf)"
 echo "  wtl                  List worktrees and their state"
 echo "  wtd  [query]         Delete a worktree and its branch (requires fzf)"
-echo "  lg                   Run lazygit with auto-cd"

@@ -45,9 +45,3 @@ treeman delete --path /path/to/repo/.worktrees/feature-login --branch feature/lo
 ```
 
 The command starts a detached process. Do not remove related files until the process finishes.
-
-## Use Lazygit
-
-Run `lg` after you load shell wrappers. The wrapper sets `LAZYGIT_NEW_DIR_FILE`. It changes directory after lazygit exits when lazygit writes a target path.
-
-The installer can add TreeMan lazygit commands. It uses `W` to create a worktree. It uses `D` to delete one.

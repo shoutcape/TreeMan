@@ -28,7 +28,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "wtl()")
 	assert.Contains(t, out, "wtc()")
 	assert.Contains(t, out, "wtd()")
-	assert.Contains(t, out, "lg()")
+	assert.NotContains(t, out, "lg()")
 	assert.NotContains(t, out, "wto()")
 	assert.Contains(t, out, "treeman create")
 	assert.Contains(t, out, "treeman review")
@@ -118,7 +118,7 @@ func TestInitCmd_Fish(t *testing.T) {
 	assert.Contains(t, out, "test -n \"$_tm_dir\"; and cd \"$_tm_dir\"")
 	assert.Contains(t, out, "if contains -- --dry-run $argv")
 	assert.Contains(t, out, "set -l _tm_dir (treeman clean $argv); or return $status")
-	assert.Contains(t, out, "function lg")
+	assert.NotContains(t, out, "function lg")
 }
 
 func TestInitCmd_UnsupportedShell(t *testing.T) {

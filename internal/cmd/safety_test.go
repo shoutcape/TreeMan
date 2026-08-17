@@ -175,6 +175,7 @@ func TestRunDeleteDirect_RejectsKnownDefaultBranch(t *testing.T) {
 	worktree := filepath.Join(filepath.Dir(repo), "default-worktree")
 	gitTest(t, repo, "branch", "master")
 	gitTest(t, repo, "push", "origin", "master")
+	gitTest(t, filepath.Join(filepath.Dir(repo), "origin.git"), "config", "receive.denyDeleteCurrent", "ignore")
 	gitTest(t, repo, "push", "origin", "--delete", "main")
 	gitTest(t, repo, "worktree", "add", worktree, "master")
 	chdirForTest(t, repo)

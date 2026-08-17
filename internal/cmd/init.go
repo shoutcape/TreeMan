@@ -69,27 +69,6 @@ wtd() {
   _tm_dir=$(treeman delete "$@") || return $?
   [ -n "$_tm_dir" ] && cd "$_tm_dir"
 }
-
-lg() {
-  if ! command -v lazygit >/dev/null 2>&1; then
-    echo "Warning: lazygit is not installed." >&2
-    return 1
-  fi
-
-  local _tm_newdir_file="$HOME/.lazygit/newdir"
-  mkdir -p "$HOME/.lazygit"
-
-  LAZYGIT_NEW_DIR_FILE="$_tm_newdir_file" lazygit "$@"
-
-  if [ -f "$_tm_newdir_file" ]; then
-    local _tm_target
-    _tm_target=$(cat "$_tm_newdir_file")
-    rm -f "$_tm_newdir_file"
-    if [ -n "$_tm_target" ] && [ "$_tm_target" != "$(pwd)" ]; then
-      cd "$_tm_target"
-    fi
-  fi
-}
 `
 
 const fishShellWrappers = `# TreeMan shell integration
@@ -141,24 +120,6 @@ function wtd
   test -n "$_tm_dir"; and cd "$_tm_dir"
 end
 
-function lg
-  if not type -q lazygit
-    echo "Warning: lazygit is not installed." >&2
-    return 1
-  end
-
-  set -l _tm_newdir_file "$HOME/.lazygit/newdir"
-  mkdir -p "$HOME/.lazygit"
-  env LAZYGIT_NEW_DIR_FILE="$_tm_newdir_file" lazygit $argv
-
-  if test -f "$_tm_newdir_file"
-    set -l _tm_target (string trim < "$_tm_newdir_file")
-    rm -f "$_tm_newdir_file"
-    if test -n "$_tm_target"; and test "$_tm_target" != (pwd)
-      cd "$_tm_target"
-    end
-  end
-end
 `
 
 func newInitCmd() *cobra.Command {
@@ -178,7 +139,7 @@ Add this to your shell configuration file:
   # fish (~/.config/fish/config.fish):
   treeman init fish | source
 
-This defines the wt, wtb, wtpr, wtmr, wts, wtl, wtc, wtd, and lg functions in your shell
+This defines the wt, wtb, wtpr, wtmr, wts, wtl, wtc, and wtd functions in your shell
 session, enabling automatic cd into new or switched worktrees.`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"bash", "zsh", "fish"},
