@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,14 +23,18 @@ func TestRunDoctor_ReportsReadyRepository(t *testing.T) {
 	buf := &bytes.Buffer{}
 	runDoctor(commandWithOutput(buf), nil)
 
-	out := buf.String()
-	assert.Contains(t, out, "PASS  Git repository")
-	assert.Contains(t, out, "PASS  gh CLI")
-	assert.Contains(t, out, "PASS  fzf")
-	assert.Contains(t, out, "PASS  docker")
-	assert.Contains(t, out, "PASS  Configuration: No .treeman.toml configured.")
-	assert.Contains(t, out, "PASS  Database configuration: Branch databases are not configured.")
-	assert.Contains(t, out, "WARN  Shell integration: Enable wrappers with: eval \"$(treeman init zsh)\"")
+	out := ui.StripANSI(buf.String())
+	assert.Contains(t, out, "DIAGNOSTICS")
+	assert.Contains(t, out, "✓  Repository           Git repository detected")
+	assert.Contains(t, out, "✓  Forge CLI            GitHub repository; gh installed")
+	assert.Contains(t, out, "○  Configuration        No .treeman.toml found; optional setup disabled")
+	assert.Contains(t, out, "○  Database setup       Not configured; add [database] to enable")
+	assert.Contains(t, out, "✓  Interactive picker   fzf installed")
+	assert.Contains(t, out, "✓  Container support    Docker installed; daemon unchecked")
+	assert.Contains(t, out, "!  Shell integration    Not detected")
+	assert.Contains(t, out, "Add to ~/.zshrc:")
+	assert.Contains(t, out, "eval \"$(treeman init zsh)\"")
+	assert.Contains(t, out, "4 passed · 2 informational · 1 warning")
 }
 
 func TestRunDoctor_ReportsMissingOptionalToolsWithRecovery(t *testing.T) {
@@ -46,9 +51,11 @@ func TestRunDoctor_ReportsMissingOptionalToolsWithRecovery(t *testing.T) {
 	buf := &bytes.Buffer{}
 	runDoctor(commandWithOutput(buf), nil)
 
-	out := buf.String()
-	assert.Contains(t, out, "WARN  fzf: Install fzf")
-	assert.Contains(t, out, "WARN  docker: Install and start Docker")
+	out := ui.StripANSI(buf.String())
+	assert.Contains(t, out, "!  Interactive picker   fzf not installed")
+	assert.Contains(t, out, "Install fzf: https://github.com/junegunn/fzf")
+	assert.Contains(t, out, "!  Container support    Docker not installed")
+	assert.Contains(t, out, "Install and start Docker: https://docs.docker.com/get-docker/")
 }
 
 func TestRunDoctor_ReportsInvalidConfigWithoutProvisioning(t *testing.T) {
@@ -61,7 +68,9 @@ func TestRunDoctor_ReportsInvalidConfigWithoutProvisioning(t *testing.T) {
 	buf := &bytes.Buffer{}
 	runDoctor(commandWithOutput(buf), nil)
 
-	assert.Contains(t, buf.String(), "FAIL  Configuration: Fix could not parse")
+	out := ui.StripANSI(buf.String())
+	assert.Contains(t, out, "✗  Configuration        Invalid .treeman.toml")
+	assert.Contains(t, out, "Fix could not parse")
 }
 
 func TestRunDoctor_ReportsUnsupportedForge(t *testing.T) {
@@ -73,7 +82,9 @@ func TestRunDoctor_ReportsUnsupportedForge(t *testing.T) {
 	buf := &bytes.Buffer{}
 	runDoctor(commandWithOutput(buf), nil)
 
-	assert.Contains(t, buf.String(), "FAIL  Forge: Set origin to github.com or a GitLab instance.")
+	out := ui.StripANSI(buf.String())
+	assert.Contains(t, out, "✗  Forge CLI            Unsupported forge")
+	assert.Contains(t, out, "Set origin to github.com or a GitLab instance.")
 }
 
 func TestRunDoctor_ReportsRepositoryFailure(t *testing.T) {
@@ -83,7 +94,9 @@ func TestRunDoctor_ReportsRepositoryFailure(t *testing.T) {
 	buf := &bytes.Buffer{}
 	runDoctor(commandWithOutput(buf), nil)
 
-	assert.Contains(t, buf.String(), "FAIL  Repository: Run treeman doctor from a Git repository.")
+	out := ui.StripANSI(buf.String())
+	assert.Contains(t, out, "✗  Repository           Not detected")
+	assert.Contains(t, out, "Run treeman doctor from a Git repository.")
 }
 
 func commandWithOutput(out *bytes.Buffer) *cobra.Command {

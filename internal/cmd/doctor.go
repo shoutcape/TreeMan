@@ -10,10 +10,27 @@ import (
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 var lookPath = exec.LookPath
+
+type diagnosticStatus int
+
+const (
+	diagnosticPass diagnosticStatus = iota
+	diagnosticInfo
+	diagnosticWarn
+	diagnosticFail
+)
+
+type diagnostic struct {
+	status  diagnosticStatus
+	name    string
+	message string
+	hint    string
+}
 
 func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -25,88 +42,173 @@ func newDoctorCmd() *cobra.Command {
 }
 
 func runDoctor(cmd *cobra.Command, _ []string) {
-	out := cmd.OutOrStdout()
-	if _, err := lookPath("git"); err != nil {
-		doctorResult(out, "FAIL", "Git", "Install Git: https://git-scm.com/downloads")
-	} else if !git.IsInsideRepo() {
-		doctorResult(out, "FAIL", "Repository", "Run treeman doctor from a Git repository.")
-	} else {
-		doctorResult(out, "PASS", "Git repository", "")
-		doctorForge(out)
-		doctorConfig(out)
-	}
-
-	doctorTool(out, "fzf", "WARN", "Install fzf for interactive selection: https://github.com/junegunn/fzf")
-	doctorTool(out, "docker", "WARN", "Install and start Docker for branch database setup: https://docs.docker.com/get-docker/")
-	doctorShell(out)
+	diagnostics := collectDiagnostics()
+	writeDiagnostics(cmd.OutOrStdout(), diagnostics)
 }
 
-func doctorForge(out interface{ Write([]byte) (int, error) }) {
+func collectDiagnostics() []diagnostic {
+	diagnostics := make([]diagnostic, 0, 7)
+	if _, err := lookPath("git"); err != nil {
+		diagnostics = append(diagnostics, diagnostic{
+			status: diagnosticFail, name: "Git", message: "Not installed",
+			hint: "Install Git: https://git-scm.com/downloads",
+		})
+	} else if !git.IsInsideRepo() {
+		diagnostics = append(diagnostics, diagnostic{
+			status: diagnosticFail, name: "Repository", message: "Not detected",
+			hint: "Run treeman doctor from a Git repository.",
+		})
+	} else {
+		diagnostics = append(diagnostics, diagnostic{status: diagnosticPass, name: "Repository", message: "Git repository detected"})
+		diagnostics = append(diagnostics, collectForgeDiagnostic())
+		diagnostics = append(diagnostics, collectConfigDiagnostics()...)
+	}
+
+	diagnostics = append(diagnostics, collectToolDiagnostic("fzf"))
+	diagnostics = append(diagnostics, collectToolDiagnostic("docker"))
+	diagnostics = append(diagnostics, collectShellDiagnostic())
+	return diagnostics
+}
+
+func collectForgeDiagnostic() diagnostic {
 	remoteURL, err := git.OriginRemoteURL()
 	if err != nil {
-		doctorResult(out, "FAIL", "Origin remote", "Add an origin remote that points to GitHub or GitLab.")
-		return
+		return diagnostic{
+			status: diagnosticFail, name: "Forge CLI", message: "Origin remote not found",
+			hint: "Add an origin remote that points to GitHub or GitLab.",
+		}
 	}
 
 	forgeType, _, _, err := forge.ResolveFromRemote(remoteURL)
 	if err != nil {
-		doctorResult(out, "FAIL", "Forge", "Set origin to github.com or a GitLab instance.")
-		return
+		return diagnostic{
+			status: diagnosticFail, name: "Forge CLI", message: "Unsupported forge",
+			hint: "Set origin to github.com or a GitLab instance.",
+		}
 	}
 
 	cli := forge.CLITool(forgeType)
-	if _, err := lookPath(cli); err != nil {
-		doctorResult(out, "FAIL", strings.ToUpper(cli), fmt.Sprintf("Install %s for %s repository support: %s", cli, forgeType, cliInstallURL(forgeType)))
-		return
+	forgeName := "GitHub"
+	if forgeType == forge.GitLab {
+		forgeName = "GitLab"
 	}
-	doctorResult(out, "PASS", fmt.Sprintf("%s CLI", cli), "")
+	if _, err := lookPath(cli); err != nil {
+		return diagnostic{
+			status: diagnosticFail, name: "Forge CLI", message: forgeName + " repository detected; " + cli + " not installed",
+			hint: "Install " + cli + ": " + cliInstallURL(forgeType),
+		}
+	}
+	return diagnostic{status: diagnosticPass, name: "Forge CLI", message: forgeName + " repository; " + cli + " installed"}
 }
 
-func doctorConfig(out interface{ Write([]byte) (int, error) }) {
+func collectConfigDiagnostics() []diagnostic {
 	root, err := git.MainWorktreeRoot()
 	if err != nil {
-		doctorResult(out, "FAIL", "Configuration", "Resolve the Git worktree state, then rerun treeman doctor.")
-		return
+		return []diagnostic{{
+			status: diagnosticFail, name: "Configuration", message: "Git worktree state unavailable",
+			hint: "Resolve the Git worktree state, then rerun treeman doctor.",
+		}}
 	}
 
 	result := config.Load(root)
 	if result.Warning != "" {
-		doctorResult(out, "FAIL", "Configuration", "Fix "+result.Warning)
-		return
+		return []diagnostic{{
+			status: diagnosticFail, name: "Configuration", message: "Invalid .treeman.toml",
+			hint: "Fix " + result.Warning,
+		}}
 	}
 	if result.Path == "" {
-		doctorResult(out, "PASS", "Configuration", "No .treeman.toml configured.")
-		doctorResult(out, "PASS", "Database configuration", "Branch databases are not configured.")
-		return
+		return []diagnostic{
+			{status: diagnosticInfo, name: "Configuration", message: "No .treeman.toml found; optional setup disabled"},
+			{status: diagnosticInfo, name: "Database setup", message: "Not configured; add [database] to enable"},
+		}
 	}
-	doctorResult(out, "PASS", "Configuration", result.Path)
 	if result.Config.Database == nil {
-		doctorResult(out, "PASS", "Database configuration", "Branch databases are not configured.")
-		return
+		return []diagnostic{
+			{status: diagnosticPass, name: "Configuration", message: "Valid .treeman.toml"},
+			{status: diagnosticInfo, name: "Database setup", message: "Not configured; add [database] to enable"},
+		}
 	}
-	doctorResult(out, "PASS", "Database configuration", "Uses "+result.Config.Database.EnvKey+". Database connectivity is not checked.")
+	return []diagnostic{
+		{status: diagnosticPass, name: "Configuration", message: "Valid .treeman.toml"},
+		{status: diagnosticPass, name: "Database setup", message: "Configured with " + result.Config.Database.EnvKey},
+	}
 }
 
-func doctorTool(out interface{ Write([]byte) (int, error) }, tool, missingState, recovery string) {
+func collectToolDiagnostic(tool string) diagnostic {
+	if tool == "fzf" {
+		if _, err := lookPath(tool); err != nil {
+			return diagnostic{status: diagnosticWarn, name: "Interactive picker", message: "fzf not installed", hint: "Install fzf: https://github.com/junegunn/fzf"}
+		}
+		return diagnostic{status: diagnosticPass, name: "Interactive picker", message: "fzf installed"}
+	}
+
 	if _, err := lookPath(tool); err != nil {
-		doctorResult(out, missingState, tool, recovery)
-		return
+		return diagnostic{status: diagnosticWarn, name: "Container support", message: "Docker not installed", hint: "Install and start Docker: https://docs.docker.com/get-docker/"}
 	}
-	doctorResult(out, "PASS", tool, "")
+	return diagnostic{status: diagnosticPass, name: "Container support", message: "Docker installed; daemon unchecked"}
 }
 
-func doctorShell(out interface{ Write([]byte) (int, error) }) {
+func collectShellDiagnostic() diagnostic {
 	shell := filepath.Base(os.Getenv("SHELL"))
 	if shell != "bash" && shell != "zsh" {
 		shell = "bash"
 	}
-	doctorResult(out, "WARN", "Shell integration", fmt.Sprintf("Enable wrappers with: eval \"$(treeman init %s)\"", shell))
+	return diagnostic{
+		status: diagnosticWarn, name: "Shell integration", message: "Not detected",
+		hint: fmt.Sprintf("Add to ~/.%src:\neval \"$(treeman init %s)\"", shell, shell),
+	}
 }
 
-func doctorResult(out interface{ Write([]byte) (int, error) }, state, check, detail string) {
-	if detail == "" {
-		fmt.Fprintf(out, "%s  %s\n", state, check)
-		return
+func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics []diagnostic) {
+	fmt.Fprintf(out, "\n%sDIAGNOSTICS%s\n\n", ui.ColorCyan, ui.ColorReset)
+	counts := [4]int{}
+	for _, diagnostic := range diagnostics {
+		counts[diagnostic.status]++
+		symbol, color := diagnosticAppearance(diagnostic.status)
+		fmt.Fprintf(out, "  %s%s%s  %-20s %s%s%s\n", color, symbol, ui.ColorReset, diagnostic.name, ui.ColorDim, diagnostic.message, ui.ColorReset)
+		if diagnostic.hint != "" {
+			writeDiagnosticHint(out, diagnostic.hint)
+		}
 	}
-	fmt.Fprintf(out, "%s  %s: %s\n", state, check, detail)
+
+	summary := make([]string, 0, 4)
+	if counts[diagnosticPass] > 0 {
+		summary = append(summary, fmt.Sprintf("%d passed", counts[diagnosticPass]))
+	}
+	if counts[diagnosticInfo] > 0 {
+		summary = append(summary, fmt.Sprintf("%d informational", counts[diagnosticInfo]))
+	}
+	if counts[diagnosticWarn] > 0 {
+		summary = append(summary, fmt.Sprintf("%d warning", counts[diagnosticWarn]))
+	}
+	if counts[diagnosticFail] > 0 {
+		summary = append(summary, fmt.Sprintf("%d failed", counts[diagnosticFail]))
+	}
+	fmt.Fprintf(out, "\n%s%s%s\n", ui.ColorStatus, strings.Join(summary, " · "), ui.ColorReset)
+}
+
+func diagnosticAppearance(status diagnosticStatus) (symbol, color string) {
+	switch status {
+	case diagnosticInfo:
+		return "○", ui.ColorDim
+	case diagnosticWarn:
+		return "!", ui.ColorWarning
+	case diagnosticFail:
+		return "✗", ui.ColorFailure
+	default:
+		return "✓", ui.ColorStatus
+	}
+}
+
+func writeDiagnosticHint(out interface{ Write([]byte) (int, error) }, hint string) {
+	lines := strings.Split(hint, "\n")
+	for i, line := range lines {
+		color := ui.ColorDim
+		if i > 0 {
+			color = ui.ColorPath
+		}
+		fmt.Fprintf(out, "\n     %s%s%s", color, line, ui.ColorReset)
+	}
+	fmt.Fprintln(out)
 }
