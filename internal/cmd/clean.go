@@ -4,25 +4,44 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/spf13/cobra"
 )
 
+var (
+	cleanTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#6FB8D2"))
+	cleanDescriptionStyle = lipgloss.NewStyle().
+				Faint(true)
+	cleanHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Faint(true)
+	cleanBranchStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#B2B644")).
+				Width(40)
+	cleanPathStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C4915E"))
+)
+
 func newCleanCmd() *cobra.Command {
 	var dryRun bool
+	var skipConfirm bool
 	cmd := &cobra.Command{
 		Use:   "clean",
 		Short: "Remove clean worktrees with branches merged into the default branch",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runClean(cmd, dryRun)
+			return runClean(cmd, dryRun, skipConfirm)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show worktrees that would be removed")
+	cmd.Flags().BoolVarP(&skipConfirm, "yes", "y", false, "Skip confirmation prompt")
 	return cmd
 }
 
-func runClean(cmd *cobra.Command, dryRun bool) error {
+func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -61,8 +80,7 @@ func runClean(cmd *cobra.Command, dryRun bool) error {
 		candidates = append(candidates, entry)
 	}
 
-	// Remove the current worktree last. Removing it invalidates the process
-	// working directory, but deleteWorktree emits mainRoot for the shell wrapper.
+	// Remove the current worktree last so its process working directory remains valid.
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return err
@@ -74,22 +92,33 @@ func runClean(cmd *cobra.Command, dryRun bool) error {
 		}
 	}
 
+	if len(candidates) > 0 {
+		out := cmd.OutOrStdout()
+		fmt.Fprintln(out, cleanTitleStyle.Render("Cleanup candidates"))
+		fmt.Fprintln(out, cleanDescriptionStyle.Render("Merged, clean worktrees and branches to remove"))
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  %s  %s\n", cleanHeaderStyle.Width(40).Render("BRANCH"), cleanHeaderStyle.Render("WORKTREE"))
+		for _, entry := range candidates {
+			fmt.Fprintf(out, "  %s  %s\n", cleanBranchStyle.Render(entry.Branch), cleanPathStyle.Render(entry.Path))
+		}
+		fmt.Fprintln(out)
+	}
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "Would remove %d merged, clean worktree(s).\n", len(candidates))
+		return nil
+	}
+	if len(candidates) > 0 && !skipConfirm && !confirmYN(cmd, "Remove these worktrees and branches? [y/N] ") {
+		fmt.Fprintln(os.Stderr, "Cancelled.")
+		return nil
+	}
+
 	removed := 0
 	for _, entry := range candidates {
-		if dryRun {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", entry.Path)
-			removed++
-			continue
-		}
 		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false); err != nil {
 			return err
 		}
 		removed++
 	}
-	if dryRun {
-		fmt.Fprintf(os.Stderr, "Would remove %d merged, clean worktree(s).\n", removed)
-	} else {
-		fmt.Fprintf(os.Stderr, "Removed %d merged, clean worktree(s).\n", removed)
-	}
+	fmt.Fprintf(os.Stderr, "Removed %d merged, clean worktree(s).\n", removed)
 	return nil
 }

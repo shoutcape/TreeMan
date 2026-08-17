@@ -5,16 +5,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, "init", "--bare", "--initial-branch=main", origin)
-
 	repo := filepath.Join(t.TempDir(), "repo")
 	runGit(t, "clone", origin, repo)
 	runGitInDir(t, repo, "config", "user.email", "test@example.com")
@@ -23,7 +25,6 @@ func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	runGitInDir(t, repo, "add", "file")
 	runGitInDir(t, repo, "commit", "-m", "base")
 	runGitInDir(t, repo, "push", "origin", "main")
-
 	runGitInDir(t, repo, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("merged\n"), 0o644))
 	runGitInDir(t, repo, "commit", "-am", "feature")
@@ -31,30 +32,95 @@ func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	runGitInDir(t, repo, "checkout", "main")
 	runGitInDir(t, repo, "merge", "--ff-only", "feature")
 	runGitInDir(t, repo, "push", "origin", "main")
-
 	worktree := filepath.Join(t.TempDir(), "feature-worktree")
 	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "file"), []byte("local-only\n"), 0o644))
 	runGitInDir(t, worktree, "commit", "-am", "local-only")
 
-	previousDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(repo))
-	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
-
+	changeToDir(t, repo)
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runClean(cmd, false))
+	require.NoError(t, runClean(cmd, false, false))
 
-	_, err = os.Stat(worktree)
+	_, err := os.Stat(worktree)
 	require.NoError(t, err)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
 func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, worktree)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runClean(cmd, false, true))
+
+	cleanOutput := ui.StripANSI(output.String())
+	assert.Contains(t, cleanOutput, "feature")
+	assert.Contains(t, cleanOutput, worktree)
+	assert.Contains(t, cleanOutput, repo+"\n")
+	_, err := os.Stat(worktree)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	checkBranch := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	checkBranch.Dir = repo
+	require.Error(t, checkBranch.Run())
+}
+
+func TestCleanDeclineLeavesCandidatesUntouched(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader("n\n"))
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, false))
+
+	_, err := os.Stat(worktree)
+	require.NoError(t, err)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanYesRemovesCandidates(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.True(t, os.IsNotExist(err))
+	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	command.Dir = repo
+	require.Error(t, command.Run())
+}
+
+func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+
+	var output bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&output)
+	require.NoError(t, runClean(cmd, true, false))
+
+	cleanOutput := ui.StripANSI(output.String())
+	assert.Contains(t, cleanOutput, "Cleanup candidates")
+	assert.Contains(t, cleanOutput, "Merged, clean worktrees and branches to remove")
+	assert.Contains(t, cleanOutput, "BRANCH")
+	assert.Contains(t, cleanOutput, "WORKTREE")
+	assert.Contains(t, cleanOutput, "feature")
+	assert.Contains(t, cleanOutput, worktree)
+	_, err := os.Stat(worktree)
+	require.NoError(t, err)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func createMergedCleanWorktree(t *testing.T) (string, string) {
+	t.Helper()
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, "init", "--bare", "--initial-branch=main", origin)
-
 	repo := filepath.Join(t.TempDir(), "repo")
 	runGit(t, "clone", origin, repo)
 	runGitInDir(t, repo, "config", "user.email", "test@example.com")
@@ -63,7 +129,6 @@ func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
 	runGitInDir(t, repo, "add", "file")
 	runGitInDir(t, repo, "commit", "-m", "base")
 	runGitInDir(t, repo, "push", "origin", "main")
-
 	runGitInDir(t, repo, "checkout", "-b", "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("merged\n"), 0o644))
 	runGitInDir(t, repo, "commit", "-am", "feature")
@@ -71,27 +136,17 @@ func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
 	runGitInDir(t, repo, "checkout", "main")
 	runGitInDir(t, repo, "merge", "--ff-only", "feature")
 	runGitInDir(t, repo, "push", "origin", "main")
-
 	worktree := filepath.Join(t.TempDir(), "feature-worktree")
 	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
+	return repo, worktree
+}
 
+func changeToDir(t *testing.T, dir string) {
+	t.Helper()
 	previousDir, err := os.Getwd()
 	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
 	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
-	require.NoError(t, os.Chdir(worktree))
-
-	output := &bytes.Buffer{}
-	cmd := &cobra.Command{}
-	cmd.SetOut(output)
-	require.NoError(t, runClean(cmd, false))
-
-	require.Equal(t, repo+"\n", output.String())
-	require.NoError(t, os.Chdir(repo))
-	_, err = os.Stat(worktree)
-	require.ErrorIs(t, err, os.ErrNotExist)
-	checkBranch := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
-	checkBranch.Dir = repo
-	require.Error(t, checkBranch.Run())
 }
 
 func runGit(t *testing.T, args ...string) {
