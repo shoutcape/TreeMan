@@ -31,10 +31,10 @@ func TestRunDoctor_ReportsReadyRepository(t *testing.T) {
 	assert.Contains(t, out, "○  Database setup       Not configured; add [database] to enable")
 	assert.Contains(t, out, "✓  Interactive picker   fzf installed")
 	assert.Contains(t, out, "✓  Container support    Docker installed; daemon unchecked")
-	assert.Contains(t, out, "!  Shell integration    Not detected")
-	assert.Contains(t, out, "Add to ~/.zshrc:")
+	assert.Contains(t, out, "○  Shell integration    Cannot verify from a subprocess")
+	assert.Contains(t, out, "To enable future shells, add to ~/.zshrc:")
 	assert.Contains(t, out, "eval \"$(treeman init zsh)\"")
-	assert.Contains(t, out, "4 passed · 2 informational · 1 warning")
+	assert.Contains(t, out, "4 passed · 3 informational")
 }
 
 func TestRunDoctor_ReportsMissingOptionalToolsWithRecovery(t *testing.T) {

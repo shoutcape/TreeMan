@@ -155,8 +155,8 @@ func collectShellDiagnostic() diagnostic {
 		shell = "bash"
 	}
 	return diagnostic{
-		status: diagnosticWarn, name: "Shell integration", message: "Not detected",
-		hint: fmt.Sprintf("Add to ~/.%src:\neval \"$(treeman init %s)\"", shell, shell),
+		status: diagnosticInfo, name: "Shell integration", message: "Cannot verify from a subprocess",
+		hint: fmt.Sprintf("To enable future shells, add to ~/.%src:\neval \"$(treeman init %s)\"", shell, shell),
 	}
 }
 
