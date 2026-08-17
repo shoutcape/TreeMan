@@ -33,6 +33,9 @@ PR_SOURCE_REPO="$TMP_DIR/pr-source"
 WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-test"
 REVIEW_WT_ALPHA="$MAIN_REPO/.worktrees/feature-review-alpha"
 REVIEW_WT_BETA="$MAIN_REPO/.worktrees/feature-review-beta"
+SKIP_WT="$MAIN_REPO/.worktrees/feature-skip-setup"
+NPM_CALLS="$TMP_DIR/npm-calls"
+DOCKER_CALLS="$TMP_DIR/docker-calls"
 
 cleanup() {
   # Go's module cache uses read-only files; chmod before removing.
@@ -91,6 +94,8 @@ export GIT_AUTHOR_NAME="TreeMan Test"
 export GIT_AUTHOR_EMAIL="test@example.com"
 export GIT_COMMITTER_NAME="TreeMan Test"
 export GIT_COMMITTER_EMAIL="test@example.com"
+export NPM_CALLS
+export DOCKER_CALLS
 
 # Forge/repo overrides — injected into the treeman binary via env vars so that
 # forge detection and API routing work against the local bare repo without a
@@ -251,6 +256,18 @@ sed -n "${FZF_CHOICE:-1}p"
 EOF
 chmod +x "$MOCK_BIN/fzf"
 
+cat > "$MOCK_BIN/npm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$NPM_CALLS"
+EOF
+chmod +x "$MOCK_BIN/npm"
+
+cat > "$MOCK_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_CALLS"
+EOF
+chmod +x "$MOCK_BIN/docker"
+
 # ---------------------------------------------------------------------------
 # review branch setup (GitHub)
 # ---------------------------------------------------------------------------
@@ -278,6 +295,32 @@ git -C "$PR_SOURCE_REPO" push origin HEAD:refs/pull/124/head >/dev/null
 # ---------------------------------------------------------------------------
 # worktree create — wt
 # ---------------------------------------------------------------------------
+
+echo "==> worktree create with setup skips"
+
+printf 'DATABASE_URL=postgres://postgres@localhost/project\n' > "$MAIN_REPO/.env"
+printf 'COPIED_ENV=true\n' > "$MAIN_REPO/.env.copy-test"
+printf '{"lockfileVersion": 3}\n' > "$MAIN_REPO/package-lock.json"
+cat > "$MAIN_REPO/.treeman.toml" <<'EOF'
+[database]
+env_key = "DATABASE_URL"
+
+[hooks]
+post_create = ["touch hook-ran"]
+EOF
+git -C "$MAIN_REPO" add -f .env
+git -C "$MAIN_REPO" add .treeman.toml package-lock.json
+git -C "$MAIN_REPO" commit -m "add setup fixtures" >/dev/null
+git -C "$MAIN_REPO" push origin main >/dev/null
+
+cd "$MAIN_REPO"
+wt feature/skip-setup --skip-env --skip-database --skip-deps --skip-hooks
+assert_exists "$SKIP_WT"
+assert_exists "$SKIP_WT/.env"
+assert_missing "$SKIP_WT/.env.copy-test"
+assert_missing "$SKIP_WT/hook-ran"
+assert_missing "$NPM_CALLS"
+assert_missing "$DOCKER_CALLS"
 
 echo "==> worktree create"
 
