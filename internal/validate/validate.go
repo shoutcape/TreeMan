@@ -4,6 +4,7 @@ package validate
 import (
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -25,10 +26,18 @@ func BranchName(name string) error {
 	return nil
 }
 
-// PRNumber returns an error if input is empty or not a positive integer string.
-func PRNumber(input string) error {
+// PRNumber parses input as a positive PR/MR number representable by an int.
+func PRNumber(input string) (int, error) {
 	if !prNumberPattern.MatchString(input) {
-		return errors.New("PR/MR number must be numeric")
+		return 0, errors.New("PR/MR number must be numeric")
 	}
-	return nil
+
+	number, err := strconv.Atoi(input)
+	if err != nil {
+		return 0, errors.New("PR/MR number is too large")
+	}
+	if number <= 0 {
+		return 0, errors.New("PR/MR number must be positive")
+	}
+	return number, nil
 }
