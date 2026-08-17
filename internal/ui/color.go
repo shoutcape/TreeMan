@@ -18,6 +18,9 @@ const (
 	// ColorWarning is a warm orange (#F2A65A) used for changed worktrees.
 	ColorWarning = "\033[38;2;242;166;90m"
 
+	// ColorFailure is a soft red used for failed diagnostic states.
+	ColorFailure = "\033[38;2;240;94;94m"
+
 	// ColorCyan is a muted cyan used for table headings.
 	ColorCyan = "\033[1;38;2;111;184;210m"
 
