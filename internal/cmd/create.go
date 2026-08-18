@@ -219,11 +219,12 @@ func printSetupSummary(w io.Writer, summary setupSummary) {
 	fmt.Fprintln(w, ui.RenderTitle("SETUP"))
 	writeSetupStatus(w, "Environment", summary.environment)
 	writeSetupStatus(w, "Dependencies", summary.dependencies)
-	writeSetupStatus(w, "Database", summary.database)
-	writeSetupStatus(w, "Hooks", summary.hooks)
 	if summary.databaseDocs {
-		fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(ui.ToneInfo, "→"), "Configure", ui.RenderLink("PostgreSQL setup guide", databaseDocsURL))
+		fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(ui.ToneMuted, "○"), "Database", ui.RenderLink(ui.FitToTerminal("Not configured. Configure database", 20), databaseDocsURL))
+	} else {
+		writeSetupStatus(w, "Database", summary.database)
 	}
+	writeSetupStatus(w, "Hooks", summary.hooks)
 }
 
 func summarizeHooks(results []hooks.RunResult) string {
