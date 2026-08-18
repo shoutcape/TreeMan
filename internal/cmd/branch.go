@@ -229,11 +229,11 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	// Print summary to stderr.
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(branch))
+	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(ui.FitToTerminal(branch, 10)))
 	if pr, ok := prMap[branch]; ok {
 		fmt.Fprintf(os.Stderr, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
-	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(worktreePath))
+	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(ui.FitToTerminal(worktreePath, 10)))
 	setupOptions.printSkipped(os.Stderr)
 
 	// Print path to stdout so the shell wrapper can cd into it.

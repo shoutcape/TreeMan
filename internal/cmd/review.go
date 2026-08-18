@@ -215,9 +215,9 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Review worktree ready:"))
 	fmt.Fprintf(os.Stderr, "  PR/MR:  %s\n", ui.RenderPR(fmt.Sprintf("#%d", info.Number)))
-	fmt.Fprintf(os.Stderr, "  Title:  %s\n", info.Title)
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(info.Branch))
-	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(worktreePath))
+	fmt.Fprintf(os.Stderr, "  Title:  %s\n", ui.RenderMuted(ui.FitToTerminal(info.Title, 10)))
+	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(ui.FitToTerminal(info.Branch, 10)))
+	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(ui.FitToTerminal(worktreePath, 10)))
 	setupOptions.printSkipped(os.Stderr)
 
 	// Print path to stdout for shell wrapper cd.

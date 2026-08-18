@@ -70,6 +70,22 @@ func StripANSI(s string) string {
 			i++ // skip 'm'
 			continue
 		}
+		if s[i] == '\033' && i+1 < len(s) && s[i+1] == ']' {
+			// Skip OSC sequences, including OSC 8 terminal hyperlinks.
+			i += 2
+			for i < len(s) {
+				if s[i] == '\a' {
+					i++
+					break
+				}
+				if s[i] == '\033' && i+1 < len(s) && s[i+1] == '\\' {
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
 		b.WriteByte(s[i])
 		i++
 	}

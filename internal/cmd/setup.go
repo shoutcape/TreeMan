@@ -42,7 +42,7 @@ func (o creationSetupOptions) printSkipped(w io.Writer) {
 
 func writeSetupStatus(w io.Writer, name, status string) {
 	tone, symbol := setupStatusAppearance(status)
-	fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(tone, symbol), name, ui.RenderTone(tone, status))
+	fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(tone, symbol), name, ui.RenderTone(tone, ui.FitToTerminal(status, 20)))
 }
 
 func setupStatusAppearance(status string) (ui.Tone, string) {

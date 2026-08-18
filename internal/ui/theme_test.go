@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,4 +33,14 @@ func TestPickerRowsStripToLookupText(t *testing.T) {
 	assert.Equal(t, "worktrees/feature-forest                  feature/forest", StripANSI(WorktreeRow("/repo/worktrees/feature-forest", "feature/forest")))
 	assert.Equal(t, "#42       feature/forest                    Improve picker styling", StripANSI(PRRow(42, "feature/forest", "Improve picker styling")))
 	assert.Equal(t, "feature/forest                                      2026-08-18      #42", StripANSI(BranchRow("feature/forest", "2026-08-18", 42)))
+}
+
+func TestTruncateTerminalText(t *testing.T) {
+	assert.Equal(t, "feature...", ansi.Truncate("feature/very-long-branch", 10, "..."))
+}
+
+func TestRenderLinkStripsToLabel(t *testing.T) {
+	link := RenderLink("PostgreSQL setup guide", "https://example.com")
+	assert.Contains(t, link, ansi.SetHyperlink("https://example.com"))
+	assert.Equal(t, "PostgreSQL setup guide", StripANSI(link))
 }

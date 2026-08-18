@@ -197,8 +197,8 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		databaseDocs: strings.HasPrefix(databaseStatus, "skipped"),
 	})
 	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(branch))
-	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(worktreePath))
+	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(ui.FitToTerminal(branch, 10)))
+	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(ui.FitToTerminal(worktreePath, 10)))
 	setupOptions.printSkipped(os.Stderr)
 
 	// Print path to stdout so the shell wrapper can cd into it.
@@ -222,7 +222,7 @@ func printSetupSummary(w io.Writer, summary setupSummary) {
 	writeSetupStatus(w, "Database", summary.database)
 	writeSetupStatus(w, "Hooks", summary.hooks)
 	if summary.databaseDocs {
-		fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(ui.ToneInfo, "→"), "Configure", ui.RenderPath(databaseDocsURL))
+		fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(ui.ToneInfo, "→"), "Configure", ui.RenderLink("PostgreSQL setup guide", databaseDocsURL))
 	}
 }
 

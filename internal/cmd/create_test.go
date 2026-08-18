@@ -53,5 +53,5 @@ func TestPrintSetupSummary_DatabaseSkippedIncludesConfigurationLink(t *testing.T
 		databaseDocs: true,
 	})
 
-	assert.Contains(t, ui.StripANSI(output.String()), "  →  Configure      "+databaseDocsURL+"\n")
+	assert.Contains(t, ui.StripANSI(output.String()), "  →  Configure      PostgreSQL setup guide\n")
 }
