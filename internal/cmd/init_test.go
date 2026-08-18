@@ -37,7 +37,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "treeman list")
 	assert.Contains(t, out, "treeman clean")
 	assert.Contains(t, out, "treeman delete")
-	assert.Contains(t, out, "wtc() {\n  treeman clean \"$@\"\n}")
+	assert.Contains(t, out, "_tm_dir=$(treeman clean \"$@\") || return $?")
 	assert.Contains(t, out, "_tm_dir=$(treeman delete \"$@\") || return $?")
 	assert.Contains(t, out, "[ -n \"$_tm_dir\" ] && cd \"$_tm_dir\"")
 }
@@ -118,7 +118,7 @@ func TestInitCmd_Fish(t *testing.T) {
 	assert.Contains(t, out, "function wt")
 	assert.Contains(t, out, "set -l _tm_dir (treeman create $argv); or return $status")
 	assert.Contains(t, out, "test -n \"$_tm_dir\"; and cd \"$_tm_dir\"")
-	assert.Contains(t, out, "function wtc\n  treeman clean $argv\nend")
+	assert.Contains(t, out, "function wtc\n  set -l _tm_dir (treeman clean $argv); or return $status\n  test -n \"$_tm_dir\"; and cd \"$_tm_dir\"\nend")
 	assert.NotContains(t, out, "function lg")
 }
 

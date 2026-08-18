@@ -18,6 +18,12 @@ Restart the shell after installation.
 exec "$SHELL"
 ```
 
+To install the version from the current local worktree instead of a release:
+
+```bash
+./install-local.sh
+```
+
 Read [installation details](docs/installation.md) for manual installation, source builds, requirements, and removal.
 
 ## Start

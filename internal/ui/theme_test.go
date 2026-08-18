@@ -44,3 +44,49 @@ func TestRenderLinkStripsToLabel(t *testing.T) {
 	assert.Contains(t, link, ansi.SetHyperlink("https://example.com"))
 	assert.Equal(t, "PostgreSQL setup guide", StripANSI(link))
 }
+
+func TestThemePreviewDoesNotChangeActiveTheme(t *testing.T) {
+	SetTheme("forest")
+	t.Cleanup(func() { SetTheme("forest") })
+
+	preview, ok := ThemePreview("nord")
+	assert.True(t, ok)
+	assert.Contains(t, preview, "\x1b[")
+	assert.Contains(t, StripANSI(preview), "TreeMan - nord")
+	assert.Equal(t, "forest", CurrentTheme())
+}
+
+func TestThemeNamesAndAliases(t *testing.T) {
+	assert.Contains(t, ThemeNames(), "catppuccin-mocha")
+	assert.True(t, HasTheme("catppuccin"))
+	assert.False(t, HasTheme("unknown"))
+	assert.True(t, SetTheme("catppuccin"))
+	assert.Equal(t, "catppuccin-mocha", CurrentTheme())
+	SetTheme("forest")
+}
+
+func TestNordUsesOfficialMutedColor(t *testing.T) {
+	assert.Equal(t, "#4C566A", themes["nord"].Muted)
+}
+
+func TestFZFColorsUseThemeBackground(t *testing.T) {
+	SetTheme("dracula")
+	t.Cleanup(func() { SetTheme("forest") })
+
+	colors := FZFColors()
+	assert.Contains(t, colors, "bg:#282A36")
+	assert.Contains(t, colors, "bg+:#282A36")
+	assert.Contains(t, colors, "preview-bg:#282A36")
+	assert.Contains(t, colors, "border:#8BE9FD")
+	assert.Contains(t, colors, "pointer:#50FA7B")
+}
+
+func TestTransparentFZFColorsUseTerminalBackground(t *testing.T) {
+	SetTheme("dracula")
+	t.Cleanup(func() { SetTheme("forest") })
+
+	colors := TransparentFZFColors()
+	assert.Contains(t, colors, "bg:-1")
+	assert.Contains(t, colors, "bg+:-1")
+	assert.Contains(t, colors, "preview-bg:-1")
+}

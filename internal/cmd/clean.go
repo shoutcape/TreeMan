@@ -93,13 +93,20 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 	}
 
 	if len(candidates) > 0 {
-		out := cmd.OutOrStdout()
+		branchWidth := len("BRANCH")
+		for _, entry := range candidates {
+			branchWidth = max(branchWidth, len(entry.Branch))
+		}
+
+		// Stdout is reserved for the main worktree path when the current
+		// worktree is removed, allowing the shell wrapper to navigate there.
+		out := cmd.ErrOrStderr()
 		fmt.Fprintln(out, ui.RenderTitle("Cleanup candidates"))
 		fmt.Fprintln(out, ui.RenderMuted("Merged, clean worktrees and branches to remove"))
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s  %s\n", ui.RenderHeader(fmt.Sprintf("%-40s", "BRANCH")), ui.RenderHeader("WORKTREE"))
+		fmt.Fprintf(out, "  %s  %s\n", ui.RenderHeader(fmt.Sprintf("%-*s", branchWidth, "BRANCH")), ui.RenderHeader("WORKTREE"))
 		for _, entry := range candidates {
-			fmt.Fprintf(out, "  %s  %s\n", ui.RenderBranch(fmt.Sprintf("%-40s", entry.Branch)), ui.RenderPath(entry.Path))
+			fmt.Fprintf(out, "  %s  %s\n", ui.RenderBranch(fmt.Sprintf("%-*s", branchWidth, entry.Branch)), ui.RenderPath(entry.Path))
 		}
 		fmt.Fprintln(out)
 	}

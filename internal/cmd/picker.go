@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/shoutcape/treeman/internal/ui"
 )
 
 var errPickerCancelled = errors.New("picker cancelled")
@@ -13,10 +15,14 @@ var errPickerCancelled = errors.New("picker cancelled")
 func pickerArgs(label, prompt string) []string {
 	return []string{
 		"--ansi",
+		"--height=40%",
+		"--layout=reverse",
+		"--border=rounded",
 		"--delimiter=\t",
 		"--with-nth=1",
 		"--border-label", label,
 		"--prompt=" + prompt,
+		"--color=" + ui.FZFColors(),
 		"--select-1",
 		"--exit-0",
 	}

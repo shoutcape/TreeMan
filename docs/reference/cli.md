@@ -17,6 +17,7 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman init <shell>` | None | Print shell wrappers |
 | `treeman doctor` | None | Check repository readiness and configuration |
+| `treeman theme` | None | Select a terminal color theme |
 | `treeman version` | None | Print build data |
 
 ## `create`

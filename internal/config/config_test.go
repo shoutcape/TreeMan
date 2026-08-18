@@ -222,3 +222,34 @@ func TestPostCreateHooks_NilHooks(t *testing.T) {
 	cfg := Config{}
 	assert.Nil(t, cfg.PostCreateHooks())
 }
+
+func TestSaveThemeCreatesAndUpdatesUISection(t *testing.T) {
+	dir := t.TempDir()
+
+	path, err := SaveTheme(dir, "nord")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, ConfigFileName), path)
+	assert.Equal(t, "[ui]\ntheme = \"nord\"\n", readConfig(t, path))
+
+	_, err = SaveTheme(dir, "dracula")
+	require.NoError(t, err)
+	assert.Equal(t, "[ui]\ntheme = \"dracula\"\n", readConfig(t, path))
+}
+
+func TestSaveThemePreservesOtherSections(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ConfigFileName)
+	content := "# Project settings\n[database]\nenv_key = \"DATABASE_URL\"\n\n[ui]\n# Personal preference\ntheme = \"forest\"\n\n[custom]\nvalue = true\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	_, err := SaveTheme(dir, "nord")
+	require.NoError(t, err)
+	assert.Equal(t, "# Project settings\n[database]\nenv_key = \"DATABASE_URL\"\n\n[ui]\n# Personal preference\ntheme = \"nord\"\n\n[custom]\nvalue = true\n", readConfig(t, path))
+}
+
+func readConfig(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(data)
+}

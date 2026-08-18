@@ -52,14 +52,16 @@ func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
 	changeToDir(t, worktree)
 
 	output := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
+	cmd.SetErr(stderr)
 	require.NoError(t, runClean(cmd, false, true))
 
-	cleanOutput := ui.StripANSI(output.String())
+	cleanOutput := ui.StripANSI(stderr.String())
 	assert.Contains(t, cleanOutput, "feature")
 	assert.Contains(t, cleanOutput, worktree)
-	assert.Contains(t, cleanOutput, repo+"\n")
+	assert.Equal(t, repo+"\n", output.String())
 	_, err := os.Stat(worktree)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	checkBranch := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
@@ -85,10 +87,12 @@ func TestCleanYesRemovesCandidates(t *testing.T) {
 	repo, worktree := createMergedCleanWorktree(t)
 	changeToDir(t, repo)
 
+	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
-	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetOut(output)
 	require.NoError(t, runClean(cmd, false, true))
 
+	assert.Empty(t, output.String())
 	_, err := os.Stat(worktree)
 	require.True(t, os.IsNotExist(err))
 	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
@@ -136,7 +140,7 @@ func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 
 	var output bytes.Buffer
 	cmd := &cobra.Command{}
-	cmd.SetOut(&output)
+	cmd.SetErr(&output)
 	require.NoError(t, runClean(cmd, true, false))
 
 	cleanOutput := ui.StripANSI(output.String())
@@ -146,6 +150,7 @@ func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 	assert.Contains(t, cleanOutput, "WORKTREE")
 	assert.Contains(t, cleanOutput, "feature")
 	assert.Contains(t, cleanOutput, worktree)
+	assert.Contains(t, cleanOutput, "  feature  "+worktree)
 	_, err := os.Stat(worktree)
 	require.NoError(t, err)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")

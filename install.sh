@@ -13,9 +13,25 @@ BINARY="$BIN_DIR/treeman"
 
 # --- Helpers -----------------------------------------------------------------
 
-print_step() { echo "==> $1"; }
-print_done() { echo "    done."; }
-print_warn() { echo "    warning: $1"; }
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+  RESET=$'\033[0m'
+  TITLE=$'\033[1;38;2;111;184;210m'
+  SUCCESS=$'\033[38;2;123;216;143m'
+  WARNING=$'\033[38;2;242;166;90m'
+  MUTED=$'\033[2m'
+else
+  RESET=""
+  TITLE=""
+  SUCCESS=""
+  WARNING=""
+  MUTED=""
+fi
+
+print_step() { printf '%s==>%s %s\n' "$TITLE" "$RESET" "$1"; }
+print_done() { printf '    %sdone.%s\n' "$SUCCESS" "$RESET"; }
+print_warn() { printf '    %swarning:%s %s\n' "$WARNING" "$RESET" "$1"; }
+print_title() { printf '%s%s%s\n' "$TITLE" "$1" "$RESET"; }
+print_command() { printf '  %s%s%s\n' "$SUCCESS" "$1" "$RESET"; }
 
 # --- Detect OS and architecture ----------------------------------------------
 
@@ -127,7 +143,7 @@ fi
 
 # --- Download binary ----------------------------------------------------------
 
-print_step "Installing TreeMan to $BIN_DIR..."
+print_step "Installing TreeMan to $BIN_DIR"
 mkdir -p "$BIN_DIR"
 
 if [[ -n "${TREEMAN_LOCAL_BIN:-}" ]]; then
@@ -162,7 +178,7 @@ if [[ "$SHELL_NAME" == "fish" ]]; then
   EVAL_LINE="treeman init fish | source"
 fi
 
-print_step "Adding TreeMan to $SHELL_RC..."
+print_step "Adding TreeMan to $SHELL_RC"
 
 if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
   print_warn "TreeMan already present in $SHELL_RC, skipping."
@@ -188,16 +204,16 @@ fi
 # --- Final message -----------------------------------------------------------
 
 echo ""
-echo "TreeMan installed successfully."
+print_title "TreeMan installed successfully."
 echo ""
-echo "Reload your shell to start using it:"
-echo "  source $SHELL_RC"
+printf '%sReload your shell to start using it:%s\n' "$MUTED" "$RESET"
+print_command "source $SHELL_RC"
 echo ""
-echo "Usage:"
-echo "  wt  <branch-name>    Create a new worktree + branch"
-echo "  wtb [query]          Check out a remote branch into a worktree"
-echo "  wtpr [pr-number]     Create a review worktree from a GitHub PR"
-echo "  wtmr [pr-number]     Create a review worktree from a GitLab MR"
-echo "  wts  [query]         Switch between worktrees (requires fzf)"
-echo "  wtl                  List worktrees and their state"
-echo "  wtd  [query]         Delete a worktree and its branch (requires fzf)"
+print_title "Usage"
+printf '  %swt%s  <branch-name>    Create a new worktree + branch\n' "$SUCCESS" "$RESET"
+printf '  %swtb%s [query]          Check out a remote branch into a worktree\n' "$SUCCESS" "$RESET"
+printf '  %swtpr%s [pr-number]     Create a review worktree from a GitHub PR\n' "$SUCCESS" "$RESET"
+printf '  %swtmr%s [pr-number]     Create a review worktree from a GitLab MR\n' "$SUCCESS" "$RESET"
+printf '  %swts%s                  Switch between worktrees (requires fzf)\n' "$SUCCESS" "$RESET"
+printf '  %swtl%s                  List worktrees and their state\n' "$SUCCESS" "$RESET"
+printf '  %swtd%s [query]          Delete a worktree and its branch (requires fzf)\n' "$SUCCESS" "$RESET"

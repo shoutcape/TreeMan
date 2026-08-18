@@ -24,4 +24,7 @@ func TestPickerSelectionIndex_InvalidIdentity(t *testing.T) {
 
 func TestPickerArgs_PreservePrompt(t *testing.T) {
 	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--prompt=switch > ")
+	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--color="+ui.FZFColors())
+	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--height=40%")
+	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--layout=reverse")
 }
