@@ -163,9 +163,9 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", envErr)))
 		} else if len(envResult.Copied) > 0 {
 			for _, f := range envResult.Copied {
-				fmt.Fprintf(os.Stderr, "  Copied %s\n", f)
+				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Copied "+f))
 			}
-			fmt.Fprintf(os.Stderr, "Copied %d env file(s) from main worktree.\n", len(envResult.Copied))
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(envResult.Copied))))
 		}
 	}
 
@@ -188,39 +188,39 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 		case dbResult.Skipped:
 			// No config, no env key, or not a postgres URI -- silently skip.
 		default:
-			fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
 		}
 	}
 
 	// Install dependencies.
 	if !setupOptions.skipDeps {
-		fmt.Fprintln(os.Stderr, "Detecting dependencies...")
+		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", "Detecting dependencies..."))
 		installResult, installErr := deps.Install(worktreePath)
 		switch {
 		case installErr != nil:
 			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
 		case installResult.Python:
-			fmt.Fprintln(os.Stderr, "Detected Python project -- skipping auto-install (activate your venv manually).")
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
 		case installResult.Skipped:
-			fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
 		case installResult.Installer != nil:
-			fmt.Fprintf(os.Stderr, "Detected %s -- running %s %s...\n",
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
 				installResult.Installer.Lockfile,
 				installResult.Installer.Binary,
 				joinArgs(installResult.Installer.Args),
-			)
+			)))
 		}
 	}
 
 	// Run post-create hooks (best-effort, non-fatal).
 	if !setupOptions.skipHooks {
 		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-			fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
 			for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
 				if r.Err != nil {
 					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
 				} else {
-					fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
+					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Ran: "+r.Command))
 				}
 			}
 		}

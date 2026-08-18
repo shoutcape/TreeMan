@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"strings"
 
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +35,23 @@ func (o creationSetupOptions) printSkipped(w io.Writer) {
 		{o.skipHooks, "post-create hooks"},
 	} {
 		if action.skipped {
-			fmt.Fprintf(w, "  Skipped: %s (requested)\n", action.name)
+			fmt.Fprintf(w, "  %s  %s\n", ui.RenderTone(ui.ToneMuted, "○"), ui.RenderMuted("Skipped: "+action.name+" (requested)"))
 		}
+	}
+}
+
+func writeSetupStatus(w io.Writer, name, status string) {
+	tone, symbol := setupStatusAppearance(status)
+	fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(tone, symbol), name, ui.RenderMuted(status))
+}
+
+func setupStatusAppearance(status string) (ui.Tone, string) {
+	switch {
+	case strings.Contains(status, "failed"):
+		return ui.ToneFailure, "✗"
+	case strings.HasPrefix(status, "completed"):
+		return ui.ToneSuccess, "✓"
+	default:
+		return ui.ToneMuted, "○"
 	}
 }

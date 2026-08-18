@@ -107,9 +107,9 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			environmentStatus = fmt.Sprintf("failed: %v", err)
 		} else if len(result.Copied) > 0 {
 			for _, f := range result.Copied {
-				fmt.Fprintf(os.Stderr, "  Copied %s\n", f)
+				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Copied "+f))
 			}
-			fmt.Fprintf(os.Stderr, "Copied %d env file(s) from main worktree.\n", len(result.Copied))
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
 			environmentStatus = fmt.Sprintf("completed: copied %d file(s)", len(result.Copied))
 		}
 	}
@@ -137,7 +137,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			case dbResult.Skipped:
 				databaseStatus = fmt.Sprintf("skipped (no PostgreSQL URI found for %s)", dbEnvKey)
 			default:
-				fmt.Fprintf(os.Stderr, "  Created database %s\n", dbResult.DBName)
+				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
 				databaseStatus = fmt.Sprintf("completed: created %s", dbResult.DBName)
 			}
 		}
@@ -146,7 +146,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	// Install dependencies.
 	dependenciesStatus := "skipped (requested)"
 	if !setupOptions.skipDeps {
-		fmt.Fprintln(os.Stderr, "Detecting dependencies...")
+		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", "Detecting dependencies..."))
 		installResult, installErr := deps.Install(worktreePath)
 		dependenciesStatus = "skipped"
 		switch {
@@ -154,16 +154,16 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
 			dependenciesStatus = fmt.Sprintf("failed: %v", installErr)
 		case installResult.Python:
-			fmt.Fprintln(os.Stderr, "Detected Python project — skipping auto-install (activate your venv manually).")
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
 			dependenciesStatus = "skipped (Python project requires manual venv activation)"
 		case installResult.Skipped:
-			fmt.Fprintln(os.Stderr, "No known dependency file detected, skipping install.")
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
 		case installResult.Installer != nil:
-			fmt.Fprintf(os.Stderr, "Detected %s -- running %s %s...\n",
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
 				installResult.Installer.Lockfile,
 				installResult.Installer.Binary,
 				joinArgs(installResult.Installer.Args),
-			)
+			)))
 			dependenciesStatus = fmt.Sprintf("completed: installed with %s", installResult.Installer.Binary)
 		}
 	}
@@ -172,13 +172,13 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	hooksStatus := "skipped (requested)"
 	if !setupOptions.skipHooks {
 		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-			fmt.Fprintf(os.Stderr, "Running %d post-create hook(s)...\n", len(postCreateCmds))
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
 			hookResults := hooks.RunPostCreate(worktreePath, postCreateCmds)
 			for _, r := range hookResults {
 				if r.Err != nil {
 					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
 				} else {
-					fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
+					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Ran: "+r.Command))
 				}
 			}
 			hooksStatus = summarizeHooks(hookResults)
@@ -216,13 +216,13 @@ type setupSummary struct {
 }
 
 func printSetupSummary(w io.Writer, summary setupSummary) {
-	fmt.Fprintln(w, "Setup:")
-	fmt.Fprintf(w, "  Environment:  %s\n", summary.environment)
-	fmt.Fprintf(w, "  Dependencies: %s\n", summary.dependencies)
-	fmt.Fprintf(w, "  Database:     %s\n", summary.database)
-	fmt.Fprintf(w, "  Hooks:        %s\n", summary.hooks)
+	fmt.Fprintln(w, ui.RenderTitle("SETUP"))
+	writeSetupStatus(w, "Environment", summary.environment)
+	writeSetupStatus(w, "Dependencies", summary.dependencies)
+	writeSetupStatus(w, "Database", summary.database)
+	writeSetupStatus(w, "Hooks", summary.hooks)
 	if summary.databaseDocs {
-		fmt.Fprintf(w, "  Configure:    %s\n", databaseDocsURL)
+		fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(ui.ToneInfo, "→"), "Configure", ui.RenderPath(databaseDocsURL))
 	}
 }
 
