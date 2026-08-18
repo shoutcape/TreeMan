@@ -77,6 +77,12 @@ func TestCollectDockerDiagnostic_DistinguishesUnavailableDaemon(t *testing.T) {
 	assert.Equal(t, "Start Docker, then rerun treeman doctor.", diagnostic.hint)
 }
 
+func TestDiagnosticSummaryToneUsesHighestSeverity(t *testing.T) {
+	assert.Equal(t, ui.ToneSuccess, diagnosticSummaryTone([4]int{2, 1, 0, 0}))
+	assert.Equal(t, ui.ToneWarning, diagnosticSummaryTone([4]int{2, 0, 1, 0}))
+	assert.Equal(t, ui.ToneFailure, diagnosticSummaryTone([4]int{2, 0, 1, 1}))
+}
+
 func TestCollectShellDiagnostic_DetectsConfiguredShellIntegration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

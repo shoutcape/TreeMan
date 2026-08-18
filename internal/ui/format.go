@@ -8,25 +8,18 @@ import (
 
 // WorktreeRow formats a single worktree entry for the fzf picker.
 //
-// The display shows the last two path components in ColorPath and the branch
-// name in ColorBranch.
+// The display shows the last two path components and branch name.
 //
 // Column width for the path component is 40 characters.
 func WorktreeRow(path, branch string) string {
 	short := shortPath(path)
-	return fmt.Sprintf("%s%-40s%s  %s%s%s",
-		ColorPath, short, ColorReset,
-		ColorBranch, branch, ColorReset,
-	)
+	return RenderPath(fmt.Sprintf("%-40s", short)) + "  " + RenderBranch(branch)
 }
 
 // PRHeader returns the column header row for the PR/MR fzf picker.
 func PRHeader() string {
-	return fmt.Sprintf("%s%-8s%s  %s%-32s%s  %s%s%s",
-		ColorPR, "PR/MR", ColorReset,
-		ColorBranch, "Branch", ColorReset,
-		ColorPath, "Title", ColorReset,
-	)
+	return RenderHeader(fmt.Sprintf("%-8s", "PR/MR")) + "  " +
+		RenderHeader(fmt.Sprintf("%-32s", "Branch")) + "  " + RenderHeader("Title")
 }
 
 // PRRow formats a single PR/MR entry for the fzf picker.
@@ -35,11 +28,8 @@ func PRHeader() string {
 func PRRow(number int, branch, title string) string {
 	prNum := fmt.Sprintf("#%d", number)
 	truncBranch := truncate(branch, 32)
-	return fmt.Sprintf("%s%-8s%s  %s%-32s%s  %s%s%s",
-		ColorPR, prNum, ColorReset,
-		ColorBranch, truncBranch, ColorReset,
-		ColorPath, title, ColorReset,
-	)
+	return RenderPR(fmt.Sprintf("%-8s", prNum)) + "  " +
+		RenderBranch(fmt.Sprintf("%-32s", truncBranch)) + "  " + RenderPath(title)
 }
 
 // shortPath returns the last two path components of a filesystem path.
@@ -88,11 +78,8 @@ func StripANSI(s string) string {
 
 // BranchHeader returns the column header row for the branch fzf picker.
 func BranchHeader() string {
-	return fmt.Sprintf("%s%-50s%s  %s%-14s%s  %s%s%s",
-		ColorBranch, "Branch", ColorReset,
-		ColorPath, "Last Updated", ColorReset,
-		ColorPR, "MR/PR", ColorReset,
-	)
+	return RenderHeader(fmt.Sprintf("%-50s", "Branch")) + "  " +
+		RenderHeader(fmt.Sprintf("%-14s", "Last Updated")) + "  " + RenderHeader("MR/PR")
 }
 
 // BranchRow formats a single remote branch entry for the fzf picker.
@@ -103,9 +90,6 @@ func BranchRow(branch, date string, mrNumber int) string {
 	if mrNumber > 0 {
 		mr = fmt.Sprintf("#%d", mrNumber)
 	}
-	return fmt.Sprintf("%s%-50s%s  %s%-14s%s  %s%s%s",
-		ColorBranch, truncBranch, ColorReset,
-		ColorPath, date, ColorReset,
-		ColorPR, mr, ColorReset,
-	)
+	return RenderBranch(fmt.Sprintf("%-50s", truncBranch)) + "  " +
+		RenderMuted(fmt.Sprintf("%-14s", date)) + "  " + RenderPR(mr)
 }

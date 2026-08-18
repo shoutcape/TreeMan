@@ -182,7 +182,7 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 	cfgResult := config.Load(mainRoot)
 	if dbEnvKey := cfgResult.Config.DatabaseEnvKey(); dbEnvKey != "" {
 		if err := database.CleanupBranchDB(entry.Path, dbEnvKey); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: database cleanup failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 		}
 	}
 	if err := removeWorktree(entry.Path, force); err != nil {
@@ -191,7 +191,7 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 	if err := deleteBranch(mainRoot, branch, force); err != nil {
 		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(force), branch))
 	}
-	fmt.Fprintf(os.Stderr, "Deleted worktree and branch: %s\n", branch)
+	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
 	if samePath(currentRoot, entry.Path) {
 		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
 	}
@@ -246,9 +246,9 @@ func canonicalPath(path string) string {
 }
 
 func printDeleteConfirmation(path, branch string) {
-	fmt.Fprintln(os.Stderr, "About to delete:")
-	fmt.Fprintf(os.Stderr, "  Worktree: %s\n", path)
-	fmt.Fprintf(os.Stderr, "  Branch:   %s\n\n", branch)
+	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", "About to delete:"))
+	fmt.Fprintf(os.Stderr, "  Worktree: %s\n", ui.RenderPath(path))
+	fmt.Fprintf(os.Stderr, "  Branch:   %s\n\n", ui.RenderBranch(branch))
 }
 
 func confirmYN(cmd *cobra.Command, prompt string) bool {

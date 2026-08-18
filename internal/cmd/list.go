@@ -119,15 +119,15 @@ func writeListJSON(cmd *cobra.Command, entries []listEntry) error {
 
 func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "\n%sWORKTREES%s\n\n", ui.ColorCyan, ui.ColorReset)
-	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-6s  %-27s  %-25s\n", ui.ColorDim, "MARKERS", ui.ColorReset, "STATUS", "MERGED", "BRANCH", "PATH")
-	fmt.Fprintf(out, "    %s%-8s%s %-8s  %-6s  %-27s  %-25s\n", ui.ColorDim, "───────", ui.ColorReset, "──────", "──────", "───────────────────────────", "─────────────────────────")
+	fmt.Fprintf(out, "\n%s\n\n", ui.RenderTitle("WORKTREES"))
+	fmt.Fprintf(out, "    %s\n", ui.RenderHeader(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "MARKERS", "STATUS", "MERGED", "BRANCH", "PATH")))
+	fmt.Fprintf(out, "    %s\n", ui.RenderMuted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
 	for _, entry := range entries {
 		branch := entry.Branch
 		if entry.Detached {
 			branch = "(detached)"
 		}
-		status, statusColor := listStatus(entry)
+		status, tone := listStatus(entry)
 		markers := ""
 		if entry.Main {
 			markers = "M"
@@ -139,29 +139,30 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 		if entry.Merged {
 			merged = "YES"
 		}
-		fmt.Fprintf(out, "    %s%-8s%s %s%-8s%s  %-6s  %s%-27s%s  %s%s%s\n",
-			ui.ColorDim, markers, ui.ColorReset,
-			statusColor, truncateListCell(status, 8), ui.ColorReset,
+		fmt.Fprintf(out, "    %s %s  %-6s  %s  %s\n",
+			ui.RenderMuted(fmt.Sprintf("%-8s", markers)),
+			ui.RenderTone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
 			merged,
-			ui.ColorBranch, truncateListCell(branch, 27), ui.ColorReset,
-			ui.ColorPath, displayListPath(entry.Path), ui.ColorReset,
+			ui.RenderBranch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
+			ui.RenderPath(displayListPath(entry.Path)),
 		)
 	}
 }
 
-func listStatus(entry listEntry) (string, string) {
+func listStatus(entry listEntry) (string, ui.Tone) {
 	status := "CLEAN"
-	color := ui.ColorStatus
+	tone := ui.ToneSuccess
 	if entry.Detached {
 		status = "DETACHED"
+		tone = ui.ToneMuted
 	}
 	if entry.Dirty {
 		if status == "CLEAN" {
 			status = "DIRTY"
 		}
-		color = ui.ColorWarning
+		tone = ui.ToneWarning
 	}
-	return status, color
+	return status, tone
 }
 
 func displayListPath(path string) string {

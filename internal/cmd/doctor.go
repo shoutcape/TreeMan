@@ -205,12 +205,12 @@ func hasShellIntegration(contents, shell string) bool {
 }
 
 func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics []diagnostic) {
-	fmt.Fprintf(out, "\n%sDIAGNOSTICS%s\n\n", ui.ColorCyan, ui.ColorReset)
+	fmt.Fprintf(out, "\n%s\n\n", ui.RenderTitle("DIAGNOSTICS"))
 	counts := [4]int{}
 	for _, diagnostic := range diagnostics {
 		counts[diagnostic.status]++
-		symbol, color := diagnosticAppearance(diagnostic.status)
-		fmt.Fprintf(out, "  %s%s%s  %-20s %s%s%s\n", color, symbol, ui.ColorReset, diagnostic.name, ui.ColorDim, diagnostic.message, ui.ColorReset)
+		symbol, tone := diagnosticAppearance(diagnostic.status)
+		fmt.Fprintf(out, "  %s  %-20s %s\n", ui.RenderTone(tone, symbol), diagnostic.name, ui.RenderMuted(diagnostic.message))
 		if diagnostic.hint != "" {
 			writeDiagnosticHint(out, diagnostic.hint)
 		}
@@ -229,30 +229,40 @@ func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics [
 	if counts[diagnosticFail] > 0 {
 		summary = append(summary, fmt.Sprintf("%d failed", counts[diagnosticFail]))
 	}
-	fmt.Fprintf(out, "\n%s%s%s\n", ui.ColorStatus, strings.Join(summary, " · "), ui.ColorReset)
+	fmt.Fprintf(out, "\n%s\n", ui.RenderTone(diagnosticSummaryTone(counts), strings.Join(summary, " · ")))
 }
 
-func diagnosticAppearance(status diagnosticStatus) (symbol, color string) {
+func diagnosticAppearance(status diagnosticStatus) (symbol string, tone ui.Tone) {
 	switch status {
 	case diagnosticInfo:
-		return "○", ui.ColorDim
+		return "○", ui.ToneMuted
 	case diagnosticWarn:
-		return "!", ui.ColorWarning
+		return "!", ui.ToneWarning
 	case diagnosticFail:
-		return "✗", ui.ColorFailure
+		return "✗", ui.ToneFailure
 	default:
-		return "✓", ui.ColorStatus
+		return "✓", ui.ToneSuccess
 	}
+}
+
+func diagnosticSummaryTone(counts [4]int) ui.Tone {
+	if counts[diagnosticFail] > 0 {
+		return ui.ToneFailure
+	}
+	if counts[diagnosticWarn] > 0 {
+		return ui.ToneWarning
+	}
+	return ui.ToneSuccess
 }
 
 func writeDiagnosticHint(out interface{ Write([]byte) (int, error) }, hint string) {
 	lines := strings.Split(hint, "\n")
 	for i, line := range lines {
-		color := ui.ColorDim
+		render := ui.RenderMuted
 		if i > 0 {
-			color = ui.ColorPath
+			render = ui.RenderPath
 		}
-		fmt.Fprintf(out, "\n     %s%s%s", color, line, ui.ColorReset)
+		fmt.Fprintf(out, "\n     %s", render(line))
 	}
 	fmt.Fprintln(out)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
@@ -72,7 +73,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 
 	// Fetch latest default branch.
-	fmt.Fprintf(os.Stderr, "Fetching latest %s from origin...\n", defaultBranch)
+	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Fetching latest %s from origin...", defaultBranch)))
 	if err := git.Fetch(defaultBranch); err != nil {
 		return err
 	}
@@ -86,14 +87,14 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 
 	// Create worktree + branch.
-	fmt.Fprintf(os.Stderr, "Creating worktree at %s (branch: %s)...\n", worktreePath, branch)
+	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
 	if err := git.WorktreeAdd(worktreePath, branch, "origin/"+defaultBranch); err != nil {
 		return err
 	}
 
 	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
 	if err := worktree.EnsureIgnored(mainRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not update .gitignore: %v\n", err)
+		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
 	}
 
 	// Copy .env* files (best-effort, non-fatal).
@@ -102,7 +103,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		result, err := envfile.Copy(mainRoot, worktreePath)
 		environmentStatus = "skipped (no environment files found)"
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not copy env files: %v\n", err)
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
 			environmentStatus = fmt.Sprintf("failed: %v", err)
 		} else if len(result.Copied) > 0 {
 			for _, f := range result.Copied {
@@ -118,7 +119,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	if !setupOptions.skipDatabase || !setupOptions.skipHooks {
 		cfgResult = config.Load(mainRoot)
 		if cfgResult.Warning != "" {
-			fmt.Fprintf(os.Stderr, "Warning: %s\n", cfgResult.Warning)
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", cfgResult.Warning))
 		}
 	}
 
@@ -131,7 +132,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
 			switch {
 			case dbErr != nil:
-				fmt.Fprintf(os.Stderr, "Warning: database setup failed: %v\n", dbErr)
+				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))
 				databaseStatus = fmt.Sprintf("failed: %v", dbErr)
 			case dbResult.Skipped:
 				databaseStatus = fmt.Sprintf("skipped (no PostgreSQL URI found for %s)", dbEnvKey)
@@ -150,7 +151,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		dependenciesStatus = "skipped"
 		switch {
 		case installErr != nil:
-			fmt.Fprintf(os.Stderr, "Warning: dependency installation failed: %v\n", installErr)
+			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
 			dependenciesStatus = fmt.Sprintf("failed: %v", installErr)
 		case installResult.Python:
 			fmt.Fprintln(os.Stderr, "Detected Python project — skipping auto-install (activate your venv manually).")
@@ -175,7 +176,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			hookResults := hooks.RunPostCreate(worktreePath, postCreateCmds)
 			for _, r := range hookResults {
 				if r.Err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: hook %q failed: %v\n", r.Command, r.Err)
+					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
 				} else {
 					fmt.Fprintf(os.Stderr, "  Ran: %s\n", r.Command)
 				}
@@ -195,9 +196,9 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		hooks:        hooksStatus,
 		databaseDocs: strings.HasPrefix(databaseStatus, "skipped"),
 	})
-	fmt.Fprintln(os.Stderr, "Worktree ready:")
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", branch)
-	fmt.Fprintf(os.Stderr, "  Path:   %s\n", worktreePath)
+	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Worktree ready:"))
+	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(branch))
+	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(worktreePath))
 	setupOptions.printSkipped(os.Stderr)
 
 	// Print path to stdout so the shell wrapper can cd into it.

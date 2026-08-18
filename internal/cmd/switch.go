@@ -111,7 +111,7 @@ func printSwitchDestination(cmd *cobra.Command, dest string) error {
 	}
 
 	short := filepath.Base(dest)
-	fmt.Fprintf(os.Stderr, "cd → .../%s\n", short)
+	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("cd .../%s", short)))
 
 	// Print path to stdout for shell wrapper cd.
 	fmt.Fprintln(cmd.OutOrStdout(), dest)

@@ -19,6 +19,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
+	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman init bash")
 	assert.Contains(t, out, "~/.bashrc")
 	assert.Contains(t, out, "wt()")
@@ -99,6 +100,7 @@ func TestInitCmd_Zsh(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
+	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman init zsh")
 	assert.Contains(t, out, "~/.zshrc")
 }
@@ -111,6 +113,7 @@ func TestInitCmd_Fish(t *testing.T) {
 	require.NoError(t, root.Execute())
 
 	out := buf.String()
+	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman init fish | source")
 	assert.Contains(t, out, "function wt")
 	assert.Contains(t, out, "set -l _tm_dir (treeman create $argv); or return $status")
