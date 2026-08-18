@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"os"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Tone describes the semantic emphasis of a human-facing status.
 type Tone int
@@ -14,16 +18,17 @@ const (
 )
 
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#6FB8D2"))
-	headerStyle  = lipgloss.NewStyle().Bold(true).Faint(true)
-	mutedStyle   = lipgloss.NewStyle().Faint(true)
-	branchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#B2B644"))
-	pathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#C4915E"))
-	prStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2EA72"))
-	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6FB8D2"))
-	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7BD88F"))
-	warningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2A65A"))
-	failureStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F05E5E"))
+	renderer     = lipgloss.NewRenderer(os.Stderr)
+	titleStyle   = renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("#6FB8D2"))
+	headerStyle  = renderer.NewStyle().Bold(true).Faint(true)
+	mutedStyle   = renderer.NewStyle().Faint(true)
+	branchStyle  = renderer.NewStyle().Foreground(lipgloss.Color("#B2B644"))
+	pathStyle    = renderer.NewStyle().Foreground(lipgloss.Color("#C4915E"))
+	prStyle      = renderer.NewStyle().Foreground(lipgloss.Color("#F2EA72"))
+	infoStyle    = renderer.NewStyle().Foreground(lipgloss.Color("#6FB8D2"))
+	successStyle = renderer.NewStyle().Foreground(lipgloss.Color("#7BD88F"))
+	warningStyle = renderer.NewStyle().Foreground(lipgloss.Color("#F2A65A"))
+	failureStyle = renderer.NewStyle().Foreground(lipgloss.Color("#F05E5E"))
 )
 
 func RenderTitle(value string) string  { return titleStyle.Render(value) }
