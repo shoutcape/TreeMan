@@ -12,13 +12,11 @@ This document describes current behavior. It is not a product roadmap.
 
 - Branch and PR or MR lists have a 100-item limit.
 - Protected remote branches are not filtered.
-- Large numeric review arguments can overflow internal integer parsing.
 
 ## Database Actions
 
 - Long branch names can collide after 63-character database name truncation.
 - A database can remain after environment-file rewrite failure.
-- SQL identifier text is not escaped for embedded quotes.
 - The `__` cleanup check reduces risk but does not prove database ownership.
 
 ## User Interface
