@@ -20,6 +20,7 @@ var (
 	branchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#B2B644"))
 	pathStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#C4915E"))
 	prStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2EA72"))
+	infoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6FB8D2"))
 	successStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7BD88F"))
 	warningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2A65A"))
 	failureStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F05E5E"))
@@ -40,7 +41,9 @@ func RenderTone(tone Tone, value string) string {
 		return warningStyle.Render(value)
 	case ToneFailure:
 		return failureStyle.Render(value)
-	case ToneInfo, ToneMuted:
+	case ToneInfo:
+		return infoStyle.Render(value)
+	case ToneMuted:
 		return mutedStyle.Render(value)
 	default:
 		return value
