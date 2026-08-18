@@ -96,6 +96,40 @@ func TestCleanYesRemovesCandidates(t *testing.T) {
 	require.Error(t, command.Run())
 }
 
+func TestCleanRemovesEmptyBranchCreatedFromNewerOriginMain(t *testing.T) {
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "init", "--bare", "--initial-branch=main", origin)
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "clone", origin, repo)
+	runGitInDir(t, repo, "config", "user.email", "test@example.com")
+	runGitInDir(t, repo, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("base\n"), 0o644))
+	runGitInDir(t, repo, "add", "file")
+	runGitInDir(t, repo, "commit", "-m", "base")
+	runGitInDir(t, repo, "push", "origin", "main")
+
+	updater := filepath.Join(t.TempDir(), "updater")
+	runGit(t, "clone", origin, updater)
+	runGitInDir(t, updater, "config", "user.email", "test@example.com")
+	runGitInDir(t, updater, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(updater, "file"), []byte("origin update\n"), 0o644))
+	runGitInDir(t, updater, "commit", "-am", "origin update")
+	runGitInDir(t, updater, "push", "origin", "main")
+
+	// Keep local main stale while creating an empty branch from the refreshed remote.
+	runGitInDir(t, repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+	worktree := filepath.Join(t.TempDir(), "empty-worktree")
+	runGitInDir(t, repo, "worktree", "add", "--no-track", "-b", "empty", worktree, "origin/main")
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 	repo, worktree := createMergedCleanWorktree(t)
 	changeToDir(t, repo)

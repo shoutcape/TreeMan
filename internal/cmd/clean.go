@@ -114,7 +114,7 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 
 	removed := 0
 	for _, entry := range candidates {
-		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false); err != nil {
+		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false, "origin/"+defaultBranch); err != nil {
 			return err
 		}
 		removed++

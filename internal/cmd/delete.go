@@ -139,7 +139,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force)
 }
 
-func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
+func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool, mergeTargets ...string) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err
@@ -165,7 +165,13 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 	}
 	if !force {
-		canDelete, err := git.BranchCanDelete(mainRoot, branch)
+		canDelete := false
+		var err error
+		if len(mergeTargets) > 0 {
+			canDelete, err = git.BranchMergedInto(mainRoot, branch, mergeTargets[0])
+		} else {
+			canDelete, err = git.BranchCanDelete(mainRoot, branch)
+		}
 		if err != nil {
 			return err
 		}
@@ -188,8 +194,9 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 	if err := removeWorktree(entry.Path, force); err != nil {
 		return deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
 	}
-	if err := deleteBranch(mainRoot, branch, force); err != nil {
-		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(force), branch))
+	branchForce := force || len(mergeTargets) > 0
+	if err := deleteBranch(mainRoot, branch, branchForce); err != nil {
+		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(branchForce), branch))
 	}
 	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
 	if samePath(currentRoot, entry.Path) {
