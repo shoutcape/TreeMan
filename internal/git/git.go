@@ -168,6 +168,32 @@ func WorktreeList() ([]WorktreeEntry, error) {
 	return parseWorktreePorcelain(out), nil
 }
 
+// RemoteBranchesExist queries origin for the given branch names in a single
+// ls-remote call and returns a map of branch name -> exists on origin.
+// Branches absent from the map can be treated as not existing on the remote.
+func RemoteBranchesExist(branches []string) (map[string]bool, error) {
+	if len(branches) == 0 {
+		return map[string]bool{}, nil
+	}
+	args := []string{"ls-remote", "--heads", "origin"}
+	for _, b := range branches {
+		args = append(args, b)
+	}
+	out, err := run(args...)
+	if err != nil {
+		return nil, fmt.Errorf("could not query remote branches: %w", err)
+	}
+	exists := make(map[string]bool, len(branches))
+	for _, line := range strings.Split(out, "\n") {
+		// Each line is "<sha>\trefs/heads/<branch>"
+		if idx := strings.Index(line, "\trefs/heads/"); idx >= 0 {
+			branch := line[idx+len("\trefs/heads/"):]
+			exists[branch] = true
+		}
+	}
+	return exists, nil
+}
+
 // MergedBranches returns local branches that are ancestors of target.
 func MergedBranches(target string) (map[string]bool, error) {
 	out, err := run("branch", "--merged", target, "--format=%(refname:short)")

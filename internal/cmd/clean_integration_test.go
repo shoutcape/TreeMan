@@ -117,6 +117,55 @@ func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
+func TestCleanRemovesSquashMergedCleanWorktree(t *testing.T) {
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.True(t, os.IsNotExist(err), "squash-merged worktree should have been removed")
+	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	command.Dir = repo
+	require.Error(t, command.Run(), "local branch should have been deleted")
+}
+
+func createSquashMergedCleanWorktree(t *testing.T) (string, string) {
+	t.Helper()
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "init", "--bare", "--initial-branch=main", origin)
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "clone", origin, repo)
+	runGitInDir(t, repo, "config", "user.email", "test@example.com")
+	runGitInDir(t, repo, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("base\n"), 0o644))
+	runGitInDir(t, repo, "add", "file")
+	runGitInDir(t, repo, "commit", "-m", "base")
+	runGitInDir(t, repo, "push", "origin", "main")
+	runGitInDir(t, repo, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("feature\n"), 0o644))
+	runGitInDir(t, repo, "commit", "-am", "feature work")
+	runGitInDir(t, repo, "push", "-u", "origin", "feature")
+	runGitInDir(t, repo, "checkout", "main")
+	worktree := filepath.Join(t.TempDir(), "feature-worktree")
+	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
+
+	// Squash-merge via a second clone: new commit on main, feature tip not an ancestor.
+	squasher := filepath.Join(t.TempDir(), "squasher")
+	runGit(t, "clone", origin, squasher)
+	runGitInDir(t, squasher, "config", "user.email", "test@example.com")
+	runGitInDir(t, squasher, "config", "user.name", "Test User")
+	runGitInDir(t, squasher, "merge", "--squash", "origin/feature")
+	runGitInDir(t, squasher, "commit", "-m", "squash merge feature")
+	runGitInDir(t, squasher, "push", "origin", "main")
+	// Delete the remote branch (GitLab does this automatically after merge).
+	runGitInDir(t, squasher, "push", "origin", "--delete", "feature")
+
+	return repo, worktree
+}
+
 func createMergedCleanWorktree(t *testing.T) (string, string) {
 	t.Helper()
 	origin := filepath.Join(t.TempDir(), "origin.git")

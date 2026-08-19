@@ -65,9 +65,25 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		return err
 	}
 
+	// Collect non-default branch names to check remote existence in one call.
+	var nonDefaultBranches []string
+	for _, entry := range entries {
+		if entry.Branch != "" && entry.Branch != defaultBranch && !samePath(entry.Path, mainRoot) {
+			nonDefaultBranches = append(nonDefaultBranches, entry.Branch)
+		}
+	}
+	remoteBranchExists, err := git.RemoteBranchesExist(nonDefaultBranches)
+	if err != nil {
+		// Non-fatal: fall back to ancestry-only detection.
+		remoteBranchExists = map[string]bool{}
+	}
+
 	var candidates []git.WorktreeEntry
 	for _, entry := range entries {
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || !mergedBranches[entry.Branch] {
+		// A branch qualifies for cleanup if it is merged (direct ancestor) OR
+		// its remote is gone (squash-merge or abandoned branch deleted on origin).
+		isMerged := mergedBranches[entry.Branch] || !remoteBranchExists[entry.Branch]
+		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || !isMerged {
 			continue
 		}
 		dirty, err := git.WorktreeDirty(entry.Path)

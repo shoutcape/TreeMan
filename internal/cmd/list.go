@@ -54,11 +54,26 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 	}
 	defaultBranch := ""
 	mergedBranches := map[string]bool{}
+	remoteBranchExists := map[string]bool{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
 		if err = git.Fetch("refs/heads/" + defaultBranch + ":refs/remotes/origin/" + defaultBranch); err != nil {
 			defaultBranch = ""
-		} else if mergedBranches, err = git.MergedBranches("origin/" + defaultBranch); err != nil {
-			mergedBranches = map[string]bool{}
+		} else {
+			if mergedBranches, err = git.MergedBranches("origin/" + defaultBranch); err != nil {
+				mergedBranches = map[string]bool{}
+			}
+			// Collect non-default branch names to check remote existence in one call.
+			var nonDefaultBranches []string
+			for _, entry := range entries {
+				if entry.Branch != "" && entry.Branch != defaultBranch {
+					nonDefaultBranches = append(nonDefaultBranches, entry.Branch)
+				}
+			}
+			if len(nonDefaultBranches) > 0 {
+				if remoteBranchExists, err = git.RemoteBranchesExist(nonDefaultBranches); err != nil {
+					remoteBranchExists = map[string]bool{}
+				}
+			}
 		}
 	}
 
@@ -68,6 +83,17 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 		if err != nil {
 			return err
 		}
+		// A branch is considered merged if:
+		//   1. git branch --merged reports it as a direct ancestor of origin/main, OR
+		//   2. the branch has no remote counterpart (remote deleted it, indicating a
+		//      squash-merge or similar workflow where the branch tip is not a literal
+		//      ancestor of main).
+		// In both cases we also require that default-branch detection succeeded and
+		// that the branch is not the default branch itself.
+		isMerged := defaultBranch != "" &&
+			entry.Branch != "" &&
+			entry.Branch != defaultBranch &&
+			(mergedBranches[entry.Branch] || !remoteBranchExists[entry.Branch])
 		result = append(result, listEntry{
 			Path:     entry.Path,
 			Branch:   entry.Branch,
@@ -75,7 +101,7 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 			Current:  samePath(entry.Path, currentRoot),
 			Dirty:    dirty,
 			Detached: entry.Branch == "",
-			Merged:   defaultBranch != "" && entry.Branch != defaultBranch && mergedBranches[entry.Branch],
+			Merged:   isMerged,
 		})
 	}
 
