@@ -11,10 +11,10 @@ test -z "$(gofmt -l .)"
 make lint
 make test
 make build
-./smoke-test.sh
+env -u CI script -qefc './smoke-test.sh' /dev/null
 ```
 
-The workflow uses Go from `go.mod` and caches Go modules. It uses `actions/checkout@v5` and `actions/setup-go@v6`, which run on Node 24.
+The smoke suite uses a pseudo-terminal because it tests interactive `fzf` shell wrappers. The workflow uses Go from `go.mod` and caches Go modules. It uses `actions/checkout@v5` and `actions/setup-go@v6`, which run on Node 24.
 
 ## Releases
 

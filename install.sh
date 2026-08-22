@@ -192,7 +192,7 @@ fi
 # --- Check optional dependencies --------------------------------------------
 
 if ! command -v fzf >/dev/null 2>&1; then
-  print_warn "fzf is not installed. The 'wts' and 'wtd' commands require it."
+  print_warn "fzf is not installed. Interactive branch, review, switch, delete, and theme selection require it."
   echo "    Install it from: https://github.com/junegunn/fzf"
 fi
 

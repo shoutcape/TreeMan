@@ -36,6 +36,16 @@ Use `bash` instead of `zsh` for Bash. For Fish, add this command to `$XDG_CONFIG
 treeman init fish | source
 ```
 
+## Install Local Changes
+
+From a TreeMan repository checkout, run:
+
+```bash
+./install-local.sh
+```
+
+The script builds the current worktree and installs that binary with the standard installer. It requires Bash, Make, and Go 1.23 or later. It supports `TREEMAN_INSTALL_DIR` and `TREEMAN_SHELL_RC` as described for the release installer.
+
 ## Build From Source
 
 Install Go 1.23 or later. Then run:
