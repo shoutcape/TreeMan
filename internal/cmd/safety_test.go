@@ -134,6 +134,47 @@ func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/branch-failure")
 }
 
+func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/verified")
+	expectedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")
+	advanceMainForTest(t, repo)
+	gitTest(t, repo, "update-ref", "refs/heads/feature/verified", "refs/heads/main")
+	chdirForTest(t, repo)
+
+	err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/verified", repo, true, true, expectedSHA)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "moved after merge verification")
+	assert.DirExists(t, worktree)
+	assert.Equal(t, gitRevParse(t, repo, "refs/heads/main"), gitRevParse(t, repo, "refs/heads/feature/verified"))
+}
+
+func TestDeleteWorktreeAtSHAPreservesBranchOnCompareAndDeleteMismatch(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/verified")
+	expectedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")
+	movedSHA := advanceMainForTest(t, repo)
+	chdirForTest(t, repo)
+
+	originalRemove := removeWorktree
+	removeWorktree = func(path string, force bool) error {
+		if err := originalRemove(path, force); err != nil {
+			return err
+		}
+		gitTest(t, repo, "update-ref", "refs/heads/feature/verified", movedSHA)
+		return nil
+	}
+	t.Cleanup(func() { removeWorktree = originalRemove })
+
+	err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/verified", repo, false, true, expectedSHA)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Completed: removed worktree")
+	assert.Contains(t, err.Error(), "branch \"feature/verified\" was preserved because it moved after merge verification")
+	assert.Contains(t, err.Error(), "Recovery: inspect branch")
+	assert.NoDirExists(t, worktree)
+	assert.Equal(t, movedSHA, gitRevParse(t, repo, "refs/heads/feature/verified"))
+}
+
 func TestRunDeleteDirect_PrintsMainWorktreeWhenDeletingCurrentWorktree(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/current")
 	chdirForTest(t, worktree)
@@ -271,4 +312,12 @@ func gitTestFails(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	require.Errorf(t, err, "git %v unexpectedly succeeded: %s", args, output)
+}
+
+func advanceMainForTest(t *testing.T, repo string) string {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "moved.txt"), []byte("moved\n"), 0o644))
+	gitTest(t, repo, "add", "moved.txt")
+	gitTest(t, repo, "commit", "-m", "moved")
+	return gitRevParse(t, repo, "refs/heads/main")
 }

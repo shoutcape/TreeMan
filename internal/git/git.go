@@ -125,6 +125,15 @@ func BranchExists(branch string) bool {
 	return err == nil
 }
 
+// BranchSHA returns the commit SHA at the tip of the given local branch.
+func BranchSHA(branch string) (string, error) {
+	sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("could not resolve branch %q: %w", branch, err)
+	}
+	return sha, nil
+}
+
 // RemoteBranchExists reports whether origin has a branch with the exact name.
 func RemoteBranchExists(branch string) bool {
 	_, err := run("ls-remote", "--exit-code", "--heads", "origin", branch)
@@ -194,17 +203,19 @@ func RemoteBranchesExist(branches []string) (map[string]bool, error) {
 	return exists, nil
 }
 
-// MergedBranches returns local branches that are ancestors of target.
-func MergedBranches(target string) (map[string]bool, error) {
-	out, err := run("branch", "--merged", target, "--format=%(refname:short)")
+// MergedBranches returns the observed SHA for local branches that are
+// ancestors of target.
+func MergedBranches(target string) (map[string]string, error) {
+	out, err := run("branch", "--merged", target, "--format=%(refname:short)%09%(objectname)")
 	if err != nil {
 		return nil, fmt.Errorf("could not list branches merged into %q: %w", target, err)
 	}
 
-	branches := make(map[string]bool)
-	for _, branch := range strings.Split(out, "\n") {
-		if branch != "" {
-			branches[branch] = true
+	branches := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		branch, sha, found := strings.Cut(line, "\t")
+		if found && branch != "" && sha != "" {
+			branches[branch] = sha
 		}
 	}
 	return branches, nil
@@ -314,6 +325,16 @@ func DeleteBranch(dir, branch string, force bool) error {
 	_, err := runInDir(dir, "branch", flag, branch)
 	if err != nil {
 		return fmt.Errorf("branch %q could not be deleted: %w", branch, err)
+	}
+	return nil
+}
+
+// DeleteBranchAtSHA atomically deletes branch only when it still points at
+// expectedSHA. This prevents a verified cleanup from deleting later work.
+func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
+	_, err := runInDir(dir, "update-ref", "-d", "refs/heads/"+branch, expectedSHA)
+	if err != nil {
+		return fmt.Errorf("branch %q could not be deleted at verified SHA %s: %w", branch, expectedSHA, err)
 	}
 	return nil
 }

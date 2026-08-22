@@ -118,49 +118,12 @@ func TestRunListDetectsSquashMergedBranch(t *testing.T) {
 	//   2. A squash commit (new SHA, not an ancestor of feature tip) lands on main.
 	//   3. The remote feature branch is deleted (GitLab default).
 	// The branch tip is NOT an ancestor of origin/main, so git branch --merged
-	// won't catch it. treeman should still mark it merged because the remote
-	// branch is gone.
-	origin := filepath.Join(t.TempDir(), "origin.git")
-	runGit(t, "init", "--bare", "--initial-branch=main", origin)
+	// won't catch it. treeman should still mark it merged once the forge
+	// confirms a merged PR/MR whose head SHA equals the local branch tip.
+	repo, _ := createSquashMergedCleanWorktree(t)
+	stubForgeVerifier(t, []string{gitRevParse(t, repo, "refs/heads/feature")}, nil)
 
-	repo := filepath.Join(t.TempDir(), "repo")
-	runGit(t, "clone", origin, repo)
-	runGitInDir(t, repo, "config", "user.email", "test@example.com")
-	runGitInDir(t, repo, "config", "user.name", "Test User")
-
-	// Base commit on main.
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("base\n"), 0o644))
-	runGitInDir(t, repo, "add", "file")
-	runGitInDir(t, repo, "commit", "-m", "base")
-	runGitInDir(t, repo, "push", "origin", "main")
-
-	// Feature branch with one commit.
-	runGitInDir(t, repo, "checkout", "-b", "feature")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("feature\n"), 0o644))
-	runGitInDir(t, repo, "commit", "-am", "feature work")
-	runGitInDir(t, repo, "push", "-u", "origin", "feature")
-	runGitInDir(t, repo, "checkout", "main")
-
-	// Create a worktree for the feature branch.
-	worktree := filepath.Join(t.TempDir(), "feature-worktree")
-	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
-
-	// Squash-merge via a second clone: creates a brand-new commit on main
-	// that is NOT a fast-forward of feature, so feature tip is not an ancestor.
-	squasher := filepath.Join(t.TempDir(), "squasher")
-	runGit(t, "clone", origin, squasher)
-	runGitInDir(t, squasher, "config", "user.email", "test@example.com")
-	runGitInDir(t, squasher, "config", "user.name", "Test User")
-	runGitInDir(t, squasher, "merge", "--squash", "origin/feature")
-	runGitInDir(t, squasher, "commit", "-m", "squash merge feature")
-	runGitInDir(t, squasher, "push", "origin", "main")
-	// Delete the remote feature branch (GitLab does this automatically on merge).
-	runGitInDir(t, squasher, "push", "origin", "--delete", "feature")
-
-	previousDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(repo))
-	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+	changeToDir(t, repo)
 
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
@@ -170,7 +133,25 @@ func TestRunListDetectsSquashMergedBranch(t *testing.T) {
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
 	require.Len(t, entries, 2)
-	// Feature tip is not a git ancestor of main (squash), but remote branch is
-	// gone -- treeman should still mark it as merged.
-	assert.True(t, entries[1].Merged, "squash-merged branch with deleted remote should be marked merged")
+	assert.True(t, entries[1].Merged, "forge-verified squash merge should be marked merged")
+}
+
+func TestRunListRemoteGoneWithoutConfirmedMergeNotMarked(t *testing.T) {
+	// A deleted remote branch alone no longer proves a merge. Without a
+	// merged head SHA matching the local tip the branch must stay unmarked
+	// (and clean will retain it).
+	repo, _ := createSquashMergedCleanWorktree(t)
+	stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
+
+	changeToDir(t, repo)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.False(t, entries[1].Merged, "remote-gone branch without confirmed merge should not be marked merged")
 }

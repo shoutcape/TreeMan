@@ -53,26 +53,23 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 		return err
 	}
 	defaultBranch := ""
-	mergedBranches := map[string]bool{}
-	remoteBranchExists := map[string]bool{}
+	verified := map[string]string{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
 		if err = git.Fetch("refs/heads/" + defaultBranch + ":refs/remotes/origin/" + defaultBranch); err != nil {
 			defaultBranch = ""
 		} else {
-			if mergedBranches, err = git.MergedBranches("origin/" + defaultBranch); err != nil {
-				mergedBranches = map[string]bool{}
-			}
-			// Collect non-default branch names to check remote existence in one call.
-			var nonDefaultBranches []string
+			var branchNames []string
 			for _, entry := range entries {
 				if entry.Branch != "" && entry.Branch != defaultBranch {
-					nonDefaultBranches = append(nonDefaultBranches, entry.Branch)
+					branchNames = append(branchNames, entry.Branch)
 				}
 			}
-			if len(nonDefaultBranches) > 0 {
-				if remoteBranchExists, err = git.RemoteBranchesExist(nonDefaultBranches); err != nil {
-					remoteBranchExists = map[string]bool{}
-				}
+			var warning string
+			verified, warning, err = classifyCleanable("origin/"+defaultBranch, branchNames)
+			if err != nil {
+				verified = map[string]string{}
+			} else if warning != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), outputRenderer(cmd).Status(ui.ToneWarning, "!", warning))
 			}
 		}
 	}
@@ -83,17 +80,13 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 		if err != nil {
 			return err
 		}
-		// A branch is considered merged if:
-		//   1. git branch --merged reports it as a direct ancestor of origin/main, OR
-		//   2. the branch has no remote counterpart (remote deleted it, indicating a
-		//      squash-merge or similar workflow where the branch tip is not a literal
-		//      ancestor of main).
-		// In both cases we also require that default-branch detection succeeded and
-		// that the branch is not the default branch itself.
+		// MERGED reports merge eligibility: its tip is an ancestor of
+		// origin/<default>, or its remote counterpart is gone and the forge
+		// confirms a merged PR/MR (squash/rebase merge).
 		isMerged := defaultBranch != "" &&
 			entry.Branch != "" &&
 			entry.Branch != defaultBranch &&
-			(mergedBranches[entry.Branch] || !remoteBranchExists[entry.Branch])
+			verified[entry.Branch] != ""
 		result = append(result, listEntry{
 			Path:     entry.Path,
 			Branch:   entry.Branch,

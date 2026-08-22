@@ -152,6 +152,12 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 }
 
 func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool) error {
+	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, skipMergeCheck, "")
+}
+
+// deleteWorktreeAtSHA removes a worktree and its branch. An expected SHA makes
+// cleanup conditional on the exact commit whose merge was verified.
+func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err
@@ -185,6 +191,15 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, sk
 			return fmt.Errorf("branch %q is not fully merged; use --force to delete it", branch)
 		}
 	}
+	if expectedSHA != "" {
+		actualSHA, err := git.BranchSHA(branch)
+		if err != nil {
+			return fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved for verified cleanup: %w", entry.Path, branch, err)
+		}
+		if actualSHA != expectedSHA {
+			return fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, actualSHA)
+		}
+	}
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return err
@@ -200,9 +215,20 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, sk
 	if err := removeWorktree(entry.Path, force); err != nil {
 		return deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
 	}
-	branchForce := force || skipMergeCheck
-	if err := deleteBranch(mainRoot, branch, branchForce); err != nil {
-		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(branchForce), branch))
+	if expectedSHA != "" {
+		if err := git.DeleteBranchAtSHA(mainRoot, branch, expectedSHA); err != nil {
+			return deleteWorktreeFailure(
+				fmt.Errorf("branch %q was preserved because it moved after merge verification: %w", branch, err),
+				fmt.Sprintf("removed worktree %q", entry.Path),
+				fmt.Sprintf("branch %q", branch),
+				fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", branch, mainRoot, branch),
+			)
+		}
+	} else {
+		branchForce := force || skipMergeCheck
+		if err := deleteBranch(mainRoot, branch, branchForce); err != nil {
+			return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(branchForce), branch))
+		}
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
 	if samePath(currentRoot, entry.Path) {
