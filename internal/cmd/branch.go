@@ -57,6 +57,8 @@ func runBranch(cmd *cobra.Command, query string) error {
 }
 
 func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions) error {
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -89,7 +91,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 				cliTool, forgeType, cliInstallURL(forgeType))
 		}
 
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", "Fetching remote branches..."))
+		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Fetching remote branches..."))
 		allBranches, err := forge.BranchList(forgeType, repoSlug, host)
 		if err != nil {
 			return fmt.Errorf("failed to list remote branches: %w", err)
@@ -106,20 +108,20 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 			return fmt.Errorf("no remote branches available (all already exist locally or only default branch found)")
 		}
 
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", "Checking open MRs/PRs..."))
+		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Checking open MRs/PRs..."))
 		prs, err := forge.PRList(forgeType, repoSlug, host)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not fetch MRs/PRs: %v", err)))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not fetch MRs/PRs: %v", err)))
 		} else {
 			for _, pr := range prs {
 				prMap[pr.Branch] = pr
 			}
 		}
 
-		selected, err = pickBranch(branches, query, prMap)
+		selected, err = pickBranch(cmd, branches, query, prMap)
 		if err != nil {
 			if errors.Is(err, errPickerCancelled) {
-				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "Cancelled."))
+				fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
 				return nil
 			}
 			return err
@@ -135,37 +137,37 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	}
 
 	// Fetch the branch from origin.
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Fetching branch %s from origin...", branch)))
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching branch %s from origin...", branch)))
 	if err := git.Fetch(branch); err != nil {
 		return fmt.Errorf("failed to fetch branch %q: %w", branch, err)
 	}
 
 	// Create the worktree tracking the remote branch.
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
 	if err := git.WorktreeAddExisting(worktreePath, branch); err != nil {
 		return err
 	}
 
 	// Set upstream so git pull/push work.
 	if err := git.SetUpstreamInDir(worktreePath, branch); err != nil {
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", branch, err)))
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", branch, err)))
 	}
 
 	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
 	if err := worktree.EnsureIgnored(mainRoot); err != nil {
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
 	}
 
 	// Copy .env* files.
 	if !setupOptions.skipEnv {
 		envResult, envErr := envfile.Copy(mainRoot, worktreePath)
 		if envErr != nil {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", envErr)))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", envErr)))
 		} else if len(envResult.Copied) > 0 {
 			for _, f := range envResult.Copied {
-				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Copied "+f))
+				fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
 			}
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(envResult.Copied))))
+			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(envResult.Copied))))
 		}
 	}
 
@@ -174,7 +176,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	if !setupOptions.skipDatabase || !setupOptions.skipHooks {
 		cfgResult = config.Load(mainRoot)
 		if cfgResult.Warning != "" {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", cfgResult.Warning))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
 		}
 	}
 
@@ -184,27 +186,27 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 		dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
 		switch {
 		case dbErr != nil:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))
 		case dbResult.Skipped:
 			// No config, no env key, or not a postgres URI -- silently skip.
 		default:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
+			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
 		}
 	}
 
 	// Install dependencies.
 	if !setupOptions.skipDeps {
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", "Detecting dependencies..."))
-		installResult, installErr := deps.Install(worktreePath)
+		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Detecting dependencies..."))
+		installResult, installErr := deps.Install(worktreePath, out)
 		switch {
 		case installErr != nil:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
 		case installResult.Python:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
 		case installResult.Skipped:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
 		case installResult.Installer != nil:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
+			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
 				installResult.Installer.Lockfile,
 				installResult.Installer.Binary,
 				joinArgs(installResult.Installer.Args),
@@ -215,26 +217,26 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	// Run post-create hooks (best-effort, non-fatal).
 	if !setupOptions.skipHooks {
 		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
-			for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds) {
+			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
+			for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds, out) {
 				if r.Err != nil {
-					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
+					fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
 				} else {
-					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Ran: "+r.Command))
+					fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
 				}
 			}
 		}
 	}
 
 	// Print summary to stderr.
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(ui.FitToTerminal(branch, 10)))
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	if pr, ok := prMap[branch]; ok {
-		fmt.Fprintf(os.Stderr, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
+		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
-	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(ui.FitToTerminal(worktreePath, 10)))
-	setupOptions.printSkipped(os.Stderr)
+	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
+	setupOptions.printSkipped(out, render)
 
 	// Print path to stdout so the shell wrapper can cd into it.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
@@ -246,7 +248,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 // the selected branch. If query is provided, it pre-filters the list.
 // If query is an exact match, it auto-selects without showing the picker.
 // prMap maps branch names to their associated PR/MR info (may be nil).
-func pickBranch(branches []forge.BranchInfo, query string, prMap map[string]forge.PRInfo) (forge.BranchInfo, error) {
+func pickBranch(cmd *cobra.Command, branches []forge.BranchInfo, query string, prMap map[string]forge.PRInfo) (forge.BranchInfo, error) {
 	// If query is an exact match, skip fzf.
 	if query != "" {
 		for _, b := range branches {
@@ -254,6 +256,9 @@ func pickBranch(branches []forge.BranchInfo, query string, prMap map[string]forg
 				return b, nil
 			}
 		}
+	}
+	if !canInteract(cmd) {
+		return forge.BranchInfo{}, fmt.Errorf("interactive selection is unavailable; pass an exact branch name")
 	}
 
 	if _, err := exec.LookPath("fzf"); err != nil {
@@ -265,26 +270,27 @@ func pickBranch(branches []forge.BranchInfo, query string, prMap map[string]forg
 
 	// Build display lines.
 	var sb strings.Builder
-	sb.WriteString(ui.BranchHeader())
+	render := commandRenderer(cmd)
+	sb.WriteString(render.BranchHeader())
 	sb.WriteByte('\n')
 	for i, b := range branches {
 		mrNumber := 0
 		if pr, ok := prMap[b.Name]; ok {
 			mrNumber = pr.Number
 		}
-		sb.WriteString(pickerRow(ui.BranchRow(b.Name, b.Date, mrNumber), i))
+		sb.WriteString(pickerRow(render.BranchRow(b.Name, b.Date, mrNumber), i))
 		sb.WriteByte('\n')
 	}
 
 	// Pipe to fzf.
-	fzfArgs := append(pickerArgs(" remote branches ", "branch > "), "--header-lines=1")
+	fzfArgs := append(pickerArgs(sessionFor(cmd).errorOutput.Color, " remote branches ", "branch > "), "--header-lines=1")
 	if query != "" {
 		fzfArgs = append(fzfArgs, "--query", query)
 	}
 
 	fzfCmd := exec.Command("fzf", fzfArgs...)
 	fzfCmd.Stdin = strings.NewReader(sb.String())
-	fzfCmd.Stderr = os.Stderr
+	fzfCmd.Stderr = cmd.ErrOrStderr()
 
 	out, err := fzfCmd.Output()
 	if err != nil {

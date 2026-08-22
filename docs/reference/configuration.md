@@ -47,6 +47,11 @@ TreeMan attempts later hooks after a hook failure. Hook failures create warnings
 theme = "nord"
 ```
 
-Use `treeman theme` or `treeman theme set` to choose a theme with an interactive fzf preview. Available themes are `forest` (the default), `catppuccin-mocha`, `dracula`, `gruvbox`, `nord`, `one-dark`, `solarized-dark`, `solarized-light`, and `tokyo-night`. `catppuccin` is an alias for `catppuccin-mocha`.
+Use the following commands to select a theme.
+
+1. Use `treeman theme` or `treeman theme set` without a name to open the interactive theme picker.
+2. Use `treeman theme set <name>` to select a theme directly.
+
+Available themes are `forest` (the default), `catppuccin-mocha`, `dracula`, `gruvbox`, `nord`, `one-dark`, `solarized-dark`, `solarized-light`, and `tokyo-night`. `catppuccin` is an alias for `catppuccin-mocha`.
 
 Set `TREEMAN_THEME` to temporarily override `.treeman.toml` without modifying it. The environment variable takes precedence over project configuration.

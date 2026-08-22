@@ -51,7 +51,7 @@ func newDoctorCmd() *cobra.Command {
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	diagnostics := collectDiagnostics()
-	writeDiagnostics(cmd.ErrOrStderr(), diagnostics)
+	writeDiagnostics(cmd.ErrOrStderr(), commandRenderer(cmd), diagnostics)
 	for _, diagnostic := range diagnostics {
 		if diagnostic.status == diagnosticFail {
 			return fmt.Errorf("doctor found failed diagnostics; resolve them and rerun")
@@ -204,15 +204,15 @@ func hasShellIntegration(contents, shell string) bool {
 	return false
 }
 
-func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics []diagnostic) {
-	fmt.Fprintf(out, "\n%s\n\n", ui.RenderTitle("DIAGNOSTICS"))
+func writeDiagnostics(out interface{ Write([]byte) (int, error) }, render ui.Renderer, diagnostics []diagnostic) {
+	fmt.Fprintf(out, "\n%s\n\n", render.Title("DIAGNOSTICS"))
 	counts := [4]int{}
 	for _, diagnostic := range diagnostics {
 		counts[diagnostic.status]++
 		symbol, tone := diagnosticAppearance(diagnostic.status)
-		fmt.Fprintf(out, "  %s  %-20s %s\n", ui.RenderTone(tone, symbol), diagnostic.name, ui.RenderMuted(diagnostic.message))
+		fmt.Fprintf(out, "  %s  %-20s %s\n", render.Tone(tone, symbol), diagnostic.name, render.Muted(diagnostic.message))
 		if diagnostic.hint != "" {
-			writeDiagnosticHint(out, diagnostic.hint)
+			writeDiagnosticHint(out, render, diagnostic.hint)
 		}
 	}
 
@@ -229,7 +229,7 @@ func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics [
 	if counts[diagnosticFail] > 0 {
 		summary = append(summary, fmt.Sprintf("%d failed", counts[diagnosticFail]))
 	}
-	fmt.Fprintf(out, "\n%s\n", ui.RenderTone(diagnosticSummaryTone(counts), strings.Join(summary, " · ")))
+	fmt.Fprintf(out, "\n%s\n", render.Tone(diagnosticSummaryTone(counts), strings.Join(summary, " · ")))
 }
 
 func diagnosticAppearance(status diagnosticStatus) (symbol string, tone ui.Tone) {
@@ -255,14 +255,14 @@ func diagnosticSummaryTone(counts [4]int) ui.Tone {
 	return ui.ToneSuccess
 }
 
-func writeDiagnosticHint(out interface{ Write([]byte) (int, error) }, hint string) {
+func writeDiagnosticHint(out interface{ Write([]byte) (int, error) }, render ui.Renderer, hint string) {
 	lines := strings.Split(hint, "\n")
 	for i, line := range lines {
-		render := ui.RenderMuted
+		style := render.Muted
 		if i > 0 {
-			render = ui.RenderPath
+			style = render.Path
 		}
-		fmt.Fprintf(out, "\n     %s", render(line))
+		fmt.Fprintf(out, "\n     %s", style(line))
 	}
 	fmt.Fprintln(out)
 }

@@ -1,14 +1,16 @@
 package cmd
 
 import (
+	"io"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPickerSelectionIndex_DuplicateDisplayRows(t *testing.T) {
-	display := ui.WorktreeRow("/home/user/repo.feature-a", "feature/a")
+	display := ui.NewRenderer(io.Discard, terminal.Capabilities{}).WorktreeRow("/home/user/repo.feature-a", "feature/a")
 	first := pickerRow(display, 0)
 	second := pickerRow(display, 1)
 
@@ -23,8 +25,15 @@ func TestPickerSelectionIndex_InvalidIdentity(t *testing.T) {
 }
 
 func TestPickerArgs_PreservePrompt(t *testing.T) {
-	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--prompt=switch > ")
-	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--color="+ui.FZFColors())
-	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--height=40%")
-	assert.Contains(t, pickerArgs(" worktrees ", "switch > "), "--layout=reverse")
+	colorArgs := pickerArgs(true, " worktrees ", "switch > ")
+	assert.Contains(t, colorArgs, "--prompt=switch > ")
+	assert.Contains(t, colorArgs, "--ansi")
+	assert.Contains(t, colorArgs, "--color="+ui.FZFColors())
+	assert.Contains(t, colorArgs, "--height=40%")
+	assert.Contains(t, colorArgs, "--layout=reverse")
+
+	plainArgs := pickerArgs(false, " worktrees ", "switch > ")
+	assert.Contains(t, plainArgs, "--no-color")
+	assert.NotContains(t, plainArgs, "--ansi")
+	assert.NotContains(t, plainArgs, "--color="+ui.FZFColors())
 }

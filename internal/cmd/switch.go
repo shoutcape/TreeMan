@@ -35,6 +35,8 @@ can cd into it.`,
 }
 
 func runSwitch(cmd *cobra.Command, query string) error {
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return fmt.Errorf("not in a git repository or no worktrees found")
@@ -43,7 +45,7 @@ func runSwitch(cmd *cobra.Command, query string) error {
 		return fmt.Errorf("no worktrees found")
 	}
 	if len(entries) == 1 {
-		fmt.Fprintln(os.Stderr, "Only one worktree exists — nothing to switch to.")
+		fmt.Fprintln(out, "Only one worktree exists - nothing to switch to.")
 		return nil
 	}
 
@@ -54,6 +56,9 @@ func runSwitch(cmd *cobra.Command, query string) error {
 			}
 		}
 	}
+	if !canInteract(cmd) {
+		return fmt.Errorf("interactive selection is unavailable; pass an exact branch name or worktree path")
+	}
 
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return fmt.Errorf("fzf is required for switch. Install it from https://github.com/junegunn/fzf")
@@ -63,33 +68,33 @@ func runSwitch(cmd *cobra.Command, query string) error {
 	var displayLines []string
 	var fullPaths []string
 	for i, e := range entries {
-		displayLines = append(displayLines, pickerRow(ui.WorktreeRow(e.Path, e.Branch), i))
+		displayLines = append(displayLines, pickerRow(render.WorktreeRow(e.Path, e.Branch), i))
 		fullPaths = append(fullPaths, e.Path)
 	}
 
 	display := strings.Join(displayLines, "\n")
 
-	fzfArgs := pickerArgs(" worktrees ", "switch > ")
+	fzfArgs := pickerArgs(sessionFor(cmd).errorOutput.Color, " worktrees ", "switch > ")
 	if query != "" {
 		fzfArgs = append(fzfArgs, "--query", query)
 	}
 
 	fzfCmd := exec.Command("fzf", fzfArgs...)
 	fzfCmd.Stdin = strings.NewReader(display)
-	fzfCmd.Stderr = os.Stderr
+	fzfCmd.Stderr = out
 
-	out, err := fzfCmd.Output()
+	selectionOutput, err := fzfCmd.Output()
 	if err != nil {
 		if pickerCancelled(err) {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
 			return nil
 		}
 		return fmt.Errorf("fzf failed while selecting a worktree: %w", err)
 	}
 
-	selection := strings.TrimSpace(string(out))
+	selection := strings.TrimSpace(string(selectionOutput))
 	if selection == "" {
-		fmt.Fprintln(os.Stderr, "Cancelled.")
+		fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
 		return nil
 	}
 
@@ -106,12 +111,12 @@ func printSwitchDestination(cmd *cobra.Command, dest string) error {
 	// Determine current directory to detect same-worktree selection.
 	cwd, _ := os.Getwd()
 	if dest == cwd {
-		fmt.Fprintln(os.Stderr, "Already in this worktree.")
+		fmt.Fprintln(cmd.ErrOrStderr(), "Already in this worktree.")
 		return nil
 	}
 
 	short := filepath.Base(dest)
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("cd .../%s", short)))
+	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneInfo, "→", fmt.Sprintf("cd .../%s", short)))
 
 	// Print path to stdout for shell wrapper cd.
 	fmt.Fprintln(cmd.OutOrStdout(), dest)

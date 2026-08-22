@@ -160,9 +160,9 @@ func SaveTheme(dir, theme string) (string, error) {
 }
 
 var (
-	uiSectionPattern = regexp.MustCompile(`^\s*\[ui\]\s*(?:#.*)?$`)
+	uiSectionPattern = regexp.MustCompile(`^\s*\[\s*(?:ui|"ui"|'ui')\s*\]\s*(?:#.*)?$`)
 	sectionPattern   = regexp.MustCompile(`^\s*\[`)
-	themePattern     = regexp.MustCompile(`^(\s*)theme\s*=.*$`)
+	themePattern     = regexp.MustCompile(`^(\s*)(?:theme|"theme"|'theme')\s*=.*$`)
 )
 
 func setThemeTOML(data, theme string) string {

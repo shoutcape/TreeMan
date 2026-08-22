@@ -119,9 +119,10 @@ func writeListJSON(cmd *cobra.Command, entries []listEntry) error {
 
 func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "\n%s\n\n", ui.RenderTitle("WORKTREES"))
-	fmt.Fprintf(out, "    %s\n", ui.RenderHeader(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "MARKERS", "STATUS", "MERGED", "BRANCH", "PATH")))
-	fmt.Fprintf(out, "    %s\n", ui.RenderMuted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
+	render := outputRenderer(cmd)
+	fmt.Fprintf(out, "\n%s\n\n", render.Title("WORKTREES"))
+	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "MARKERS", "STATUS", "MERGED", "BRANCH", "PATH")))
+	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
 	for _, entry := range entries {
 		branch := entry.Branch
 		if entry.Detached {
@@ -140,11 +141,11 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 			merged = "YES"
 		}
 		fmt.Fprintf(out, "    %s %s  %-6s  %s  %s\n",
-			ui.RenderMuted(fmt.Sprintf("%-8s", markers)),
-			ui.RenderTone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
+			render.Muted(fmt.Sprintf("%-8s", markers)),
+			render.Tone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
 			merged,
-			ui.RenderBranch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
-			ui.RenderPath(displayListPath(entry.Path)),
+			render.Branch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
+			render.Path(displayListPath(entry.Path)),
 		)
 	}
 }

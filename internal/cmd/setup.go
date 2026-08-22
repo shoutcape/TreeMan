@@ -24,7 +24,7 @@ func addCreationSetupFlags(cmd *cobra.Command, options *creationSetupOptions) {
 	cmd.Flags().BoolVar(&options.skipHooks, "skip-hooks", false, "Skip post-create hooks")
 }
 
-func (o creationSetupOptions) printSkipped(w io.Writer) {
+func (o creationSetupOptions) printSkipped(w io.Writer, render ui.Renderer) {
 	for _, action := range []struct {
 		skipped bool
 		name    string
@@ -35,14 +35,14 @@ func (o creationSetupOptions) printSkipped(w io.Writer) {
 		{o.skipHooks, "post-create hooks"},
 	} {
 		if action.skipped {
-			fmt.Fprintf(w, "  %s  %s\n", ui.RenderTone(ui.ToneMuted, "○"), ui.RenderMuted("Skipped: "+action.name+" (requested)"))
+			fmt.Fprintf(w, "  %s  %s\n", render.Tone(ui.ToneMuted, "○"), render.Muted("Skipped: "+action.name+" (requested)"))
 		}
 	}
 }
 
-func writeSetupStatus(w io.Writer, name, status string) {
+func writeSetupStatus(w io.Writer, render ui.Renderer, name, status string) {
 	tone, symbol := setupStatusAppearance(status)
-	fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(tone, symbol), name, ui.RenderTone(tone, ui.FitToTerminal(status, 20)))
+	fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(tone, symbol), name, render.Tone(tone, render.Fit(status, 20)))
 }
 
 func setupStatusAppearance(status string) (ui.Tone, string) {

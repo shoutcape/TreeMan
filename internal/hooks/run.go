@@ -7,6 +7,7 @@ package hooks
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -26,27 +27,31 @@ type RunResult struct {
 //
 // All commands are attempted regardless of individual failures. The caller
 // should treat errors as warnings.
-func RunPostCreate(dir string, cmds []string) []RunResult {
+func RunPostCreate(dir string, cmds []string, outputs ...io.Writer) []RunResult {
 	if len(cmds) == 0 {
 		return nil
+	}
+	output := io.Writer(os.Stderr)
+	if len(outputs) > 0 && outputs[0] != nil {
+		output = outputs[0]
 	}
 
 	results := make([]RunResult, 0, len(cmds))
 	for _, c := range cmds {
-		err := runShellCommand(dir, c)
+		err := runShellCommand(dir, c, output)
 		results = append(results, RunResult{Command: c, Err: err})
 	}
 	return results
 }
 
 // runShellCommand executes a single command string via the system shell.
-func runShellCommand(dir, command string) error {
+func runShellCommand(dir, command string, output io.Writer) error {
 	shell, flag := shellCmd()
 
 	cmd := exec.Command(shell, flag, command)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stderr // hooks output goes to stderr (stdout is reserved for the path)
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = output // hooks output goes to stderr (stdout is reserved for the path)
+	cmd.Stderr = output
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("command %q failed: %w", command, err)

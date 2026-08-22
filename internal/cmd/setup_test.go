@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +40,7 @@ func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) 
 
 func TestCreationSetupOptions_PrintSkipped(t *testing.T) {
 	var output bytes.Buffer
-	creationSetupOptions{skipEnv: true, skipDeps: true}.printSkipped(&output)
+	creationSetupOptions{skipEnv: true, skipDeps: true}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
 
 	assert.Equal(t, "  ○  Skipped: environment file copy (requested)\n  ○  Skipped: dependency installation (requested)\n", ui.StripANSI(output.String()))
 }
@@ -60,7 +61,7 @@ func TestSetupStatusAppearance(t *testing.T) {
 
 func TestCreationSetupOptions_DoesNotPrintUnrequestedSkips(t *testing.T) {
 	var output bytes.Buffer
-	creationSetupOptions{}.printSkipped(&output)
+	creationSetupOptions{}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
 
 	assert.Empty(t, output.String())
 }

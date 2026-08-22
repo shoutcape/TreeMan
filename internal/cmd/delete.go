@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -62,9 +61,13 @@ func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force
 		return err
 	}
 	if !skipConfirm {
-		printDeleteConfirmation(path, branch)
-		if !confirmYN(cmd, "Are you sure? [y/N] ") {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
+		printDeleteConfirmation(cmd, path, branch)
+		confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "Cancelled."))
 			return nil
 		}
 	}
@@ -72,9 +75,8 @@ func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error {
-	if _, err := exec.LookPath("fzf"); err != nil {
-		return fmt.Errorf("fzf is required for delete. Install it from https://github.com/junegunn/fzf")
-	}
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -83,7 +85,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 		return err
 	}
 	if len(entries) <= 1 {
-		fmt.Fprintln(os.Stderr, "Only one worktree exists -- nothing to delete.")
+		fmt.Fprintln(out, "Only one worktree exists -- nothing to delete.")
 		return nil
 	}
 	mainRoot, err := git.MainWorktreeRoot()
@@ -96,33 +98,39 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 		if samePath(entry.Path, mainRoot) {
 			continue
 		}
-		displayLines = append(displayLines, pickerRow(ui.WorktreeRow(entry.Path, entry.Branch), len(paths)))
+		displayLines = append(displayLines, pickerRow(render.WorktreeRow(entry.Path, entry.Branch), len(paths)))
 		paths = append(paths, entry.Path)
 		branches = append(branches, entry.Branch)
 	}
 	if len(displayLines) == 0 {
-		fmt.Fprintln(os.Stderr, "No deletable worktrees -- only the main worktree exists.")
+		fmt.Fprintln(out, "No deletable worktrees -- only the main worktree exists.")
 		return nil
 	}
+	if !canInteract(cmd) {
+		return fmt.Errorf("interactive selection is unavailable; pass --path and --branch")
+	}
+	if _, err := exec.LookPath("fzf"); err != nil {
+		return fmt.Errorf("fzf is required for delete. Install it from https://github.com/junegunn/fzf")
+	}
 
-	args := pickerArgs(" delete worktree ", "delete > ")
+	args := pickerArgs(sessionFor(cmd).errorOutput.Color, " delete worktree ", "delete > ")
 	if query != "" {
 		args = append(args, "--query", query)
 	}
 	fzfCmd := exec.Command("fzf", args...)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(displayLines, "\n"))
-	fzfCmd.Stderr = os.Stderr
-	out, err := fzfCmd.Output()
+	fzfCmd.Stderr = out
+	selectionOutput, err := fzfCmd.Output()
 	if err != nil {
 		if pickerCancelled(err) {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
 			return nil
 		}
 		return fmt.Errorf("fzf failed while selecting a worktree: %w", err)
 	}
-	selection := strings.TrimSpace(string(out))
+	selection := strings.TrimSpace(string(selectionOutput))
 	if selection == "" {
-		fmt.Fprintln(os.Stderr, "Cancelled.")
+		fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
 		return nil
 	}
 	idx := pickerSelectionIndex(selection, len(paths))
@@ -130,9 +138,13 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 		return fmt.Errorf("could not map fzf selection to a worktree")
 	}
 	if !skipConfirm {
-		printDeleteConfirmation(paths[idx], branches[idx])
-		if !confirmYN(cmd, "Are you sure? [y/N] ") {
-			fmt.Fprintln(os.Stderr, "Cancelled.")
+		printDeleteConfirmation(cmd, paths[idx], branches[idx])
+		confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
 			return nil
 		}
 	}
@@ -182,7 +194,7 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, sk
 	cfgResult := config.Load(mainRoot)
 	if dbEnvKey := cfgResult.Config.DatabaseEnvKey(); dbEnvKey != "" {
 		if err := database.CleanupBranchDB(entry.Path, dbEnvKey); err != nil {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
+			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 		}
 	}
 	if err := removeWorktree(entry.Path, force); err != nil {
@@ -192,7 +204,7 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, sk
 	if err := deleteBranch(mainRoot, branch, branchForce); err != nil {
 		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(branchForce), branch))
 	}
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
+	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
 	if samePath(currentRoot, entry.Path) {
 		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
 	}
@@ -246,17 +258,22 @@ func canonicalPath(path string) string {
 	return filepath.Clean(abs)
 }
 
-func printDeleteConfirmation(path, branch string) {
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", "About to delete:"))
-	fmt.Fprintf(os.Stderr, "  Worktree: %s\n", ui.RenderPath(path))
-	fmt.Fprintf(os.Stderr, "  Branch:   %s\n\n", ui.RenderBranch(branch))
+func printDeleteConfirmation(cmd *cobra.Command, path, branch string) {
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
+	fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", "About to delete:"))
+	fmt.Fprintf(out, "  Worktree: %s\n", render.Path(path))
+	fmt.Fprintf(out, "  Branch:   %s\n\n", render.Branch(branch))
 }
 
-func confirmYN(cmd *cobra.Command, prompt string) bool {
-	fmt.Fprint(os.Stderr, prompt)
+func confirmYN(cmd *cobra.Command, prompt string) (bool, error) {
+	if !canInteract(cmd) {
+		return false, fmt.Errorf("confirmation required; rerun with --yes")
+	}
+	fmt.Fprint(cmd.ErrOrStderr(), prompt)
 	scanner := bufio.NewScanner(cmd.InOrStdin())
 	if scanner.Scan() {
-		return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y")
+		return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y"), nil
 	}
-	return false
+	return false, nil
 }

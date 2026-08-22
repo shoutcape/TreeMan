@@ -247,6 +247,35 @@ func TestSaveThemePreservesOtherSections(t *testing.T) {
 	assert.Equal(t, "# Project settings\n[database]\nenv_key = \"DATABASE_URL\"\n\n[ui]\n# Personal preference\ntheme = \"nord\"\n\n[custom]\nvalue = true\n", readConfig(t, path))
 }
 
+func TestSaveThemeRecognizesEquivalentUISectionSyntax(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		content  string
+		expected string
+	}{
+		{
+			name:     "whitespace in table header",
+			content:  "[ ui ]\ntheme = \"forest\"\n",
+			expected: "[ ui ]\ntheme = \"nord\"\n",
+		},
+		{
+			name:     "quoted table and key",
+			content:  "[\"ui\"]\n\"theme\" = \"forest\"\n",
+			expected: "[\"ui\"]\ntheme = \"nord\"\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ConfigFileName)
+			require.NoError(t, os.WriteFile(path, []byte(test.content), 0o600))
+
+			_, err := SaveTheme(dir, "nord")
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, readConfig(t, path))
+		})
+	}
+}
+
 func readConfig(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -12,9 +12,8 @@ import (
 
 var errPickerCancelled = errors.New("picker cancelled")
 
-func pickerArgs(label, prompt string) []string {
-	return []string{
-		"--ansi",
+func pickerArgs(color bool, label, prompt string) []string {
+	args := []string{
 		"--height=40%",
 		"--layout=reverse",
 		"--border=rounded",
@@ -22,10 +21,13 @@ func pickerArgs(label, prompt string) []string {
 		"--with-nth=1",
 		"--border-label", label,
 		"--prompt=" + prompt,
-		"--color=" + ui.FZFColors(),
 		"--select-1",
 		"--exit-0",
 	}
+	if color {
+		return append(args, "--ansi", "--color="+ui.FZFColors())
+	}
+	return append(args, "--no-color")
 }
 
 func pickerRow(display string, index int) string {

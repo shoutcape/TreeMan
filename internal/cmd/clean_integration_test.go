@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -75,6 +77,11 @@ func TestCleanDeclineLeavesCandidatesUntouched(t *testing.T) {
 	changeToDir(t, repo)
 
 	cmd := &cobra.Command{}
+	previousCapabilities := terminalCapabilities
+	terminalCapabilities = func(io.Reader, io.Writer) terminal.Capabilities {
+		return terminal.Capabilities{Interactive: true}
+	}
+	t.Cleanup(func() { terminalCapabilities = previousCapabilities })
 	cmd.SetIn(strings.NewReader("n\n"))
 	cmd.SetOut(&bytes.Buffer{})
 	require.NoError(t, runClean(cmd, false, false))
@@ -145,6 +152,7 @@ func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 	require.NoError(t, runClean(cmd, true, false))
 
 	cleanOutput := ui.StripANSI(output.String())
+	assert.NotContains(t, output.String(), "\x1b")
 	assert.Contains(t, cleanOutput, "Cleanup candidates")
 	assert.Contains(t, cleanOutput, "Merged, clean worktrees and branches to remove")
 	assert.Contains(t, cleanOutput, "BRANCH")
@@ -158,8 +166,8 @@ func TestCleanDryRunPreviewsCandidatesWithoutRemoving(t *testing.T) {
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
-func TestCleanRemovesSquashMergedCleanWorktree(t *testing.T) {
-	repo, worktree := createSquashMergedCleanWorktree(t)
+func TestCleanRetainsRemoteDeletedUnmergedWorktree(t *testing.T) {
+	repo, worktree := createRemoteDeletedUnmergedCleanWorktree(t)
 	changeToDir(t, repo)
 
 	cmd := &cobra.Command{}
@@ -167,13 +175,11 @@ func TestCleanRemovesSquashMergedCleanWorktree(t *testing.T) {
 	require.NoError(t, runClean(cmd, false, true))
 
 	_, err := os.Stat(worktree)
-	require.True(t, os.IsNotExist(err), "squash-merged worktree should have been removed")
-	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
-	command.Dir = repo
-	require.Error(t, command.Run(), "local branch should have been deleted")
+	require.NoError(t, err, "unmerged worktree should not be removed")
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
-func createSquashMergedCleanWorktree(t *testing.T) (string, string) {
+func createRemoteDeletedUnmergedCleanWorktree(t *testing.T) (string, string) {
 	t.Helper()
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, "init", "--bare", "--initial-branch=main", origin)
@@ -192,17 +198,7 @@ func createSquashMergedCleanWorktree(t *testing.T) (string, string) {
 	runGitInDir(t, repo, "checkout", "main")
 	worktree := filepath.Join(t.TempDir(), "feature-worktree")
 	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
-
-	// Squash-merge via a second clone: new commit on main, feature tip not an ancestor.
-	squasher := filepath.Join(t.TempDir(), "squasher")
-	runGit(t, "clone", origin, squasher)
-	runGitInDir(t, squasher, "config", "user.email", "test@example.com")
-	runGitInDir(t, squasher, "config", "user.name", "Test User")
-	runGitInDir(t, squasher, "merge", "--squash", "origin/feature")
-	runGitInDir(t, squasher, "commit", "-m", "squash merge feature")
-	runGitInDir(t, squasher, "push", "origin", "main")
-	// Delete the remote branch (GitLab does this automatically after merge).
-	runGitInDir(t, squasher, "push", "origin", "--delete", "feature")
+	runGitInDir(t, repo, "push", "origin", "--delete", "feature")
 
 	return repo, worktree
 }

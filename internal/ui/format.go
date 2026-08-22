@@ -11,25 +11,25 @@ import (
 // The display shows the last two path components and branch name.
 //
 // Column width for the path component is 40 characters.
-func WorktreeRow(path, branch string) string {
+func (r Renderer) WorktreeRow(path, branch string) string {
 	short := shortPath(path)
-	return RenderPath(fmt.Sprintf("%-40s", short)) + "  " + RenderBranch(branch)
+	return r.Path(fmt.Sprintf("%-40s", short)) + "  " + r.Branch(branch)
 }
 
 // PRHeader returns the column header row for the PR/MR fzf picker.
-func PRHeader() string {
-	return RenderHeader(fmt.Sprintf("%-8s", "PR/MR")) + "  " +
-		RenderHeader(fmt.Sprintf("%-32s", "Branch")) + "  " + RenderHeader("Title")
+func (r Renderer) PRHeader() string {
+	return r.Header(fmt.Sprintf("%-8s", "PR/MR")) + "  " +
+		r.Header(fmt.Sprintf("%-32s", "Branch")) + "  " + r.Header("Title")
 }
 
 // PRRow formats a single PR/MR entry for the fzf picker.
 //
 // number is the PR/MR number, branch is truncated to 32 chars, title is the remainder.
-func PRRow(number int, branch, title string) string {
+func (r Renderer) PRRow(number int, branch, title string) string {
 	prNum := fmt.Sprintf("#%d", number)
 	truncBranch := truncate(branch, 32)
-	return RenderPR(fmt.Sprintf("%-8s", prNum)) + "  " +
-		RenderBranch(fmt.Sprintf("%-32s", truncBranch)) + "  " + RenderPath(title)
+	return r.PR(fmt.Sprintf("%-8s", prNum)) + "  " +
+		r.Branch(fmt.Sprintf("%-32s", truncBranch)) + "  " + r.Path(title)
 }
 
 // shortPath returns the last two path components of a filesystem path.
@@ -93,19 +93,19 @@ func StripANSI(s string) string {
 }
 
 // BranchHeader returns the column header row for the branch fzf picker.
-func BranchHeader() string {
-	return RenderHeader(fmt.Sprintf("%-50s", "Branch")) + "  " +
-		RenderHeader(fmt.Sprintf("%-14s", "Last Updated")) + "  " + RenderHeader("MR/PR")
+func (r Renderer) BranchHeader() string {
+	return r.Header(fmt.Sprintf("%-50s", "Branch")) + "  " +
+		r.Header(fmt.Sprintf("%-14s", "Last Updated")) + "  " + r.Header("MR/PR")
 }
 
 // BranchRow formats a single remote branch entry for the fzf picker.
 // If mrNumber > 0, it displays the MR/PR number in the third column.
-func BranchRow(branch, date string, mrNumber int) string {
+func (r Renderer) BranchRow(branch, date string, mrNumber int) string {
 	truncBranch := truncate(branch, 50)
 	mr := ""
 	if mrNumber > 0 {
 		mr = fmt.Sprintf("#%d", mrNumber)
 	}
-	return RenderBranch(fmt.Sprintf("%-50s", truncBranch)) + "  " +
-		RenderMuted(fmt.Sprintf("%-14s", date)) + "  " + RenderPR(mr)
+	return r.Branch(fmt.Sprintf("%-50s", truncBranch)) + "  " +
+		r.Muted(fmt.Sprintf("%-14s", date)) + "  " + r.PR(mr)
 }

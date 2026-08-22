@@ -2,14 +2,15 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/term"
 	"github.com/muesli/termenv"
+	"github.com/shoutcape/treeman/internal/terminal"
 )
 
 // Palette maps a theme's colors to TreeMan's semantic output roles.
@@ -53,17 +54,11 @@ const (
 	ToneInfo
 )
 
-var (
-	renderer     = lipgloss.NewRenderer(os.Stderr)
-	styles       themeStyles
-	currentTheme = "forest"
-)
+var currentTheme = "forest"
 
 type themeStyles struct {
 	title, header, muted, branch, path, link, pr, info, success, warning, failure lipgloss.Style
 }
-
-func init() { SetTheme("forest") }
 
 // ThemeNames returns the supported canonical theme names.
 func ThemeNames() []string {
@@ -129,18 +124,12 @@ func SetTheme(name string) bool {
 	if alias, ok := aliases[name]; ok {
 		name = alias
 	}
-	palette, ok := themes[name]
+	_, ok := themes[name]
 	if !ok {
 		name = "forest"
-		palette = themes[name]
 	}
 	currentTheme = name
-	styles = newThemeStyles(palette)
 	return ok
-}
-
-func newThemeStyles(p Palette) themeStyles {
-	return newThemeStylesFor(renderer, p)
 }
 
 func newThemeStylesFor(r *lipgloss.Renderer, p Palette) themeStyles {
@@ -159,7 +148,76 @@ func newThemeStylesFor(r *lipgloss.Renderer, p Palette) themeStyles {
 	}
 }
 
-// ThemePickerRow renders a compact, non-mutating sample of a theme.
+// Renderer applies one immutable palette to one output stream.
+type Renderer struct {
+	capabilities terminal.Capabilities
+	styles       themeStyles
+}
+
+// NewRenderer creates a renderer for writer using the supplied stream policy.
+func NewRenderer(writer io.Writer, capabilities terminal.Capabilities) Renderer {
+	renderer := lipgloss.NewRenderer(writer)
+	if !capabilities.Color {
+		renderer.SetColorProfile(termenv.Ascii)
+	}
+	p, ok := themePalette(CurrentTheme())
+	if !ok {
+		p = themes["forest"]
+	}
+	return Renderer{capabilities: capabilities, styles: newThemeStylesFor(renderer, p)}
+}
+
+func (r Renderer) Title(value string) string  { return r.styles.title.Render(value) }
+func (r Renderer) Header(value string) string { return r.styles.header.Render(value) }
+func (r Renderer) Muted(value string) string  { return r.styles.muted.Render(value) }
+func (r Renderer) Branch(value string) string { return r.styles.branch.Render(value) }
+func (r Renderer) Path(value string) string   { return r.styles.path.Render(value) }
+func (r Renderer) PR(value string) string     { return r.styles.pr.Render(value) }
+
+// Link renders a concise clickable label only when the destination supports it.
+func (r Renderer) Link(label, url string) string {
+	if !r.capabilities.Hyperlinks {
+		return label
+	}
+	return ansi.SetHyperlink(url) + r.styles.link.Render(label) + ansi.ResetHyperlink()
+}
+
+func (r Renderer) Tone(tone Tone, value string) string {
+	switch tone {
+	case ToneSuccess:
+		return r.styles.success.Render(value)
+	case ToneWarning:
+		return r.styles.warning.Render(value)
+	case ToneFailure:
+		return r.styles.failure.Render(value)
+	case ToneInfo:
+		return r.styles.info.Render(value)
+	case ToneMuted:
+		return r.styles.muted.Render(value)
+	default:
+		return value
+	}
+}
+
+// Status keeps symbols and color together so status does not rely on color.
+func (r Renderer) Status(tone Tone, symbol, message string) string {
+	return r.Tone(tone, symbol) + " " + r.Fit(message, 2)
+}
+
+// Fit truncates human-facing text only when the destination has a known width.
+func (r Renderer) Fit(value string, reserved int) string {
+	if r.capabilities.Width <= 0 {
+		return value
+	}
+	available := r.capabilities.Width - reserved
+	if available <= 3 {
+		return ansi.Truncate(value, max(1, available), "")
+	}
+	return ansi.Truncate(value, available, "...")
+}
+
+// ThemePickerRow renders a compact, non-mutating sample for fzf. It forces
+// color because fzf is only launched for interactive rich-terminal sessions.
 func ThemePickerRow(name string, current bool) string {
 	p, ok := themePalette(name)
 	if !ok {
@@ -177,6 +235,7 @@ func ThemePickerRow(name string, current bool) string {
 }
 
 // ThemePreview renders a full non-mutating theme sample for fzf's preview pane.
+// It intentionally forces color for that isolated fzf preview protocol.
 func ThemePreview(name string) (string, bool) {
 	p, ok := themePalette(name)
 	if !ok {
@@ -217,55 +276,4 @@ func themePalette(name string) (Palette, bool) {
 
 func displayThemeName(name string) string {
 	return strings.Join(strings.FieldsFunc(name, func(r rune) bool { return r == '-' }), " ")
-}
-
-func RenderTitle(value string) string  { return styles.title.Render(value) }
-func RenderHeader(value string) string { return styles.header.Render(value) }
-func RenderMuted(value string) string  { return styles.muted.Render(value) }
-func RenderBranch(value string) string { return styles.branch.Render(value) }
-func RenderPath(value string) string   { return styles.path.Render(value) }
-func RenderPR(value string) string     { return styles.pr.Render(value) }
-
-// RenderLink renders a concise clickable label in color-enabled terminals.
-func RenderLink(label, url string) string {
-	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" || !term.IsTerminal(os.Stderr.Fd()) {
-		return label
-	}
-	return ansi.SetHyperlink(url) + styles.link.Render(label) + ansi.ResetHyperlink()
-}
-
-func RenderTone(tone Tone, value string) string {
-	switch tone {
-	case ToneSuccess:
-		return styles.success.Render(value)
-	case ToneWarning:
-		return styles.warning.Render(value)
-	case ToneFailure:
-		return styles.failure.Render(value)
-	case ToneInfo:
-		return styles.info.Render(value)
-	case ToneMuted:
-		return styles.muted.Render(value)
-	default:
-		return value
-	}
-}
-
-// RenderStatus keeps symbols and color together so status does not rely on color.
-func RenderStatus(tone Tone, symbol, message string) string {
-	return RenderTone(tone, symbol) + " " + FitToTerminal(message, 2)
-}
-
-// FitToTerminal truncates human-facing text to leave room for its fixed prefix.
-// It preserves the complete value when stderr is not an interactive terminal.
-func FitToTerminal(value string, reserved int) string {
-	width, _, err := term.GetSize(os.Stderr.Fd())
-	if err != nil || width <= 0 {
-		return value
-	}
-	available := width - reserved
-	if available <= 3 {
-		return ansi.Truncate(value, max(1, available), "")
-	}
-	return ansi.Truncate(value, available, "...")
 }

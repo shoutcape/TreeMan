@@ -45,6 +45,8 @@ can cd into it.`,
 }
 
 func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOptions) error {
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
 	// Validate branch name.
 	if err := validate.BranchName(branch); err != nil {
 		return err
@@ -73,7 +75,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 
 	// Fetch latest default branch.
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Fetching latest %s from origin...", defaultBranch)))
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching latest %s from origin...", defaultBranch)))
 	if err := git.Fetch(defaultBranch); err != nil {
 		return err
 	}
@@ -87,14 +89,14 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 
 	// Create worktree + branch.
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
 	if err := git.WorktreeAdd(worktreePath, branch, "origin/"+defaultBranch); err != nil {
 		return err
 	}
 
 	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
 	if err := worktree.EnsureIgnored(mainRoot); err != nil {
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
 	}
 
 	// Copy .env* files (best-effort, non-fatal).
@@ -103,13 +105,13 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		result, err := envfile.Copy(mainRoot, worktreePath)
 		environmentStatus = "skipped (no environment files found)"
 		if err != nil {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
 			environmentStatus = fmt.Sprintf("failed: %v", err)
 		} else if len(result.Copied) > 0 {
 			for _, f := range result.Copied {
-				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Copied "+f))
+				fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
 			}
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
+			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
 			environmentStatus = fmt.Sprintf("completed: copied %d file(s)", len(result.Copied))
 		}
 	}
@@ -119,7 +121,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	if !setupOptions.skipDatabase || !setupOptions.skipHooks {
 		cfgResult = config.Load(mainRoot)
 		if cfgResult.Warning != "" {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", cfgResult.Warning))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
 		}
 	}
 
@@ -132,12 +134,12 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
 			switch {
 			case dbErr != nil:
-				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))
+				fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))
 				databaseStatus = fmt.Sprintf("failed: %v", dbErr)
 			case dbResult.Skipped:
 				databaseStatus = fmt.Sprintf("skipped (no PostgreSQL URI found for %s)", dbEnvKey)
 			default:
-				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
+				fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
 				databaseStatus = fmt.Sprintf("completed: created %s", dbResult.DBName)
 			}
 		}
@@ -146,20 +148,20 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	// Install dependencies.
 	dependenciesStatus := "skipped (requested)"
 	if !setupOptions.skipDeps {
-		fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", "Detecting dependencies..."))
-		installResult, installErr := deps.Install(worktreePath)
+		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Detecting dependencies..."))
+		installResult, installErr := deps.Install(worktreePath, out)
 		dependenciesStatus = "skipped"
 		switch {
 		case installErr != nil:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
 			dependenciesStatus = fmt.Sprintf("failed: %v", installErr)
 		case installResult.Python:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
 			dependenciesStatus = "skipped (Python project requires manual venv activation)"
 		case installResult.Skipped:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
 		case installResult.Installer != nil:
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
+			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
 				installResult.Installer.Lockfile,
 				installResult.Installer.Binary,
 				joinArgs(installResult.Installer.Args),
@@ -172,13 +174,13 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	hooksStatus := "skipped (requested)"
 	if !setupOptions.skipHooks {
 		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-			fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
-			hookResults := hooks.RunPostCreate(worktreePath, postCreateCmds)
+			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
+			hookResults := hooks.RunPostCreate(worktreePath, postCreateCmds, out)
 			for _, r := range hookResults {
 				if r.Err != nil {
-					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
+					fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
 				} else {
-					fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Ran: "+r.Command))
+					fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
 				}
 			}
 			hooksStatus = summarizeHooks(hookResults)
@@ -188,18 +190,18 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 
 	// Print result to stderr for the user.
-	fmt.Fprintln(os.Stderr, "")
-	printSetupSummary(os.Stderr, setupSummary{
+	fmt.Fprintln(out, "")
+	printSetupSummary(out, render, setupSummary{
 		environment:  environmentStatus,
 		dependencies: dependenciesStatus,
 		database:     databaseStatus,
 		hooks:        hooksStatus,
 		databaseDocs: strings.HasPrefix(databaseStatus, "skipped"),
 	})
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(os.Stderr, "  Branch: %s\n", ui.RenderBranch(ui.FitToTerminal(branch, 10)))
-	fmt.Fprintf(os.Stderr, "  Path:   %s\n", ui.RenderPath(ui.FitToTerminal(worktreePath, 10)))
-	setupOptions.printSkipped(os.Stderr)
+	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
+	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
+	setupOptions.printSkipped(out, render)
 
 	// Print path to stdout so the shell wrapper can cd into it.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
@@ -215,16 +217,16 @@ type setupSummary struct {
 	databaseDocs bool
 }
 
-func printSetupSummary(w io.Writer, summary setupSummary) {
-	fmt.Fprintln(w, ui.RenderTitle("SETUP"))
-	writeSetupStatus(w, "Environment", summary.environment)
-	writeSetupStatus(w, "Dependencies", summary.dependencies)
+func printSetupSummary(w io.Writer, render ui.Renderer, summary setupSummary) {
+	fmt.Fprintln(w, render.Title("SETUP"))
+	writeSetupStatus(w, render, "Environment", summary.environment)
+	writeSetupStatus(w, render, "Dependencies", summary.dependencies)
 	if summary.databaseDocs {
-		fmt.Fprintf(w, "  %s  %-14s %s\n", ui.RenderTone(ui.ToneMuted, "○"), "Database", ui.RenderLink(ui.FitToTerminal("Not configured. Configure database", 20), databaseDocsURL))
+		fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(ui.ToneMuted, "○"), "Database", render.Link(render.Fit("Not configured. Configure database", 20), databaseDocsURL))
 	} else {
-		writeSetupStatus(w, "Database", summary.database)
+		writeSetupStatus(w, render, "Database", summary.database)
 	}
-	writeSetupStatus(w, "Hooks", summary.hooks)
+	writeSetupStatus(w, render, "Hooks", summary.hooks)
 }
 
 func summarizeHooks(results []hooks.RunResult) string {

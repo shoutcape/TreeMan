@@ -30,6 +30,7 @@ func TestDoctorCommand_SucceedsWithoutFailedDiagnostics(t *testing.T) {
 
 	require.NoError(t, command.Execute())
 	assert.Empty(t, stdout.String())
+	assert.NotContains(t, stderr.String(), "\x1b")
 	out := ui.StripANSI(stderr.String())
 	assert.Contains(t, out, "DIAGNOSTICS")
 	assert.Contains(t, out, "✓  Repository           Git repository detected")

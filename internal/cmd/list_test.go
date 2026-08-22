@@ -24,6 +24,7 @@ func TestWriteListHuman(t *testing.T) {
 		{Path: "/repo/.worktrees/review", Detached: true},
 	})
 
+	assert.NotContains(t, buf.String(), "\x1b")
 	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                       PATH                     \n    ───────  ──────    ──────  ───────────────────────────  ─────────────────────────\n    M▶       CLEAN             main                         /repo\n             DIRTY     YES     feature                      /repo/.worktrees/feature\n             DETACHED          (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
 }
 

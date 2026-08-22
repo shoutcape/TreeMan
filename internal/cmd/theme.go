@@ -73,10 +73,10 @@ func newThemeCmd() *cobra.Command {
 func setTheme(cmd *cobra.Command, name string) error {
 	var err error
 	if name == "" {
-		name, err = pickTheme()
+		name, err = pickTheme(cmd)
 		if err != nil {
 			if err == errPickerCancelled {
-				fmt.Fprintln(os.Stderr, "Cancelled.")
+				fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "Cancelled."))
 				return nil
 			}
 			return err
@@ -94,11 +94,15 @@ func setTheme(cmd *cobra.Command, name string) error {
 	if _, err := config.SaveTheme(root, ui.CurrentTheme()); err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneSuccess, "✓", "Theme set to "+ui.CurrentTheme()))
+	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Theme set to "+ui.CurrentTheme()))
 	return nil
 }
 
-func pickTheme() (string, error) {
+func pickTheme(cmd *cobra.Command) (string, error) {
+	capabilities := sessionFor(cmd).errorOutput
+	if !capabilities.Interactive {
+		return "", fmt.Errorf("interactive theme selection is unavailable; use `treeman theme list` and `treeman theme set <name>`")
+	}
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", fmt.Errorf("fzf is required to select a theme. Install it from https://github.com/junegunn/fzf")
 	}
@@ -112,33 +116,50 @@ func pickTheme() (string, error) {
 	}
 	var rows []string
 	for i, name := range names {
-		rows = append(rows, strings.Join([]string{name, ui.ThemePickerRow(name, name == ui.CurrentTheme()), fmt.Sprint(i)}, "\t"))
+		label := name
+		if capabilities.RichUI {
+			label = ui.ThemePickerRow(name, name == ui.CurrentTheme())
+		}
+		rows = append(rows, strings.Join([]string{name, label, fmt.Sprint(i)}, "\t"))
 	}
 
-	executable, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("could not locate treeman for theme preview: %w", err)
+	executable := ""
+	var err error
+	if capabilities.RichUI {
+		executable, err = os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("could not locate treeman for theme preview: %w", err)
+		}
 	}
-	args := []string{
-		"--ansi", "--no-sort", "--height=40%", "--layout=reverse", "--border=rounded", "--delimiter=\t", "--with-nth=2", "--border-label= themes ", "--prompt=theme > ",
-		"--color=" + ui.TransparentFZFColors(),
-		"--preview=" + shellQuote(executable) + " theme preview {1}", "--preview-window=right:55%:wrap",
-	}
+	args := themePickerArgs(capabilities.RichUI, executable)
 	fzfCmd := exec.Command("fzf", args...)
 	fzfCmd.Stdin = strings.NewReader(strings.Join(rows, "\n"))
-	fzfCmd.Stderr = os.Stderr
-	out, err := fzfCmd.Output()
+	fzfCmd.Stderr = cmd.ErrOrStderr()
+	selectionOutput, err := fzfCmd.Output()
 	if err != nil {
 		if pickerCancelled(err) {
 			return "", errPickerCancelled
 		}
 		return "", fmt.Errorf("fzf failed while selecting a theme: %w", err)
 	}
-	index := pickerSelectionIndex(strings.TrimSpace(string(out)), len(names))
+	index := pickerSelectionIndex(strings.TrimSpace(string(selectionOutput)), len(names))
 	if index < 0 {
 		return "", fmt.Errorf("could not map fzf selection to a theme")
 	}
 	return names[index], nil
+}
+
+func themePickerArgs(richUI bool, executable string) []string {
+	args := []string{
+		"--no-sort", "--height=40%", "--layout=reverse", "--border=rounded", "--delimiter=\t", "--with-nth=2", "--border-label= themes ", "--prompt=theme > ",
+	}
+	if richUI {
+		return append(args,
+			"--ansi", "--color="+ui.TransparentFZFColors(),
+			"--preview="+shellQuote(executable)+" theme preview {1}", "--preview-window=right:55%:wrap",
+		)
+	}
+	return append(args, "--no-color")
 }
 
 func shellQuote(value string) string {
