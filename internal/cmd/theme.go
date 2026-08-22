@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shoutcape/treeman/internal/config"
-	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/state"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -87,11 +86,7 @@ func setTheme(cmd *cobra.Command, name string) error {
 	}
 	ui.SetTheme(name)
 
-	root, err := git.MainWorktreeRoot()
-	if err != nil {
-		return fmt.Errorf("themes are configured per repository: %w", err)
-	}
-	if _, err := config.SaveTheme(root, ui.CurrentTheme()); err != nil {
+	if err := state.SaveTheme(ui.CurrentTheme()); err != nil {
 		return err
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Theme set to "+ui.CurrentTheme()))

@@ -223,59 +223,6 @@ func TestPostCreateHooks_NilHooks(t *testing.T) {
 	assert.Nil(t, cfg.PostCreateHooks())
 }
 
-func TestSaveThemeCreatesAndUpdatesUISection(t *testing.T) {
-	dir := t.TempDir()
-
-	path, err := SaveTheme(dir, "nord")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, ConfigFileName), path)
-	assert.Equal(t, "[ui]\ntheme = \"nord\"\n", readConfig(t, path))
-
-	_, err = SaveTheme(dir, "dracula")
-	require.NoError(t, err)
-	assert.Equal(t, "[ui]\ntheme = \"dracula\"\n", readConfig(t, path))
-}
-
-func TestSaveThemePreservesOtherSections(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ConfigFileName)
-	content := "# Project settings\n[database]\nenv_key = \"DATABASE_URL\"\n\n[ui]\n# Personal preference\ntheme = \"forest\"\n\n[custom]\nvalue = true\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-	_, err := SaveTheme(dir, "nord")
-	require.NoError(t, err)
-	assert.Equal(t, "# Project settings\n[database]\nenv_key = \"DATABASE_URL\"\n\n[ui]\n# Personal preference\ntheme = \"nord\"\n\n[custom]\nvalue = true\n", readConfig(t, path))
-}
-
-func TestSaveThemeRecognizesEquivalentUISectionSyntax(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		content  string
-		expected string
-	}{
-		{
-			name:     "whitespace in table header",
-			content:  "[ ui ]\ntheme = \"forest\"\n",
-			expected: "[ ui ]\ntheme = \"nord\"\n",
-		},
-		{
-			name:     "quoted table and key",
-			content:  "[\"ui\"]\n\"theme\" = \"forest\"\n",
-			expected: "[\"ui\"]\ntheme = \"nord\"\n",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, ConfigFileName)
-			require.NoError(t, os.WriteFile(path, []byte(test.content), 0o600))
-
-			_, err := SaveTheme(dir, "nord")
-			require.NoError(t, err)
-			assert.Equal(t, test.expected, readConfig(t, path))
-		})
-	}
-}
-
 func readConfig(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -21,9 +19,6 @@ const ConfigFileName = ".treeman.toml"
 
 // Config holds the full project-level configuration from .treeman.toml.
 type Config struct {
-	// UI configures terminal presentation.
-	UI *UIConfig `toml:"ui"`
-
 	// Database configures per-branch database management.
 	// Nil when the [database] section is absent (feature disabled).
 	Database *DatabaseConfig `toml:"database"`
@@ -31,19 +26,6 @@ type Config struct {
 	// Hooks configures lifecycle hooks (commands to run at various stages).
 	// Nil when the [hooks] section is absent (no custom hooks).
 	Hooks *HooksConfig `toml:"hooks"`
-}
-
-// UIConfig configures terminal presentation.
-type UIConfig struct {
-	Theme string `toml:"theme"`
-}
-
-// Theme returns the configured UI theme, or "" when the default should be used.
-func (c Config) Theme() string {
-	if c.UI == nil {
-		return ""
-	}
-	return c.UI.Theme
 }
 
 // HooksConfig configures lifecycle hook commands.
@@ -132,74 +114,6 @@ func Load(dir string) LoadResult {
 		Config: cfg,
 		Path:   path,
 	}
-}
-
-// SaveTheme stores a UI theme without rewriting unrelated configuration.
-func SaveTheme(dir, theme string) (string, error) {
-	path := findConfig(dir)
-	if path == "" {
-		path = filepath.Join(dir, ConfigFileName)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	if err == nil {
-		result := Load(dir)
-		if result.Warning != "" {
-			return "", fmt.Errorf("cannot update theme: %s", result.Warning)
-		}
-	}
-
-	updated := setThemeTOML(string(data), theme)
-	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-var (
-	uiSectionPattern = regexp.MustCompile(`^\s*\[\s*(?:ui|"ui"|'ui')\s*\]\s*(?:#.*)?$`)
-	sectionPattern   = regexp.MustCompile(`^\s*\[`)
-	themePattern     = regexp.MustCompile(`^(\s*)(?:theme|"theme"|'theme')\s*=.*$`)
-)
-
-func setThemeTOML(data, theme string) string {
-	lines := strings.Split(strings.TrimRight(data, "\n"), "\n")
-	uiStart := -1
-	for i, line := range lines {
-		if uiSectionPattern.MatchString(line) {
-			uiStart = i
-			break
-		}
-	}
-	if uiStart < 0 {
-		if len(lines) == 1 && lines[0] == "" {
-			lines = nil
-		}
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		return strings.Join(append(lines, "[ui]", fmt.Sprintf("theme = %q", theme)), "\n") + "\n"
-	}
-
-	uiEnd := len(lines)
-	for i := uiStart + 1; i < len(lines); i++ {
-		if sectionPattern.MatchString(lines[i]) {
-			uiEnd = i
-			break
-		}
-	}
-	for i := uiStart + 1; i < uiEnd; i++ {
-		if themePattern.MatchString(lines[i]) {
-			lines[i] = themePattern.ReplaceAllString(lines[i], fmt.Sprintf("${1}theme = %q", theme))
-			return strings.Join(lines, "\n") + "\n"
-		}
-	}
-
-	lines = append(lines[:uiEnd], append([]string{fmt.Sprintf("theme = %q", theme)}, lines[uiEnd:]...)...)
-	return strings.Join(lines, "\n") + "\n"
 }
 
 // findConfig walks from dir upward looking for ConfigFileName.

@@ -3,7 +3,7 @@ package cmd
 import (
 	"os"
 
-	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/state"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -50,10 +50,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 }
 
 func applyTheme() {
-	theme := ""
-	if cwd, err := os.Getwd(); err == nil {
-		theme = config.Load(cwd).Config.Theme()
-	}
+	theme := state.Theme()
 	if envTheme := os.Getenv("TREEMAN_THEME"); envTheme != "" {
 		theme = envTheme
 	}
