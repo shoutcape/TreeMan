@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/terminal"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,14 +40,28 @@ func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) 
 
 func TestCreationSetupOptions_PrintSkipped(t *testing.T) {
 	var output bytes.Buffer
-	creationSetupOptions{skipEnv: true, skipDeps: true}.printSkipped(&output)
+	creationSetupOptions{skipEnv: true, skipDeps: true}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
 
-	assert.Equal(t, "  Skipped: environment file copy (requested)\n  Skipped: dependency installation (requested)\n", output.String())
+	assert.Equal(t, "  ○  Skipped: environment file copy (requested)\n  ○  Skipped: dependency installation (requested)\n", ui.StripANSI(output.String()))
+}
+
+func TestSetupStatusAppearance(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		want   ui.Tone
+	}{
+		{status: "completed: copied 1 file", want: ui.ToneSuccess},
+		{status: "skipped", want: ui.ToneMuted},
+		{status: "completed: 1 failed", want: ui.ToneFailure},
+	} {
+		tone, _ := setupStatusAppearance(test.status)
+		assert.Equal(t, test.want, tone)
+	}
 }
 
 func TestCreationSetupOptions_DoesNotPrintUnrequestedSkips(t *testing.T) {
 	var output bytes.Buffer
-	creationSetupOptions{}.printSkipped(&output)
+	creationSetupOptions{}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
 
 	assert.Empty(t, output.String())
 }

@@ -222,3 +222,10 @@ func TestPostCreateHooks_NilHooks(t *testing.T) {
 	cfg := Config{}
 	assert.Nil(t, cfg.PostCreateHooks())
 }
+
+func readConfig(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(data)
+}

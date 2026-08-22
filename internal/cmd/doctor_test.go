@@ -30,6 +30,7 @@ func TestDoctorCommand_SucceedsWithoutFailedDiagnostics(t *testing.T) {
 
 	require.NoError(t, command.Execute())
 	assert.Empty(t, stdout.String())
+	assert.NotContains(t, stderr.String(), "\x1b")
 	out := ui.StripANSI(stderr.String())
 	assert.Contains(t, out, "DIAGNOSTICS")
 	assert.Contains(t, out, "✓  Repository           Git repository detected")
@@ -75,6 +76,12 @@ func TestCollectDockerDiagnostic_DistinguishesUnavailableDaemon(t *testing.T) {
 	assert.Equal(t, diagnosticWarn, diagnostic.status)
 	assert.Equal(t, "Docker installed; daemon unavailable", diagnostic.message)
 	assert.Equal(t, "Start Docker, then rerun treeman doctor.", diagnostic.hint)
+}
+
+func TestDiagnosticSummaryToneUsesHighestSeverity(t *testing.T) {
+	assert.Equal(t, ui.ToneSuccess, diagnosticSummaryTone([4]int{2, 1, 0, 0}))
+	assert.Equal(t, ui.ToneWarning, diagnosticSummaryTone([4]int{2, 0, 1, 0}))
+	assert.Equal(t, ui.ToneFailure, diagnosticSummaryTone([4]int{2, 0, 1, 1}))
 }
 
 func TestCollectShellDiagnostic_DetectsConfiguredShellIntegration(t *testing.T) {

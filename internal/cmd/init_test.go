@@ -19,6 +19,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
+	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman init bash")
 	assert.Contains(t, out, "~/.bashrc")
 	assert.Contains(t, out, "wt()")
@@ -36,7 +37,7 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "treeman list")
 	assert.Contains(t, out, "treeman clean")
 	assert.Contains(t, out, "treeman delete")
-	assert.Contains(t, out, "wtc() {\n  treeman clean \"$@\"\n}")
+	assert.Contains(t, out, "_tm_dir=$(treeman clean \"$@\") || return $?")
 	assert.Contains(t, out, "_tm_dir=$(treeman delete \"$@\") || return $?")
 	assert.Contains(t, out, "[ -n \"$_tm_dir\" ] && cd \"$_tm_dir\"")
 }
@@ -99,6 +100,7 @@ func TestInitCmd_Zsh(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
+	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman init zsh")
 	assert.Contains(t, out, "~/.zshrc")
 }
@@ -111,11 +113,12 @@ func TestInitCmd_Fish(t *testing.T) {
 	require.NoError(t, root.Execute())
 
 	out := buf.String()
+	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman init fish | source")
 	assert.Contains(t, out, "function wt")
 	assert.Contains(t, out, "set -l _tm_dir (treeman create $argv); or return $status")
 	assert.Contains(t, out, "test -n \"$_tm_dir\"; and cd \"$_tm_dir\"")
-	assert.Contains(t, out, "function wtc\n  treeman clean $argv\nend")
+	assert.Contains(t, out, "function wtc\n  set -l _tm_dir (treeman clean $argv); or return $status\n  test -n \"$_tm_dir\"; and cd \"$_tm_dir\"\nend")
 	assert.NotContains(t, out, "function lg")
 }
 

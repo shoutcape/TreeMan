@@ -267,7 +267,11 @@ func BranchCanDelete(dir, branch string) (bool, error) {
 	if upstream, err := runInDir(dir, "rev-parse", "--abbrev-ref", branch+"@{upstream}"); err == nil {
 		target = upstream
 	}
+	return BranchMergedInto(dir, branch, target)
+}
 
+// BranchMergedInto reports whether branch is an ancestor of target.
+func BranchMergedInto(dir, branch, target string) (bool, error) {
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", branch, target)
 	cmd.Dir = dir
 	var stderr bytes.Buffer

@@ -24,7 +24,7 @@ Copy failures create warnings and do not stop creation.
 
 ## Configuration Files
 
-Project configuration is `.treeman.toml`. Global configuration is `config.toml` in the TreeMan configuration directory.
+Project configuration is `.treeman.toml`.
 
 Read [Configuration Reference](configuration.md).
 
@@ -48,3 +48,4 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Environment values | `.env*` files |
 | Branch databases | Docker PostgreSQL container |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
+| Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |

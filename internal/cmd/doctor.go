@@ -51,7 +51,7 @@ func newDoctorCmd() *cobra.Command {
 
 func runDoctor(cmd *cobra.Command, _ []string) error {
 	diagnostics := collectDiagnostics()
-	writeDiagnostics(cmd.ErrOrStderr(), diagnostics)
+	writeDiagnostics(cmd.ErrOrStderr(), commandRenderer(cmd), diagnostics)
 	for _, diagnostic := range diagnostics {
 		if diagnostic.status == diagnosticFail {
 			return fmt.Errorf("doctor found failed diagnostics; resolve them and rerun")
@@ -204,15 +204,15 @@ func hasShellIntegration(contents, shell string) bool {
 	return false
 }
 
-func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics []diagnostic) {
-	fmt.Fprintf(out, "\n%sDIAGNOSTICS%s\n\n", ui.ColorCyan, ui.ColorReset)
+func writeDiagnostics(out interface{ Write([]byte) (int, error) }, render ui.Renderer, diagnostics []diagnostic) {
+	fmt.Fprintf(out, "\n%s\n\n", render.Title("DIAGNOSTICS"))
 	counts := [4]int{}
 	for _, diagnostic := range diagnostics {
 		counts[diagnostic.status]++
-		symbol, color := diagnosticAppearance(diagnostic.status)
-		fmt.Fprintf(out, "  %s%s%s  %-20s %s%s%s\n", color, symbol, ui.ColorReset, diagnostic.name, ui.ColorDim, diagnostic.message, ui.ColorReset)
+		symbol, tone := diagnosticAppearance(diagnostic.status)
+		fmt.Fprintf(out, "  %s  %-20s %s\n", render.Tone(tone, symbol), diagnostic.name, render.Muted(diagnostic.message))
 		if diagnostic.hint != "" {
-			writeDiagnosticHint(out, diagnostic.hint)
+			writeDiagnosticHint(out, render, diagnostic.hint)
 		}
 	}
 
@@ -229,30 +229,40 @@ func writeDiagnostics(out interface{ Write([]byte) (int, error) }, diagnostics [
 	if counts[diagnosticFail] > 0 {
 		summary = append(summary, fmt.Sprintf("%d failed", counts[diagnosticFail]))
 	}
-	fmt.Fprintf(out, "\n%s%s%s\n", ui.ColorStatus, strings.Join(summary, " · "), ui.ColorReset)
+	fmt.Fprintf(out, "\n%s\n", render.Tone(diagnosticSummaryTone(counts), strings.Join(summary, " · ")))
 }
 
-func diagnosticAppearance(status diagnosticStatus) (symbol, color string) {
+func diagnosticAppearance(status diagnosticStatus) (symbol string, tone ui.Tone) {
 	switch status {
 	case diagnosticInfo:
-		return "○", ui.ColorDim
+		return "○", ui.ToneMuted
 	case diagnosticWarn:
-		return "!", ui.ColorWarning
+		return "!", ui.ToneWarning
 	case diagnosticFail:
-		return "✗", ui.ColorFailure
+		return "✗", ui.ToneFailure
 	default:
-		return "✓", ui.ColorStatus
+		return "✓", ui.ToneSuccess
 	}
 }
 
-func writeDiagnosticHint(out interface{ Write([]byte) (int, error) }, hint string) {
+func diagnosticSummaryTone(counts [4]int) ui.Tone {
+	if counts[diagnosticFail] > 0 {
+		return ui.ToneFailure
+	}
+	if counts[diagnosticWarn] > 0 {
+		return ui.ToneWarning
+	}
+	return ui.ToneSuccess
+}
+
+func writeDiagnosticHint(out interface{ Write([]byte) (int, error) }, render ui.Renderer, hint string) {
 	lines := strings.Split(hint, "\n")
 	for i, line := range lines {
-		color := ui.ColorDim
+		style := render.Muted
 		if i > 0 {
-			color = ui.ColorPath
+			style = render.Path
 		}
-		fmt.Fprintf(out, "\n     %s%s%s", color, line, ui.ColorReset)
+		fmt.Fprintf(out, "\n     %s", style(line))
 	}
 	fmt.Fprintln(out)
 }

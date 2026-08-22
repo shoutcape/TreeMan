@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"os"
+
+	"github.com/shoutcape/treeman/internal/state"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -17,6 +21,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Run: func(cmd *cobra.Command, args []string) {
+			applyTheme()
 			if showVersion {
 				printVersion(cmd, version, commit, date)
 				return
@@ -25,6 +30,9 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 		},
 	}
 	root.Flags().BoolVarP(&showVersion, "version", "v", false, "Print version information")
+	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		applyTheme()
+	}
 
 	root.AddCommand(newVersionCmd(version, commit, date))
 	root.AddCommand(newCreateCmd())
@@ -36,8 +44,17 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newDoctorCmd())
+	root.AddCommand(newThemeCmd())
 
 	return root
+}
+
+func applyTheme() {
+	theme := state.Theme()
+	if envTheme := os.Getenv("TREEMAN_THEME"); envTheme != "" {
+		theme = envTheme
+	}
+	ui.SetTheme(theme)
 }
 
 func printOverview(cmd *cobra.Command) {
@@ -51,6 +68,7 @@ func printOverview(cmd *cobra.Command) {
   treeman clean            Remove clean worktrees merged into default branch
   treeman delete [query]   Remove a worktree and branch
   treeman doctor           Check repository readiness and configuration
+  treeman theme            Select a terminal color theme
 
 Run "treeman --help" for full command and flag reference.
 `))

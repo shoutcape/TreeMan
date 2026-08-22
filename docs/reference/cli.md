@@ -13,10 +13,11 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 | `treeman review [number]` | `wtpr`, `wtmr` | Add a PR or MR worktree |
 | `treeman switch [query]` | `wts` | Select a worktree path |
 | `treeman list [--json]` | `wtl` | List worktrees and their status |
-| `treeman clean [--dry-run]` | `wtc` | Remove clean worktrees merged into the default branch |
+| `treeman clean [--dry-run] [--yes]` | `wtc` | Remove clean worktrees merged into the default branch |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman init <shell>` | None | Print shell wrappers |
 | `treeman doctor` | None | Check repository readiness and configuration |
+| `treeman theme` | None | Select a terminal color theme |
 | `treeman version` | None | Print build data |
 
 ## `create`
@@ -53,11 +54,9 @@ treeman review [pr-number] [--skip-env] [--skip-database] [--skip-deps] [--skip-
 
 `review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
 
-Give a numeric PR or MR number. Without a number, TreeMan uses `fzf` to select an open PR or MR.
+Give a positive numeric PR or MR number. Without a number, TreeMan uses `fzf` to select an open PR or MR.
 
 TreeMan fetches the review head into a new worktree. It runs environment, database, dependency, and hook actions.
-
-`0` passes current numeric validation. Use a positive PR or MR number.
 
 ## `switch`
 
@@ -99,10 +98,10 @@ List the repository worktrees with branch, path, main, current, dirty, and merge
 ## `clean`
 
 ```text
-treeman clean [--dry-run]
+treeman clean [--dry-run] [--yes]
 ```
 
-`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into `origin/main` or `origin/master`. It does not remove detached worktrees or the default branch. If it removes the current worktree, it prints the main worktree path so the `wtc` shell wrapper returns there safely. Use `--dry-run` to print candidate paths without deleting them.
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into `origin/main` or `origin/master`. It does not remove detached worktrees or the default branch. If it removes the current worktree, it prints the main worktree path so the `wtc` shell wrapper returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
 
 ## `init`
 
@@ -137,6 +136,14 @@ treeman version
 ```
 
 This command prints version, commit, and build date when build data exists.
+
+## Terminal Behavior
+
+TreeMan detects terminal capabilities separately for each input and output stream. Status messages and warnings use stderr. Commands that create, select, or delete a worktree can write a path to stdout for shell wrappers and scripts.
+
+Color and rich terminal UI are enabled only when the relevant output stream is a terminal. Redirected output is plain. Set `NO_COLOR` to disable color. Set `TERM=dumb` to disable color and interactive selection.
+
+Interactive selection and confirmation require both stdin and stderr to be terminals. TreeMan disables them when `CI` is set. When a picker is unavailable, pass an exact branch, worktree path, PR or MR number, or direct deletion flags instead. Redirecting stdout does not prevent shell wrappers from receiving a selected path.
 
 ## Picker Rules
 

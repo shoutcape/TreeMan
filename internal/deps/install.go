@@ -2,6 +2,7 @@ package deps
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,11 @@ type InstallResult struct {
 // Install detects the package manager for the project at dir and runs the
 // appropriate install command. It is a non-fatal operation — if the binary is
 // not found it prints a warning and returns with Skipped=true.
-func Install(dir string) (InstallResult, error) {
+func Install(dir string, outputs ...io.Writer) (InstallResult, error) {
+	output := io.Writer(os.Stderr)
+	if len(outputs) > 0 && outputs[0] != nil {
+		output = outputs[0]
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("deps: reading directory %q: %w", dir, err)
@@ -55,8 +60,8 @@ func Install(dir string) (InstallResult, error) {
 	args := append([]string{installer.Binary}, installer.Args...)
 	cmd := exec.Command(filepath.Clean(args[0]), args[1:]...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = output
+	cmd.Stderr = output
 
 	if err := cmd.Run(); err != nil {
 		return InstallResult{Installer: installer}, fmt.Errorf(

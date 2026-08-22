@@ -24,6 +24,7 @@ func TestWriteListHuman(t *testing.T) {
 		{Path: "/repo/.worktrees/review", Detached: true},
 	})
 
+	assert.NotContains(t, buf.String(), "\x1b")
 	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                       PATH                     \n    ───────  ──────    ──────  ───────────────────────────  ─────────────────────────\n    M▶       CLEAN             main                         /repo\n             DIRTY     YES     feature                      /repo/.worktrees/feature\n             DETACHED          (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
 }
 
@@ -34,9 +35,29 @@ func TestWriteListJSON(t *testing.T) {
 	entries := []listEntry{{Path: "/repo", Branch: "main", Main: true, Current: true}}
 
 	require.NoError(t, writeListJSON(cmd, entries))
+	assert.NotContains(t, buf.String(), "\x1b")
 	var decoded []listEntry
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
 	assert.Equal(t, entries, decoded)
+}
+
+func TestListStatusUsesSemanticTones(t *testing.T) {
+	tests := []struct {
+		entry      listEntry
+		wantStatus string
+		wantTone   ui.Tone
+	}{
+		{entry: listEntry{}, wantStatus: "CLEAN", wantTone: ui.ToneSuccess},
+		{entry: listEntry{Dirty: true}, wantStatus: "DIRTY", wantTone: ui.ToneWarning},
+		{entry: listEntry{Detached: true}, wantStatus: "DETACHED", wantTone: ui.ToneMuted},
+		{entry: listEntry{Detached: true, Dirty: true}, wantStatus: "DETACHED", wantTone: ui.ToneWarning},
+	}
+
+	for _, test := range tests {
+		status, tone := listStatus(test.entry)
+		assert.Equal(t, test.wantStatus, status)
+		assert.Equal(t, test.wantTone, tone)
+	}
 }
 
 func TestListCmd_HasWTLAlias(t *testing.T) {

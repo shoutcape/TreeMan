@@ -2,27 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
-)
-
-var (
-	cleanTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#6FB8D2"))
-	cleanDescriptionStyle = lipgloss.NewStyle().
-				Faint(true)
-	cleanHeaderStyle = lipgloss.NewStyle().
-				Bold(true).
-				Faint(true)
-	cleanBranchStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#B2B644")).
-				Width(40)
-	cleanPathStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C4915E"))
 )
 
 func newCleanCmd() *cobra.Command {
@@ -42,6 +25,7 @@ func newCleanCmd() *cobra.Command {
 }
 
 func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
+	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -65,25 +49,9 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		return err
 	}
 
-	// Collect non-default branch names to check remote existence in one call.
-	var nonDefaultBranches []string
-	for _, entry := range entries {
-		if entry.Branch != "" && entry.Branch != defaultBranch && !samePath(entry.Path, mainRoot) {
-			nonDefaultBranches = append(nonDefaultBranches, entry.Branch)
-		}
-	}
-	remoteBranchExists, err := git.RemoteBranchesExist(nonDefaultBranches)
-	if err != nil {
-		// Non-fatal: fall back to ancestry-only detection.
-		remoteBranchExists = map[string]bool{}
-	}
-
 	var candidates []git.WorktreeEntry
 	for _, entry := range entries {
-		// A branch qualifies for cleanup if it is merged (direct ancestor) OR
-		// its remote is gone (squash-merge or abandoned branch deleted on origin).
-		isMerged := mergedBranches[entry.Branch] || !remoteBranchExists[entry.Branch]
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || !isMerged {
+		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || !mergedBranches[entry.Branch] {
 			continue
 		}
 		dirty, err := git.WorktreeDirty(entry.Path)
@@ -109,32 +77,46 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 	}
 
 	if len(candidates) > 0 {
-		out := cmd.OutOrStdout()
-		fmt.Fprintln(out, cleanTitleStyle.Render("Cleanup candidates"))
-		fmt.Fprintln(out, cleanDescriptionStyle.Render("Merged, clean worktrees and branches to remove"))
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s  %s\n", cleanHeaderStyle.Width(40).Render("BRANCH"), cleanHeaderStyle.Render("WORKTREE"))
+		branchWidth := len("BRANCH")
 		for _, entry := range candidates {
-			fmt.Fprintf(out, "  %s  %s\n", cleanBranchStyle.Render(entry.Branch), cleanPathStyle.Render(entry.Path))
+			branchWidth = max(branchWidth, len(entry.Branch))
+		}
+
+		// Stdout is reserved for the main worktree path when the current
+		// worktree is removed, allowing the shell wrapper to navigate there.
+		out := cmd.ErrOrStderr()
+		fmt.Fprintln(out, render.Title("Cleanup candidates"))
+		fmt.Fprintln(out, render.Muted("Merged, clean worktrees and branches to remove"))
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "BRANCH")), render.Header("WORKTREE"))
+		for _, entry := range candidates {
+			fmt.Fprintf(out, "  %s  %s\n", render.Branch(fmt.Sprintf("%-*s", branchWidth, entry.Branch)), render.Path(entry.Path))
 		}
 		fmt.Fprintln(out)
 	}
 	if dryRun {
-		fmt.Fprintf(os.Stderr, "Would remove %d merged, clean worktree(s).\n", len(candidates))
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneInfo, "→", fmt.Sprintf("Would remove %d merged, clean worktree(s).", len(candidates))))
 		return nil
 	}
-	if len(candidates) > 0 && !skipConfirm && !confirmYN(cmd, "Remove these worktrees and branches? [y/N] ") {
-		fmt.Fprintln(os.Stderr, "Cancelled.")
-		return nil
+	if len(candidates) > 0 && !skipConfirm {
+		confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneMuted, "○", "Cancelled."))
+			return nil
+		}
 	}
 
 	removed := 0
 	for _, entry := range candidates {
-		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false); err != nil {
+		// Candidates are verified ancestors of the freshly fetched default branch.
+		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false, true); err != nil {
 			return err
 		}
 		removed++
 	}
-	fmt.Fprintf(os.Stderr, "Removed %d merged, clean worktree(s).\n", removed)
+	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", removed)))
 	return nil
 }

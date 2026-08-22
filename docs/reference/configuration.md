@@ -12,7 +12,6 @@ env_key = "DATABASE_URI"
 
 [hooks]
 post_create = ["pnpm generate", "git status --short"]
-
 ```
 
 ## `[database]`
@@ -36,3 +35,18 @@ post_create = ["pnpm generate", "git status --short"]
 TreeMan runs each command in sequence in the new worktree. It uses `sh -c` on Unix and `cmd /C` on Windows.
 
 TreeMan attempts later hooks after a hook failure. Hook failures create warnings. Hooks can run arbitrary commands. Use only trusted project configuration.
+
+## Themes
+
+Use the following commands to select a theme.
+
+1. Use `treeman theme` or `treeman theme set` without a name to open the interactive theme picker.
+2. Use `treeman theme set <name>` to select a theme directly.
+
+Interactive theme selection requires `fzf`, stdin, and stderr terminals. Use `treeman theme list` to see themes without a terminal, then use `treeman theme set <name>`.
+
+Available themes are `forest` (the default), `catppuccin-mocha`, `dracula`, `gruvbox`, `nord`, `one-dark`, `solarized-dark`, `solarized-light`, and `tokyo-night`. `catppuccin` is an alias for `catppuccin-mocha`.
+
+TreeMan saves the selected theme in `$XDG_STATE_HOME/treeman/theme`. If `XDG_STATE_HOME` is not set, it uses `$HOME/.local/state/treeman/theme`.
+
+Set `TREEMAN_THEME` to temporarily override the saved theme without modifying it.
