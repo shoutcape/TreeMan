@@ -68,7 +68,7 @@ func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force
 			return nil
 		}
 	}
-	return deleteWorktree(cmd, path, branch, mainRoot, force)
+	return deleteWorktree(cmd, path, branch, mainRoot, force, false)
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error {
@@ -136,10 +136,10 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 			return nil
 		}
 	}
-	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force)
+	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force, false)
 }
 
-func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool, mergeTargets ...string) error {
+func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err
@@ -164,14 +164,8 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 	if dirty && !force {
 		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 	}
-	if !force {
-		canDelete := false
-		var err error
-		if len(mergeTargets) > 0 {
-			canDelete, err = git.BranchMergedInto(mainRoot, branch, mergeTargets[0])
-		} else {
-			canDelete, err = git.BranchCanDelete(mainRoot, branch)
-		}
+	if !force && !skipMergeCheck {
+		canDelete, err := git.BranchCanDelete(mainRoot, branch)
 		if err != nil {
 			return err
 		}
@@ -194,7 +188,7 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force boo
 	if err := removeWorktree(entry.Path, force); err != nil {
 		return deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
 	}
-	branchForce := force || len(mergeTargets) > 0
+	branchForce := force || skipMergeCheck
 	if err := deleteBranch(mainRoot, branch, branchForce); err != nil {
 		return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(branchForce), branch))
 	}

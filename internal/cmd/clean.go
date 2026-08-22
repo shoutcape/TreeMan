@@ -120,7 +120,8 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 
 	removed := 0
 	for _, entry := range candidates {
-		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false, "origin/"+defaultBranch); err != nil {
+		// Candidates are already checked for direct merge ancestry or a deleted remote.
+		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false, true); err != nil {
 			return err
 		}
 		removed++
