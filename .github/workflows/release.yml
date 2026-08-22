@@ -54,7 +54,8 @@ jobs:
         run: make build
 
       - name: Smoke test
-        run: ./smoke-test.sh
+        # The smoke suite exercises fzf-backed shell wrappers, which require a TTY.
+        run: env -u CI script -qefc './smoke-test.sh' /dev/null
 
       - name: Create patch tag
         if: github.event_name == 'pull_request'
