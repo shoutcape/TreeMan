@@ -226,8 +226,11 @@ func RenderBranch(value string) string { return styles.branch.Render(value) }
 func RenderPath(value string) string   { return styles.path.Render(value) }
 func RenderPR(value string) string     { return styles.pr.Render(value) }
 
-// RenderLink renders a concise clickable label in terminals that support OSC 8 links.
+// RenderLink renders a concise clickable label in color-enabled terminals.
 func RenderLink(label, url string) string {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" || !term.IsTerminal(os.Stderr.Fd()) {
+		return label
+	}
 	return ansi.SetHyperlink(url) + styles.link.Render(label) + ansi.ResetHyperlink()
 }
 

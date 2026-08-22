@@ -119,7 +119,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 		selected, err = pickBranch(branches, query, prMap)
 		if err != nil {
 			if errors.Is(err, errPickerCancelled) {
-				fmt.Fprintln(os.Stderr, "Cancelled.")
+				fmt.Fprintln(os.Stderr, ui.RenderStatus(ui.ToneMuted, "○", "Cancelled."))
 				return nil
 			}
 			return err

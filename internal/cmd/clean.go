@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -111,11 +110,11 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		fmt.Fprintln(out)
 	}
 	if dryRun {
-		fmt.Fprintf(os.Stderr, "Would remove %d merged, clean worktree(s).\n", len(candidates))
+		fmt.Fprintln(cmd.ErrOrStderr(), ui.RenderStatus(ui.ToneInfo, "→", fmt.Sprintf("Would remove %d merged, clean worktree(s).", len(candidates))))
 		return nil
 	}
 	if len(candidates) > 0 && !skipConfirm && !confirmYN(cmd, "Remove these worktrees and branches? [y/N] ") {
-		fmt.Fprintln(os.Stderr, "Cancelled.")
+		fmt.Fprintln(cmd.ErrOrStderr(), ui.RenderStatus(ui.ToneMuted, "○", "Cancelled."))
 		return nil
 	}
 
@@ -126,6 +125,6 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		}
 		removed++
 	}
-	fmt.Fprintf(os.Stderr, "Removed %d merged, clean worktree(s).\n", removed)
+	fmt.Fprintln(cmd.ErrOrStderr(), ui.RenderStatus(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", removed)))
 	return nil
 }

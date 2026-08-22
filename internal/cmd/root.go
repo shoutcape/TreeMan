@@ -21,6 +21,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Run: func(cmd *cobra.Command, args []string) {
+			applyTheme()
 			if showVersion {
 				printVersion(cmd, version, commit, date)
 				return

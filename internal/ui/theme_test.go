@@ -40,8 +40,10 @@ func TestTruncateTerminalText(t *testing.T) {
 }
 
 func TestRenderLinkStripsToLabel(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+
 	link := RenderLink("PostgreSQL setup guide", "https://example.com")
-	assert.Contains(t, link, ansi.SetHyperlink("https://example.com"))
+	assert.NotContains(t, link, ansi.SetHyperlink("https://example.com"))
 	assert.Equal(t, "PostgreSQL setup guide", StripANSI(link))
 }
 
