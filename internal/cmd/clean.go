@@ -44,14 +44,26 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 	if err != nil {
 		return err
 	}
-	mergedBranches, err := git.MergedBranches("origin/" + defaultBranch)
+
+	out := cmd.ErrOrStderr()
+	var branchNames []string
+	for _, entry := range entries {
+		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) {
+			continue
+		}
+		branchNames = append(branchNames, entry.Branch)
+	}
+	verified, warning, err := classifyCleanable("origin/"+defaultBranch, branchNames)
 	if err != nil {
 		return err
+	}
+	if warning != "" {
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", warning))
 	}
 
 	var candidates []git.WorktreeEntry
 	for _, entry := range entries {
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || !mergedBranches[entry.Branch] {
+		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || verified[entry.Branch] == "" {
 			continue
 		}
 		dirty, err := git.WorktreeDirty(entry.Path)
@@ -84,7 +96,6 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 
 		// Stdout is reserved for the main worktree path when the current
 		// worktree is removed, allowing the shell wrapper to navigate there.
-		out := cmd.ErrOrStderr()
 		fmt.Fprintln(out, render.Title("Cleanup candidates"))
 		fmt.Fprintln(out, render.Muted("Merged, clean worktrees and branches to remove"))
 		fmt.Fprintln(out)
@@ -111,8 +122,9 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 
 	removed := 0
 	for _, entry := range candidates {
-		// Candidates are verified ancestors of the freshly fetched default branch.
-		if err := deleteWorktree(cmd, entry.Path, entry.Branch, mainRoot, false, true); err != nil {
+		// Candidates are verified merges: ancestors of the freshly fetched
+		// default branch or forge-confirmed squash/rebase merges.
+		if err := deleteWorktreeAtSHA(cmd, entry.Path, entry.Branch, mainRoot, false, true, verified[entry.Branch]); err != nil {
 			return err
 		}
 		removed++

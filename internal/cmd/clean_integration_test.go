@@ -179,6 +179,157 @@ func TestCleanRetainsRemoteDeletedUnmergedWorktree(t *testing.T) {
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
+func TestCleanRemovesForgeVerifiedSquashMergedWorktree(t *testing.T) {
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	mergedHeadSHA := gitRevParse(t, repo, "refs/heads/feature")
+	stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.True(t, os.IsNotExist(err), "forge-verified squash-merged worktree should have been removed")
+	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	command.Dir = repo
+	require.Error(t, command.Run(), "local branch should have been deleted")
+}
+
+func TestCleanRetainsRemoteGoneWhenForgeReportsUnmerged(t *testing.T) {
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.NoError(t, err, "remote-gone branch without confirmed merge should be retained")
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanRetainsSquashMergedBranchWithPostMergeCommits(t *testing.T) {
+	// Regression: a merged PR for the branch name exists, but the user added
+	// local commits after the merge. The tip no longer equals the merged head
+	// SHA, so cleanup must retain the branch instead of force-deleting it.
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	mergedHeadSHA := gitRevParse(t, repo, "refs/heads/feature")
+
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "post-merge"), []byte("later work\n"), 0o644))
+	runGitInDir(t, worktree, "add", "post-merge")
+	runGitInDir(t, worktree, "commit", "-m", "post-merge work")
+
+	stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.NoError(t, err, "branch with post-merge commits must be retained")
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanRetainsReusedBranchName(t *testing.T) {
+	// Regression: after merge the branch name is reused for unrelated new
+	// work based on origin/main. The historical merged PR head does not match
+	// the new tip, so cleanup must retain it.
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	mergedHeadSHA := gitRevParse(t, repo, "refs/heads/feature")
+
+	// Repoint feature at origin/main and sync its worktree so status stays
+	// clean, then add unrelated new work under the reused name.
+	runGitInDir(t, repo, "update-ref", "refs/heads/feature", gitRevParse(t, repo, "origin/main"))
+	runGitInDir(t, worktree, "reset", "--hard", "-q")
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "unrelated"), []byte("new work\n"), 0o644))
+	runGitInDir(t, worktree, "add", "unrelated")
+	runGitInDir(t, worktree, "commit", "-m", "unrelated new work")
+
+	stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
+	changeToDir(t, repo)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	_, err := os.Stat(worktree)
+	require.NoError(t, err, "reused branch name must be retained")
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanSurfacesVerificationWarningOnce(t *testing.T) {
+	repo, _ := createSquashMergedCleanWorktree(t)
+	stubForgeVerifier(t, nil, assert.AnError)
+	changeToDir(t, repo)
+
+	stderr := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(stderr)
+	require.NoError(t, runClean(cmd, true, true))
+
+	cleanOutput := ui.StripANSI(stderr.String())
+	assert.Contains(t, cleanOutput, "merge verification failed")
+	assert.Equal(t, 1, strings.Count(cleanOutput, "merge verification failed"))
+}
+
+func TestCleanSurfacesForgeParserWarning(t *testing.T) {
+	repo, _ := createSquashMergedCleanWorktree(t)
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(ghPath, []byte("#!/bin/sh\nprintf ' \\n'\n"), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+
+	stderr := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(stderr)
+	require.NoError(t, runClean(cmd, true, true))
+
+	cleanOutput := ui.StripANSI(stderr.String())
+	assert.Contains(t, cleanOutput, "merge verification failed: gh: parsing closed PR list: empty JSON output")
+}
+
+func createSquashMergedCleanWorktree(t *testing.T) (string, string) {
+	t.Helper()
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	runGit(t, "init", "--bare", "--initial-branch=main", origin)
+	repo := filepath.Join(t.TempDir(), "repo")
+	runGit(t, "clone", origin, repo)
+	runGitInDir(t, repo, "config", "user.email", "test@example.com")
+	runGitInDir(t, repo, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("base\n"), 0o644))
+	runGitInDir(t, repo, "add", "file")
+	runGitInDir(t, repo, "commit", "-m", "base")
+	runGitInDir(t, repo, "push", "origin", "main")
+	runGitInDir(t, repo, "checkout", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("feature\n"), 0o644))
+	runGitInDir(t, repo, "commit", "-am", "feature work")
+	runGitInDir(t, repo, "push", "-u", "origin", "feature")
+	runGitInDir(t, repo, "checkout", "main")
+	worktree := filepath.Join(t.TempDir(), "feature-worktree")
+	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
+
+	// Squash-merge via a second clone: new commit on main whose SHA is not an
+	// ancestor of the feature tip.
+	squasher := filepath.Join(t.TempDir(), "squasher")
+	runGit(t, "clone", origin, squasher)
+	runGitInDir(t, squasher, "config", "user.email", "test@example.com")
+	runGitInDir(t, squasher, "config", "user.name", "Test User")
+	runGitInDir(t, squasher, "merge", "--squash", "origin/feature")
+	runGitInDir(t, squasher, "commit", "-m", "squash merge feature")
+	runGitInDir(t, squasher, "push", "origin", "main")
+	// Delete the remote branch (forges do this automatically after merge).
+	runGitInDir(t, squasher, "push", "origin", "--delete", "feature")
+
+	return repo, worktree
+}
+
 func createRemoteDeletedUnmergedCleanWorktree(t *testing.T) (string, string) {
 	t.Helper()
 	origin := filepath.Join(t.TempDir(), "origin.git")
@@ -248,4 +399,12 @@ func runGitInDir(t *testing.T, dir string, args ...string) {
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	require.NoErrorf(t, err, "git %v failed: %s", args, output)
+}
+
+func gitRevParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", dir, "rev-parse", ref)
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "git rev-parse %s failed: %s", ref, output)
+	return strings.TrimSpace(string(output))
 }
