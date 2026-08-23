@@ -78,7 +78,7 @@ From a TreeMan repository checkout, run:
 ./install-local.sh
 ```
 
-The script builds the current worktree and installs that binary with the standard installer. It requires Bash, Make, and Go 1.23 or later. It supports `TREEMAN_INSTALL_DIR` and `TREEMAN_SHELL_RC` as described for the release installer.
+The script builds the current worktree and replaces the installed `treeman` binary. It uses an installed Homebrew formula directory when available; otherwise it uses the active `treeman` binary's prefix. For Homebrew, it updates the linked binary target without replacing Homebrew's public `bin/treeman` symlink, so `brew reinstall` and `brew upgrade` continue to work. A Homebrew reinstall or upgrade restores its packaged version. It requires Bash, Make, and Go 1.23 or later. Set `TREEMAN_INSTALL_DIR` to choose a different install prefix. `TREEMAN_SHELL_RC` works as described for the release installer.
 
 ## Build From Source
 

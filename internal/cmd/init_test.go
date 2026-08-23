@@ -85,9 +85,36 @@ func TestRootCmd_OverviewDiffersFromHelp(t *testing.T) {
 	require.NoError(t, helpRoot.Execute())
 
 	assert.Contains(t, overview.String(), "TreeMan manages isolated Git worktrees.")
+	assert.Contains(t, overview.String(), "TREEMAN")
+	assert.Contains(t, overview.String(), "COMMANDS")
+	assert.Contains(t, overview.String(), "MORE")
 	assert.Contains(t, overview.String(), "treeman --help")
-	assert.Contains(t, help.String(), "Usage:")
+	assert.NotContains(t, overview.String(), "\x1b")
+	assert.Contains(t, help.String(), "TREEMAN")
+	assert.Contains(t, help.String(), "USAGE")
+	assert.Contains(t, help.String(), "treeman [flags]")
+	assert.Contains(t, help.String(), "treeman [command]")
+	assert.Contains(t, help.String(), "COMMANDS")
+	assert.Contains(t, help.String(), "FLAGS")
+	assert.Contains(t, help.String(), "create")
+	assert.Contains(t, help.String(), "help")
+	assert.Contains(t, help.String(), "--version")
+	assert.NotContains(t, help.String(), "\x1b")
 	assert.NotEqual(t, overview.String(), help.String())
+}
+
+func TestRootCmd_HelpUsesShortDescriptionWhenLongIsUnset(t *testing.T) {
+	root := New("test", "", "")
+	help := &bytes.Buffer{}
+	root.SetOut(help)
+	root.SetArgs([]string{"doctor", "--help"})
+
+	require.NoError(t, root.Execute())
+
+	assert.Contains(t, help.String(), "TREEMAN DOCTOR")
+	assert.Contains(t, help.String(), "Check repository readiness and configuration")
+	assert.Contains(t, help.String(), "USAGE")
+	assert.NotContains(t, help.String(), "\x1b")
 }
 
 func TestInitCmd_Zsh(t *testing.T) {

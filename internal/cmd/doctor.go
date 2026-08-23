@@ -209,11 +209,34 @@ func writeDiagnostics(out interface{ Write([]byte) (int, error) }, render ui.Ren
 	counts := [4]int{}
 	for _, diagnostic := range diagnostics {
 		counts[diagnostic.status]++
-		symbol, tone := diagnosticAppearance(diagnostic.status)
-		fmt.Fprintf(out, "  %s  %-20s %s\n", render.Tone(tone, symbol), diagnostic.name, render.Muted(diagnostic.message))
-		if diagnostic.hint != "" {
-			writeDiagnosticHint(out, render, diagnostic.hint)
+	}
+
+	for _, section := range []struct {
+		title  string
+		passed bool
+	}{
+		{title: "READY", passed: true},
+		{title: "UNAVAILABLE OR NOT CONFIGURED"},
+	} {
+		sectionDiagnostics := make([]diagnostic, 0, len(diagnostics))
+		for _, diagnostic := range diagnostics {
+			if (diagnostic.status == diagnosticPass) == section.passed {
+				sectionDiagnostics = append(sectionDiagnostics, diagnostic)
+			}
 		}
+		if len(sectionDiagnostics) == 0 {
+			continue
+		}
+
+		fmt.Fprintf(out, "%s\n\n", render.Header(section.title))
+		for _, diagnostic := range sectionDiagnostics {
+			symbol, tone := diagnosticAppearance(diagnostic.status)
+			fmt.Fprintf(out, "  %s  %-20s %s\n", render.Tone(tone, symbol), diagnostic.name, render.Muted(diagnostic.message))
+			if diagnostic.hint != "" {
+				writeDiagnosticHint(out, render, diagnostic.hint)
+			}
+		}
+		fmt.Fprintln(out)
 	}
 
 	summary := make([]string, 0, 4)

@@ -168,7 +168,7 @@ fi
 
 print_done
 
-# --- Add PATH + eval line to shell config ------------------------------------
+# --- Add shell integration to shell config -----------------------------------
 
 SOURCE_MARKER="# TreeMan"
 PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
@@ -185,7 +185,11 @@ if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
 else
   mkdir -p "$(dirname "$SHELL_RC")"
   touch "$SHELL_RC"
-  printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$EVAL_LINE" >> "$SHELL_RC"
+  if [[ "${TREEMAN_SKIP_PATH_SETUP:-}" == "1" ]]; then
+    printf '\n%s\n%s\n' "$SOURCE_MARKER" "$EVAL_LINE" >> "$SHELL_RC"
+  else
+    printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$EVAL_LINE" >> "$SHELL_RC"
+  fi
   print_done
 fi
 

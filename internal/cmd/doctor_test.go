@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -33,6 +35,8 @@ func TestDoctorCommand_SucceedsWithoutFailedDiagnostics(t *testing.T) {
 	assert.NotContains(t, stderr.String(), "\x1b")
 	out := ui.StripANSI(stderr.String())
 	assert.Contains(t, out, "DIAGNOSTICS")
+	assert.Contains(t, out, "READY")
+	assert.Contains(t, out, "UNAVAILABLE OR NOT CONFIGURED")
 	assert.Contains(t, out, "✓  Repository           Git repository detected")
 	assert.Contains(t, out, "✓  Forge CLI            GitHub repository; gh installed")
 	assert.Contains(t, out, "○  Configuration        No .treeman.toml found; optional setup disabled")
@@ -43,6 +47,9 @@ func TestDoctorCommand_SucceedsWithoutFailedDiagnostics(t *testing.T) {
 	assert.Contains(t, out, "Add to ~/.zshrc:")
 	assert.Contains(t, out, "eval \"$(treeman init zsh)\"")
 	assert.Contains(t, out, "4 passed · 3 informational")
+	assert.Less(t, strings.Index(out, "READY"), strings.Index(out, "✓  Repository"))
+	assert.Less(t, strings.Index(out, "✓  Container support"), strings.Index(out, "UNAVAILABLE OR NOT CONFIGURED"))
+	assert.Less(t, strings.Index(out, "UNAVAILABLE OR NOT CONFIGURED"), strings.Index(out, "○  Configuration"))
 }
 
 func TestDoctorCommand_FailsAfterRenderingDiagnostics(t *testing.T) {
@@ -82,6 +89,49 @@ func TestDiagnosticSummaryToneUsesHighestSeverity(t *testing.T) {
 	assert.Equal(t, ui.ToneSuccess, diagnosticSummaryTone([4]int{2, 1, 0, 0}))
 	assert.Equal(t, ui.ToneWarning, diagnosticSummaryTone([4]int{2, 0, 1, 0}))
 	assert.Equal(t, ui.ToneFailure, diagnosticSummaryTone([4]int{2, 0, 1, 1}))
+}
+
+func TestWriteDiagnostics_OmitsEmptySections(t *testing.T) {
+	tests := []struct {
+		name           string
+		diagnostics    []diagnostic
+		presentSection string
+		absentSection  string
+	}{
+		{
+			name:           "only ready diagnostics",
+			diagnostics:    []diagnostic{{status: diagnosticPass, name: "Repository", message: "Git repository detected"}},
+			presentSection: "READY",
+			absentSection:  "UNAVAILABLE OR NOT CONFIGURED",
+		},
+		{
+			name: "only unavailable diagnostics",
+			diagnostics: []diagnostic{
+				{status: diagnosticInfo, name: "Database setup", message: "Not configured", hint: "Add [database] to enable"},
+				{status: diagnosticWarn, name: "Container support", message: "Docker not installed"},
+				{status: diagnosticFail, name: "Forge CLI", message: "Unsupported forge"},
+			},
+			presentSection: "UNAVAILABLE OR NOT CONFIGURED",
+			absentSection:  "READY",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			output := &bytes.Buffer{}
+			writeDiagnostics(output, ui.NewRenderer(output, terminal.Capabilities{}), test.diagnostics)
+
+			out := ui.StripANSI(output.String())
+			assert.Contains(t, out, test.presentSection)
+			assert.NotContains(t, out, test.absentSection)
+			for _, diagnostic := range test.diagnostics {
+				assert.Contains(t, out, diagnostic.name)
+				if diagnostic.hint != "" {
+					assert.Contains(t, out, diagnostic.hint)
+				}
+			}
+		})
+	}
 }
 
 func TestCollectShellDiagnostic_DetectsConfiguredShellIntegration(t *testing.T) {
