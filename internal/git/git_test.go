@@ -59,6 +59,48 @@ func TestParseWorktreePorcelain_Empty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()
+	require.NoErrorf(t, err, "could not initialize origin: %s", output)
+
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "remote", "add", "origin", origin)
+	gitTest(t, repo, "push", "-u", "origin", "main")
+	gitTest(t, repo, "branch", "feature/one")
+	gitTest(t, repo, "push", "origin", "feature/one")
+	gitTest(t, repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+	mainSHA := gitTestOutput(t, repo, "rev-parse", "main")
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	heads, err := RemoteHeads([]string{"main", "feature/one", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, mainSHA, heads["main"])
+	assert.Equal(t, mainSHA, heads["feature/one"])
+	assert.NotContains(t, heads, "missing")
+
+	tips, err := BranchSHAs([]string{"main", "feature/one", "missing"})
+	require.NoError(t, err)
+	assert.Equal(t, mainSHA, tips["main"])
+	assert.Equal(t, mainSHA, tips["feature/one"])
+	assert.NotContains(t, tips, "missing")
+
+	sha, exists, err := RemoteTrackingBranchSHA("main")
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, mainSHA, sha)
+
+	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/main")
+	sha, exists, err = RemoteTrackingBranchSHA("main")
+	require.NoError(t, err)
+	assert.False(t, exists)
+	assert.Empty(t, sha)
+}
+
 func TestDeleteBranchAtSHA(t *testing.T) {
 	t.Run("deletes matching ref", func(t *testing.T) {
 		repo := createGitTestRepo(t)

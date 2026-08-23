@@ -136,6 +136,50 @@ func BranchSHA(branch string) (string, error) {
 	return sha, nil
 }
 
+// BranchSHAs returns local tips for the requested branches in one Git process.
+// Branches absent from the result no longer resolve to local commits.
+func BranchSHAs(branches []string) (map[string]string, error) {
+	if len(branches) == 0 {
+		return map[string]string{}, nil
+	}
+	args := []string{"for-each-ref", "--format=%(refname:short)%09%(objectname)"}
+	for _, branch := range branches {
+		args = append(args, "refs/heads/"+branch)
+	}
+	out, err := run(args...)
+	if err != nil {
+		return nil, fmt.Errorf("could not resolve local branch tips: %w", err)
+	}
+	tips := make(map[string]string, len(branches))
+	for _, line := range strings.Split(out, "\n") {
+		branch, sha, found := strings.Cut(line, "\t")
+		if found && branch != "" && sha != "" {
+			tips[branch] = sha
+		}
+	}
+	return tips, nil
+}
+
+// RemoteTrackingBranchSHA returns the locally stored origin/<branch> commit
+// SHA. exists is false when no tracking ref has been fetched yet.
+func RemoteTrackingBranchSHA(branch string) (sha string, exists bool, err error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch+"^{commit}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return "", false, nil
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return "", false, fmt.Errorf("could not resolve origin/%q: %s", branch, msg)
+		}
+		return "", false, fmt.Errorf("could not resolve origin/%q: %w", branch, err)
+	}
+	return strings.TrimSpace(stdout.String()), true, nil
+}
+
 // RemoteBranchExists reports whether origin has a branch with the exact name.
 func RemoteBranchExists(branch string) bool {
 	_, err := run("ls-remote", "--exit-code", "--heads", "origin", branch)
@@ -172,30 +216,33 @@ func worktreeListInDir(dir string) ([]WorktreeEntry, error) {
 	return parseWorktreePorcelain(out), nil
 }
 
-// RemoteBranchesExist queries origin for the given branch names in a single
-// ls-remote call and returns a map of branch name -> exists on origin.
-// Branches absent from the map can be treated as not existing on the remote.
-func RemoteBranchesExist(branches []string) (map[string]bool, error) {
+// RemoteHeads queries origin for the given branch names in a single ls-remote
+// call and returns their branch name -> commit SHA snapshot. Branches absent
+// from the map do not exist on origin at the time of the query.
+func RemoteHeads(branches []string) (map[string]string, error) {
 	if len(branches) == 0 {
-		return map[string]bool{}, nil
+		return map[string]string{}, nil
 	}
 	args := []string{"ls-remote", "--heads", "origin"}
 	for _, b := range branches {
-		args = append(args, b)
+		args = append(args, "refs/heads/"+b)
 	}
 	out, err := run(args...)
 	if err != nil {
 		return nil, fmt.Errorf("could not query remote branches: %w", err)
 	}
-	exists := make(map[string]bool, len(branches))
+	heads := make(map[string]string, len(branches))
 	for _, line := range strings.Split(out, "\n") {
 		// Each line is "<sha>\trefs/heads/<branch>"
 		if idx := strings.Index(line, "\trefs/heads/"); idx >= 0 {
+			sha := line[:idx]
 			branch := line[idx+len("\trefs/heads/"):]
-			exists[branch] = true
+			if sha != "" && branch != "" {
+				heads[branch] = sha
+			}
 		}
 	}
-	return exists, nil
+	return heads, nil
 }
 
 // MergedBranches returns the observed SHA for local branches that are

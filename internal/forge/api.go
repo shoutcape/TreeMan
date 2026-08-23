@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,8 +55,9 @@ func PRList(forge Type, repoSlug, host string) ([]PRInfo, error) {
 
 // Indirection vars so tests can stub CLI invocations.
 var (
-	githubAPICall = ghAPI
-	glabAPICall   = glabAPI
+	githubAPICall     = ghAPI
+	githubGraphQLCall = ghGraphQL
+	glabAPICall       = glabAPI
 )
 
 // MergedPRHead reports whether branch at sha was merged into defaultBranch.
@@ -111,10 +113,6 @@ func CLITool(forge Type) string {
 		return ""
 	}
 }
-
-// ---------------------------------------------------------------------------
-// GitHub
-// ---------------------------------------------------------------------------
 
 func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", repoSlug, prNumber)
@@ -218,6 +216,30 @@ func runGHAPI(endpoint string, args []string) ([]byte, error) {
 
 func ghAPIArgs(endpoint string) []string {
 	return []string{"api", endpoint, "--paginate"}
+}
+
+func ghGraphQL(query string, variables map[string]string) ([]byte, error) {
+	cmd := exec.Command("gh", ghGraphQLArgs(query, variables)...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("gh api graphql: %s", strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
+func ghGraphQLArgs(query string, variables map[string]string) []string {
+	keys := make([]string, 0, len(variables))
+	for key := range variables {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	args := []string{"api", "graphql", "-f", "query=" + query}
+	for _, key := range keys {
+		args = append(args, "-f", key+"="+variables[key])
+	}
+	return args
 }
 
 func githubBranchList(repoSlug string) ([]BranchInfo, error) {

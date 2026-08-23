@@ -55,17 +55,18 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 	defaultBranch := ""
 	verified := map[string]string{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
-		if err = git.Fetch("refs/heads/" + defaultBranch + ":refs/remotes/origin/" + defaultBranch); err != nil {
+		var branchNames []string
+		for _, entry := range entries {
+			if entry.Branch != "" && entry.Branch != defaultBranch {
+				branchNames = append(branchNames, entry.Branch)
+			}
+		}
+		state, stateErr := refreshMergeState(defaultBranch, branchNames)
+		if stateErr != nil {
 			defaultBranch = ""
 		} else {
-			var branchNames []string
-			for _, entry := range entries {
-				if entry.Branch != "" && entry.Branch != defaultBranch {
-					branchNames = append(branchNames, entry.Branch)
-				}
-			}
 			var warning string
-			verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames)
+			verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames, state)
 			if err != nil {
 				verified = map[string]string{}
 			} else if warning != "" {

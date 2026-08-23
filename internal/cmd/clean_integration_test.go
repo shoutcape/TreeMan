@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -109,6 +110,72 @@ func TestCleanYesRemovesCandidates(t *testing.T) {
 	require.Error(t, command.Run())
 }
 
+func TestCleanSkipsFetchWhenDefaultBranchIsCurrent(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, true, true))
+
+	assert.DirExists(t, worktree)
+	assert.Equal(t, 1, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
+	assert.Zero(t, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestCleanFetchesChangedDefaultBranchBeforeDeleting(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	updater := filepath.Join(t.TempDir(), "updater")
+	originURL := exec.Command("git", "-C", repo, "remote", "get-url", "origin")
+	originOutput, err := originURL.Output()
+	require.NoError(t, err)
+	runGit(t, "clone", strings.TrimSpace(string(originOutput)), updater)
+	runGitInDir(t, updater, "config", "user.email", "test@example.com")
+	runGitInDir(t, updater, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(updater, "next"), []byte("next\n"), 0o644))
+	runGitInDir(t, updater, "add", "next")
+	runGitInDir(t, updater, "commit", "-m", "advance main")
+	runGitInDir(t, updater, "push", "origin", "main")
+
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	assert.NoDirExists(t, worktree)
+	assert.Equal(t, 2, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
+	assert.Equal(t, 1, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestCleanRefusesDeletionWhenRemoteStateFails(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	traceGitCommands(t, true)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.Error(t, runClean(cmd, false, true))
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanRefusesDeletionWhenGitHubSnapshotAndGitFallbackFail(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	traceGitHubAPI(t, `not-json`, `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	traceGitCommands(t, true)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.Error(t, runClean(cmd, false, true))
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
 func TestCleanRemovesEmptyBranchCreatedFromNewerOriginMain(t *testing.T) {
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, "init", "--bare", "--initial-branch=main", origin)
@@ -197,6 +264,25 @@ func TestCleanRemovesForgeVerifiedSquashMergedWorktree(t *testing.T) {
 	require.Error(t, command.Run(), "local branch should have been deleted")
 }
 
+func TestCleanRemovesGitHubSnapshotVerifiedSquashMergedWorktree(t *testing.T) {
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	mainSHA := originBranchSHA(t, repo, "main")
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+	commit := fmt.Sprintf(`{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":%q}],"pageInfo":{"hasNextPage":false}}}`, featureSHA)
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, commit, false), `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	gitCommands := traceGitCommands(t, false)
+
+	require.NoError(t, runClean(&cobra.Command{}, false, true))
+
+	assert.NoDirExists(t, worktree)
+	assert.Equal(t, 2, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
+	assert.Zero(t, countGitCommands(gitCommands(), "ls-remote"))
+}
+
 func TestCleanVerifiesEachRemoteGoneBranch(t *testing.T) {
 	repo, featureWorktree := createSquashMergedCleanWorktree(t)
 	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
@@ -225,7 +311,7 @@ func TestCleanVerifiesEachRemoteGoneBranch(t *testing.T) {
 	changeToDir(t, repo)
 
 	require.NoError(t, runClean(&cobra.Command{}, false, true))
-	assert.Equal(t, int32(2), lookupCalls.Load())
+	assert.Equal(t, int32(4), lookupCalls.Load())
 	assert.NoDirExists(t, featureWorktree)
 	assert.NoDirExists(t, secondWorktree)
 }
@@ -410,6 +496,7 @@ func createMergedCleanWorktree(t *testing.T) (string, string) {
 	runGitInDir(t, repo, "checkout", "main")
 	runGitInDir(t, repo, "merge", "--ff-only", "feature")
 	runGitInDir(t, repo, "push", "origin", "main")
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	worktree := filepath.Join(t.TempDir(), "feature-worktree")
 	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
 	return repo, worktree
@@ -444,4 +531,80 @@ func gitRevParse(t *testing.T, dir, ref string) string {
 	output, err := command.CombinedOutput()
 	require.NoErrorf(t, err, "git rev-parse %s failed: %s", ref, output)
 	return strings.TrimSpace(string(output))
+}
+
+func traceGitCommands(t *testing.T, failLSRemote bool) func() []string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "git.log")
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nif [ \"$TREEMAN_GIT_WRAPPED\" = \"1\" ]; then\n  exec \"$TREEMAN_REAL_GIT\" \"$@\"\nfi\nprintf '%s\\n' \"$*\" >> \"$TREEMAN_GIT_LOG\"\nif [ \"$TREEMAN_FAIL_LS_REMOTE\" = \"1\" ] && [ \"$1\" = \"ls-remote\" ]; then\n  exit 1\nfi\nexec env TREEMAN_GIT_WRAPPED=1 \"$TREEMAN_REAL_GIT\" \"$@\"\n"
+	require.NoError(t, os.WriteFile(gitPath, []byte(script), 0o755))
+	t.Setenv("TREEMAN_REAL_GIT", realGit)
+	t.Setenv("TREEMAN_GIT_LOG", logPath)
+	if failLSRemote {
+		t.Setenv("TREEMAN_FAIL_LS_REMOTE", "1")
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		contents, err := os.ReadFile(logPath)
+		require.NoError(t, err)
+		return strings.FieldsFunc(strings.TrimSpace(string(contents)), func(r rune) bool { return r == '\n' })
+	}
+}
+
+func countGitCommands(commands []string, prefix string) int {
+	count := 0
+	for _, command := range commands {
+		if strings.HasPrefix(command, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func traceGitHubAPI(t *testing.T, snapshotResponse, restResponse string) func() []string {
+	t.Helper()
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "gh.log")
+	ghPath := filepath.Join(binDir, "gh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TREEMAN_GH_LOG\"\nif [ \"$1\" = \"api\" ] && [ \"$2\" = \"graphql\" ]; then\n  printf '%s\\n' \"$TREEMAN_GH_SNAPSHOT\"\n  exit 0\nfi\nprintf '%s\\n' \"$TREEMAN_GH_REST\"\n"
+	require.NoError(t, os.WriteFile(ghPath, []byte(script), 0o755))
+	t.Setenv("TREEMAN_GH_LOG", logPath)
+	t.Setenv("TREEMAN_GH_SNAPSHOT", snapshotResponse)
+	t.Setenv("TREEMAN_GH_REST", restResponse)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		contents, err := os.ReadFile(logPath)
+		require.NoError(t, err)
+		return strings.FieldsFunc(strings.TrimSpace(string(contents)), func(r rune) bool { return r == '\n' })
+	}
+}
+
+func countGitHubCommands(commands []string, prefix string) int {
+	count := 0
+	for _, command := range commands {
+		if strings.HasPrefix(command, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func githubSnapshotResponse(defaultSHA, branchSHA, commit string, branchPresent bool) string {
+	branchRef := "null"
+	if branchPresent {
+		branchRef = fmt.Sprintf(`{"target":{"oid":%q}}`, branchSHA)
+	}
+	return fmt.Sprintf(`{"data":{"repository":{"ref0":{"target":{"oid":%q}},"ref1":%s,"commit0":%s}}}`, defaultSHA, branchRef, commit)
+}
+
+func originBranchSHA(t *testing.T, repo, branch string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repo, "remote", "get-url", "origin")
+	output, err := command.Output()
+	require.NoError(t, err)
+	return gitRevParse(t, strings.TrimSpace(string(output)), "refs/heads/"+branch)
 }

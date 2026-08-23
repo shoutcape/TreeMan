@@ -16,6 +16,7 @@
 | `internal/cmd/review.go` | PR and MR review worktrees |
 | `internal/cmd/switch.go` | Worktree path selection |
 | `internal/cmd/delete.go` | Interactive and direct worktree deletion |
+| `internal/cmd/mergestatus.go` | Fresh merge classification for list and clean |
 | `internal/cmd/init.go` | Bash, Zsh, and Fish wrapper text |
 | `internal/cmd/version.go` | Version output |
 
@@ -45,5 +46,6 @@
 | `database.SetupResult` | Database creation result |
 | `forge.PRInfo` | PR or MR data for selection and review |
 | `forge.BranchInfo` | Remote branch data |
+| `forge.GitHubSnapshot` | Fresh GitHub branch and merge evidence |
 
 Each package has unit tests except `internal/ui`.

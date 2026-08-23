@@ -61,3 +61,9 @@ sequenceDiagram
 ```
 
 TreeMan reads and prepares the database target before Git removes the worktree. It drops the database only after worktree and branch deletion succeed. Branch deletion compares the current ref with the SHA that passed deletion checks. TreeMan serializes its own worktree additions and guarded deletions, preserving a branch that another TreeMan process checks out before deletion. Direct Git worktree mutation is not coordinated. `--force` permits deletion of dirty worktrees and unmerged branches.
+
+## List and Clean
+
+`list` and `clean` capture local branch tips, then read fresh remote merge state. GitHub uses a typed GraphQL snapshot. Other remotes use Git and forge verification.
+
+TreeMan fetches the default branch only when its tracking ref is stale. `clean` repeats classification after confirmation and deletes only matching branch tips.

@@ -33,9 +33,6 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 	if err != nil {
 		return err
 	}
-	if err := git.Fetch("refs/heads/" + defaultBranch + ":refs/remotes/origin/" + defaultBranch); err != nil {
-		return fmt.Errorf("could not fetch origin/%s: %w", defaultBranch, err)
-	}
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return err
@@ -53,7 +50,11 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		}
 		branchNames = append(branchNames, entry.Branch)
 	}
-	verified, warning, err := classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames)
+	state, err := refreshMergeState(defaultBranch, branchNames)
+	if err != nil {
+		return err
+	}
+	verified, warning, err := classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames, state)
 	if err != nil {
 		return err
 	}
@@ -119,12 +120,40 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 			return nil
 		}
 	}
+	if len(candidates) > 0 {
+		candidateBranches := make([]string, 0, len(candidates))
+		for _, entry := range candidates {
+			candidateBranches = append(candidateBranches, entry.Branch)
+		}
+		state, err := refreshMergeState(defaultBranch, candidateBranches)
+		if err != nil {
+			return err
+		}
+		verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, candidateBranches, state)
+		if err != nil {
+			return err
+		}
+		if warning != "" {
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", warning))
+		}
+	}
 
 	removed := 0
 	for _, entry := range candidates {
+		expectedSHA := verified[entry.Branch]
+		if expectedSHA == "" {
+			continue
+		}
+		dirty, err := git.WorktreeDirty(entry.Path)
+		if err != nil {
+			return err
+		}
+		if dirty {
+			continue
+		}
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteWorktreeAtSHA(cmd, entry.Path, entry.Branch, mainRoot, false, true, verified[entry.Branch]); err != nil {
+		if err := deleteWorktreeAtSHA(cmd, entry.Path, entry.Branch, mainRoot, false, true, expectedSHA); err != nil {
 			return err
 		}
 		removed++
