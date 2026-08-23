@@ -77,7 +77,8 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: v2.9.0
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TREEMAN_HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.TREEMAN_HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -1,5 +1,39 @@
 # Install TreeMan
 
+## Homebrew
+
+Install TreeMan with Homebrew:
+
+```bash
+brew install shoutcape/tap/treeman
+```
+
+Add one command to your shell startup file:
+
+```bash
+eval "$(treeman init zsh)"
+```
+
+Use `bash` instead of `zsh` for Bash. For Fish, add this command to `$XDG_CONFIG_HOME/fish/config.fish`. Use `~/.config/fish/config.fish` when `XDG_CONFIG_HOME` is not set.
+
+```fish
+treeman init fish | source
+```
+
+Homebrew installs the `treeman` binary. It does not add shell startup-file entries or shell wrappers.
+
+### Move From the Curl Installer
+
+Remove the curl installer directory before you install with Homebrew:
+
+```bash
+rm -rf ~/.treeman/bin
+```
+
+Alternatively, give the Homebrew `bin` directory priority in `PATH`.
+
+Remove the TreeMan shell initialization block from the curl installer.
+
 ## Release Binary
 
 Use this command to install the latest release.
@@ -72,7 +106,13 @@ For repository development, read [Development Setup](development/setup.md).
 
 ## Remove TreeMan
 
-Use this command:
+If you installed with Homebrew, run:
+
+```bash
+brew uninstall shoutcape/tap/treeman
+```
+
+If you installed with the curl installer, use this command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/uninstall.sh | bash

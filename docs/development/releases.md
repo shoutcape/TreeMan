@@ -37,6 +37,12 @@ CI runs the test, lint, build, and smoke-test checks before a pull request can b
 
 Pushing a `v*` tag still starts the release workflow. Use this to publish an explicitly chosen version, such as a minor or major release.
 
-The release workflow uses GoReleaser v2 and `GITHUB_TOKEN`.
+The release workflow uses GoReleaser v2.9.0. `GITHUB_TOKEN` publishes the TreeMan release.
+
+GoReleaser updates `Formula/treeman.rb` in `shoutcape/homebrew-tap` after it publishes a stable release. Preview releases do not update the formula.
+
+Set the `TREEMAN_HOMEBREW_TAP_GITHUB_TOKEN` Actions secret before you publish a release. Use a dedicated credential with write access only to `shoutcape/homebrew-tap` repository contents.
+
+The tap workflow validates formula style and strict audit. It installs and tests the formula on macOS and Linux.
 
 GoReleaser excludes `docs:`, `test:`, `chore:`, and merge commits from the generated changelog.
