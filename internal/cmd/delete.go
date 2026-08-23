@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	removeWorktree = git.WorktreeRemove
-	deleteBranch   = git.DeleteBranch
+	removeWorktree         = git.WorktreeRemove
+	deleteBranchAtSHA      = git.DeleteBranchAtSHA
+	prepareBranchDBCleanup = database.PrepareBranchDBCleanup
+	executeBranchDBCleanup = database.ExecuteBranchDBCleanup
 )
 
 func newDeleteCmd() *cobra.Command {
@@ -156,7 +158,8 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, sk
 }
 
 // deleteWorktreeAtSHA removes a worktree and its branch. An expected SHA makes
-// cleanup conditional on the exact commit whose merge was verified.
+// cleanup conditional on the exact commit whose merge was verified. Every
+// deletion snapshots its branch SHA and compare-and-deletes that exact ref.
 func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
@@ -175,6 +178,13 @@ func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, forc
 	if branch == defaultBranch {
 		return fmt.Errorf("cannot delete the default branch %q", branch)
 	}
+	branchSHA, err := git.BranchSHA(branch)
+	if err != nil {
+		return fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved: %w", entry.Path, branch, err)
+	}
+	if expectedSHA != "" && branchSHA != expectedSHA {
+		return fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
+	}
 	dirty, err := git.WorktreeDirty(entry.Path)
 	if err != nil {
 		return err
@@ -183,7 +193,7 @@ func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, forc
 		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 	}
 	if !force && !skipMergeCheck {
-		canDelete, err := git.BranchCanDelete(mainRoot, branch)
+		canDelete, err := git.BranchCanDeleteAtSHA(mainRoot, branch, branchSHA)
 		if err != nil {
 			return err
 		}
@@ -191,43 +201,34 @@ func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, forc
 			return fmt.Errorf("branch %q is not fully merged; use --force to delete it", branch)
 		}
 	}
-	if expectedSHA != "" {
-		actualSHA, err := git.BranchSHA(branch)
-		if err != nil {
-			return fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved for verified cleanup: %w", entry.Path, branch, err)
-		}
-		if actualSHA != expectedSHA {
-			return fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, actualSHA)
-		}
-	}
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return err
 	}
 
-	// All destructive checks have passed. Database cleanup remains best-effort.
+	// Snapshot the database target while the worktree environment still exists.
+	// Cleanup itself runs only after Git deletion succeeds.
+	var dbPlan *database.CleanupPlan
 	cfgResult := config.Load(mainRoot)
 	if dbEnvKey := cfgResult.Config.DatabaseEnvKey(); dbEnvKey != "" {
-		if err := database.CleanupBranchDB(entry.Path, dbEnvKey); err != nil {
+		if dbPlan, err = prepareBranchDBCleanup(entry.Path, dbEnvKey); err != nil {
 			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 		}
 	}
 	if err := removeWorktree(entry.Path, force); err != nil {
 		return deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
 	}
-	if expectedSHA != "" {
-		if err := git.DeleteBranchAtSHA(mainRoot, branch, expectedSHA); err != nil {
-			return deleteWorktreeFailure(
-				fmt.Errorf("branch %q was preserved because it moved after merge verification: %w", branch, err),
-				fmt.Sprintf("removed worktree %q", entry.Path),
-				fmt.Sprintf("branch %q", branch),
-				fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", branch, mainRoot, branch),
-			)
-		}
-	} else {
-		branchForce := force || skipMergeCheck
-		if err := deleteBranch(mainRoot, branch, branchForce); err != nil {
-			return deleteWorktreeFailure(err, fmt.Sprintf("removed worktree %q", entry.Path), fmt.Sprintf("branch %q", branch), fmt.Sprintf("git -C %q branch %s %q", mainRoot, deleteBranchFlag(branchForce), branch))
+	if err := deleteBranchAtSHA(mainRoot, branch, branchSHA); err != nil {
+		return deleteWorktreeFailure(
+			fmt.Errorf("branch %q was preserved after deletion checks: %w", branch, err),
+			fmt.Sprintf("removed worktree %q", entry.Path),
+			fmt.Sprintf("branch %q", branch),
+			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", branch, mainRoot, branch),
+		)
+	}
+	if dbPlan != nil {
+		if err := executeBranchDBCleanup(dbPlan); err != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 		}
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
@@ -246,13 +247,6 @@ func forceFlag(force bool) string {
 		return " --force"
 	}
 	return ""
-}
-
-func deleteBranchFlag(force bool) string {
-	if force {
-		return "-D"
-	}
-	return "-d"
 }
 
 func findWorktree(path string) (git.WorktreeEntry, error) {

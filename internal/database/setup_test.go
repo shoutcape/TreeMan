@@ -74,6 +74,14 @@ func writeEnv(t *testing.T, dir, content string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0600))
 }
 
+func cleanupBranchDB(worktreePath, envKey string) error {
+	plan, err := PrepareBranchDBCleanup(worktreePath, envKey)
+	if err != nil {
+		return err
+	}
+	return ExecuteBranchDBCleanup(plan)
+}
+
 // --- SetupBranchDB tests ---
 
 func TestSetupBranchDB_EmptyEnvKey(t *testing.T) {
@@ -243,14 +251,53 @@ func TestSetupBranchDB_QuotedEnvValue(t *testing.T) {
 
 // --- CleanupBranchDB tests ---
 
+func TestPrepareBranchDBCleanupSnapshotsTargetBeforeWorktreeRemoval(t *testing.T) {
+	dir := t.TempDir()
+	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp__feature\n")
+	stubs := &dockerStubs{FindContainer: "postgres-1"}
+	stubs.install(t)
+
+	plan, err := PrepareBranchDBCleanup(dir, "DATABASE_URI")
+
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	assert.Equal(t, "postgres-1", plan.container)
+	assert.Equal(t, "myapp__feature", plan.dbName)
+	assert.Empty(t, stubs.DropArgs)
+	require.NoError(t, os.Remove(filepath.Join(dir, ".env")))
+	require.NoError(t, ExecuteBranchDBCleanup(plan))
+	require.Len(t, stubs.DropArgs, 1)
+	assert.Equal(t, "myapp__feature", stubs.DropArgs[0].DBName)
+}
+
+func TestPrepareBranchDBCleanupReturnsNilWhenNoCleanupApplies(t *testing.T) {
+	dir := t.TempDir()
+	writeEnv(t, dir, "DATABASE_URI=mysql://user:pass@host:3306/mydb\n")
+
+	plan, err := PrepareBranchDBCleanup(dir, "DATABASE_URI")
+
+	require.NoError(t, err)
+	assert.Nil(t, plan)
+}
+
+func TestExecuteBranchDBCleanupRejectsUnpreparedPlan(t *testing.T) {
+	stubs := &dockerStubs{}
+	stubs.install(t)
+
+	err := ExecuteBranchDBCleanup(&CleanupPlan{})
+
+	require.EqualError(t, err, "invalid database cleanup plan")
+	assert.Empty(t, stubs.DropArgs)
+}
+
 func TestCleanupBranchDB_EmptyEnvKey(t *testing.T) {
-	err := CleanupBranchDB("/any/path", "")
+	err := cleanupBranchDB("/any/path", "")
 	assert.NoError(t, err)
 }
 
 func TestCleanupBranchDB_NoEnvFile(t *testing.T) {
 	dir := t.TempDir()
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	assert.NoError(t, err)
 }
 
@@ -258,7 +305,7 @@ func TestCleanupBranchDB_EnvKeyNotInFile(t *testing.T) {
 	dir := t.TempDir()
 	writeEnv(t, dir, "OTHER_VAR=some_value\n")
 
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	assert.NoError(t, err)
 }
 
@@ -266,7 +313,7 @@ func TestCleanupBranchDB_NonPostgresURI(t *testing.T) {
 	dir := t.TempDir()
 	writeEnv(t, dir, "DATABASE_URI=mysql://user:pass@host:3306/mydb\n")
 
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	assert.NoError(t, err)
 }
 
@@ -280,7 +327,7 @@ func TestCleanupBranchDB_SafetyRefusesMainDB(t *testing.T) {
 	}
 	stubs.install(t)
 
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	assert.NoError(t, err)
 
 	// Docker functions should NOT have been called.
@@ -305,7 +352,7 @@ func TestCleanupBranchDB_FindContainerFails(t *testing.T) {
 	}
 	stubs.install(t)
 
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "finding postgres container")
 }
@@ -320,7 +367,7 @@ func TestCleanupBranchDB_DropFails(t *testing.T) {
 	}
 	stubs.install(t)
 
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dropping database")
 	assert.Contains(t, err.Error(), "database in use")
@@ -335,7 +382,7 @@ func TestCleanupBranchDB_Success(t *testing.T) {
 	}
 	stubs.install(t)
 
-	err := CleanupBranchDB(dir, "DATABASE_URI")
+	err := cleanupBranchDB(dir, "DATABASE_URI")
 	require.NoError(t, err)
 
 	// Verify drop was called with the correct args.
@@ -354,7 +401,7 @@ func TestCleanupBranchDB_PostgresqlScheme(t *testing.T) {
 	}
 	stubs.install(t)
 
-	err := CleanupBranchDB(dir, "DATABASE_URL")
+	err := cleanupBranchDB(dir, "DATABASE_URL")
 	require.NoError(t, err)
 
 	require.Len(t, stubs.DropArgs, 1)

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/terminal"
@@ -196,18 +197,54 @@ func TestCleanRemovesForgeVerifiedSquashMergedWorktree(t *testing.T) {
 	require.Error(t, command.Run(), "local branch should have been deleted")
 }
 
+func TestCleanVerifiesEachRemoteGoneBranch(t *testing.T) {
+	repo, featureWorktree := createSquashMergedCleanWorktree(t)
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+
+	runGitInDir(t, repo, "checkout", "-b", "feature-two")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "second-feature"), []byte("second\n"), 0o644))
+	runGitInDir(t, repo, "add", "second-feature")
+	runGitInDir(t, repo, "commit", "-m", "second feature")
+	runGitInDir(t, repo, "push", "-u", "origin", "feature-two")
+	runGitInDir(t, repo, "checkout", "main")
+	secondWorktree := filepath.Join(t.TempDir(), "feature-two-worktree")
+	runGitInDir(t, repo, "worktree", "add", secondWorktree, "feature-two")
+	runGitInDir(t, repo, "push", "origin", "--delete", "feature-two")
+	secondSHA := gitRevParse(t, repo, "refs/heads/feature-two")
+
+	previousLookup := forgeMergedLookup
+	var lookupCalls atomic.Int32
+	forgeMergedLookup = func(defaultBranch string) (forgeMergeVerifier, error) {
+		assert.Equal(t, "main", defaultBranch)
+		return func(branch, sha string) (bool, error) {
+			lookupCalls.Add(1)
+			return (branch == "feature" && sha == featureSHA) || (branch == "feature-two" && sha == secondSHA), nil
+		}, nil
+	}
+	t.Cleanup(func() { forgeMergedLookup = previousLookup })
+	changeToDir(t, repo)
+
+	require.NoError(t, runClean(&cobra.Command{}, false, true))
+	assert.Equal(t, int32(2), lookupCalls.Load())
+	assert.NoDirExists(t, featureWorktree)
+	assert.NoDirExists(t, secondWorktree)
+}
+
 func TestCleanRetainsRemoteGoneWhenForgeReportsUnmerged(t *testing.T) {
 	repo, worktree := createSquashMergedCleanWorktree(t)
 	stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
 	changeToDir(t, repo)
 
+	stderr := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(stderr)
 	require.NoError(t, runClean(cmd, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "remote-gone branch without confirmed merge should be retained")
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	assert.NotContains(t, ui.StripANSI(stderr.String()), "merge verification")
 }
 
 func TestCleanRetainsSquashMergedBranchWithPostMergeCommits(t *testing.T) {
@@ -292,7 +329,7 @@ func TestCleanSurfacesForgeParserWarning(t *testing.T) {
 	require.NoError(t, runClean(cmd, true, true))
 
 	cleanOutput := ui.StripANSI(stderr.String())
-	assert.Contains(t, cleanOutput, "merge verification failed: gh: parsing closed PR list: empty JSON output")
+	assert.Contains(t, cleanOutput, "merge verification for \"feature\" failed: gh: parsing associated PR list")
 }
 
 func createSquashMergedCleanWorktree(t *testing.T) (string, string) {

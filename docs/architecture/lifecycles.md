@@ -53,10 +53,11 @@ sequenceDiagram
     participant DB as Branch database
     TreeMan->>Git: verify linked worktree and branch
     TreeMan->>TreeMan: protect main and default branch; inspect dirty state
-    TreeMan->>DB: try database cleanup
+    TreeMan->>DB: prepare database cleanup target
     TreeMan->>Git: worktree remove
-    TreeMan->>Git: branch -d
+    TreeMan->>Git: compare-and-delete branch at verified SHA
+    TreeMan->>DB: try database cleanup
     TreeMan-->>TreeMan: return success or error
 ```
 
-TreeMan reads the environment file before Git removes the worktree. `--force` permits deletion of dirty worktrees and unmerged branches.
+TreeMan reads and prepares the database target before Git removes the worktree. It drops the database only after worktree and branch deletion succeed. Branch deletion compares the current ref with the SHA that passed deletion checks. TreeMan serializes its own worktree additions and guarded deletions, preserving a branch that another TreeMan process checks out before deletion. Direct Git worktree mutation is not coordinated. `--force` permits deletion of dirty worktrees and unmerged branches.

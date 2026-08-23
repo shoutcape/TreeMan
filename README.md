@@ -85,7 +85,7 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 > [!note]
 > Deletion completes before TreeMan returns. TreeMan refuses dirty worktrees and unmerged branches unless you explicitly use `--force`.
 
-`wtc` fetches the default branch, then removes linked worktrees when their branch is merged into it and the worktree is clean. Squash- and rebase-merged branches also qualify: TreeMan asks `gh` or `glab` for the merged PR/MR and removes the branch only when its tip still matches the merged head commit. If it removes the current worktree, it returns the shell to the main worktree. Use `wtc --dry-run` to inspect candidates first. Use `wtc --yes` to skip confirmation.
+`wtc` fetches the default branch, then removes linked worktrees when their branch is merged into it and the worktree is clean. Squash- and rebase-merged branches also qualify: TreeMan checks each remote-gone candidate through `gh` or `glab`, with at most four checks running at once, then removes a branch only when its tip still matches the matching source head commit. This includes GitHub fork PRs. If it removes the current worktree, it returns the shell to the main worktree. Use `wtc --dry-run` to inspect candidates first. Use `wtc --yes` to skip confirmation.
 
 ## Documentation
 

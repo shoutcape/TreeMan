@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // WorktreeEntry represents a single entry from `git worktree list`.
@@ -153,24 +155,17 @@ func Fetch(refspec string) error {
 //
 // HUSKY=0 is set in the process environment to suppress husky hooks.
 func WorktreeAdd(path, branch, startPoint string) error {
-	cmd := exec.Command("git", "worktree", "add", "--no-track", "-b", branch, path, startPoint)
-	cmd.Env = append(cmd.Environ(), "HUSKY=0")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return fmt.Errorf("git worktree add: %s", msg)
-		}
-		return fmt.Errorf("git worktree add: %w", err)
-	}
-	return nil
+	return worktreeAdd("", path, branch, startPoint)
 }
 
 // WorktreeList returns the list of all worktrees, parsed from
 // `git worktree list --porcelain`.
 func WorktreeList() ([]WorktreeEntry, error) {
-	out, err := run("worktree", "list", "--porcelain")
+	return worktreeListInDir("")
+}
+
+func worktreeListInDir(dir string) ([]WorktreeEntry, error) {
+	out, err := runInDir(dir, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("could not list worktrees: %w", err)
 	}
@@ -271,14 +266,15 @@ func WorktreeDirty(path string) (bool, error) {
 	return out != "", nil
 }
 
-// BranchCanDelete reports whether Git's safe branch deletion would accept the
-// branch. Git compares against its upstream when one exists, otherwise HEAD.
-func BranchCanDelete(dir, branch string) (bool, error) {
+// BranchCanDeleteAtSHA reports whether Git's safe branch deletion would accept
+// branch when its tip is sha. Keeping sha explicit lets callers check policy
+// against the same ref value they later compare-and-delete.
+func BranchCanDeleteAtSHA(dir, branch, sha string) (bool, error) {
 	target := "HEAD"
 	if upstream, err := runInDir(dir, "rev-parse", "--abbrev-ref", branch+"@{upstream}"); err == nil {
 		target = upstream
 	}
-	return BranchMergedInto(dir, branch, target)
+	return BranchMergedInto(dir, sha, target)
 }
 
 // BranchMergedInto reports whether branch is an ancestor of target.
@@ -315,28 +311,58 @@ func WorktreeRemove(path string, force bool) error {
 	return nil
 }
 
-// DeleteBranch deletes a local branch from dir. force permits removal of
-// unmerged branches.
-func DeleteBranch(dir, branch string, force bool) error {
-	flag := "-d"
-	if force {
-		flag = "-D"
-	}
-	_, err := runInDir(dir, "branch", flag, branch)
-	if err != nil {
-		return fmt.Errorf("branch %q could not be deleted: %w", branch, err)
-	}
-	return nil
+// DeleteBranchAtSHA atomically deletes branch only when it still points at
+// expectedSHA. This prevents deletion from discarding later work.
+func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
+	return withWorktreeMutationLock(dir, func() error {
+		entries, err := worktreeListInDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Branch == branch {
+				return fmt.Errorf("branch %q is still checked out at worktree %q", branch, entry.Path)
+			}
+		}
+		_, err = runInDir(dir, "update-ref", "-d", "refs/heads/"+branch, expectedSHA)
+		if err != nil {
+			return fmt.Errorf("branch %q could not be deleted at expected SHA %s: %w", branch, expectedSHA, err)
+		}
+		return nil
+	})
 }
 
-// DeleteBranchAtSHA atomically deletes branch only when it still points at
-// expectedSHA. This prevents a verified cleanup from deleting later work.
-func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
-	_, err := runInDir(dir, "update-ref", "-d", "refs/heads/"+branch, expectedSHA)
+// withWorktreeMutationLock serializes TreeMan worktree additions and guarded
+// branch deletions for one repository. Git's ref transaction makes the SHA
+// comparison atomic; this lock keeps another TreeMan process from creating a
+// checkout between the checked-out-branch check and that transaction. Direct
+// Git worktree mutations do not participate in this advisory lock.
+func withWorktreeMutationLock(dir string, operation func() error) error {
+	commonDir, err := runInDir(dir, "rev-parse", "--git-common-dir")
 	if err != nil {
-		return fmt.Errorf("branch %q could not be deleted at verified SHA %s: %w", branch, expectedSHA, err)
+		return err
 	}
-	return nil
+	if !filepath.IsAbs(commonDir) {
+		base := dir
+		if base == "" {
+			base, err = os.Getwd()
+			if err != nil {
+				return fmt.Errorf("could not determine current directory: %w", err)
+			}
+		}
+		commonDir = filepath.Join(base, commonDir)
+	}
+
+	lock, err := os.OpenFile(filepath.Join(commonDir, "treeman-worktree.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("could not open worktree mutation lock: %w", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("could not lock worktree mutations: %w", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	return operation()
 }
 
 // OriginRemoteURL returns the URL of the origin remote.
@@ -375,16 +401,23 @@ func FindWorktreeForBranch(branch string) (string, error) {
 //
 //	HUSKY=0 git worktree add --no-track -b <branch> <path> origin/<branch>
 func WorktreeAddExisting(path, branch string) error {
-	cmd := exec.Command("git", "worktree", "add", "--no-track", "-b", branch, path, "origin/"+branch)
-	cmd.Env = append(cmd.Environ(), "HUSKY=0")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return fmt.Errorf("git worktree add: %s", msg)
+	return worktreeAdd("", path, branch, "origin/"+branch)
+}
+
+func worktreeAdd(dir, path, branch, startPoint string) error {
+	return withWorktreeMutationLock(dir, func() error {
+		cmd := exec.Command("git", "worktree", "add", "--no-track", "-b", branch, path, startPoint)
+		cmd.Dir = dir
+		cmd.Env = append(cmd.Environ(), "HUSKY=0")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			msg := strings.TrimSpace(stderr.String())
+			if msg != "" {
+				return fmt.Errorf("git worktree add: %s", msg)
+			}
+			return fmt.Errorf("git worktree add: %w", err)
 		}
-		return fmt.Errorf("git worktree add: %w", err)
-	}
-	return nil
+		return nil
+	})
 }

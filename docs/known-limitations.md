@@ -7,6 +7,7 @@ This document describes current behavior. It is not a product roadmap.
 - Default branch detection supports only `main` and `master`.
 - Branch validation does not implement all Git ref rules.
 - Branch names with `/` can collide after slug conversion to `-`.
+- Do not run direct `git worktree` mutations concurrently with `treeman clean` or `treeman delete`. TreeMan serializes its own worktree additions and guarded deletions, but direct Git commands do not participate in that lock.
 
 ## Forge Data
 

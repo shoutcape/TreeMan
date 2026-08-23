@@ -58,21 +58,17 @@ var (
 	glabAPICall   = glabAPI
 )
 
-// MergedPRHeadSHAs returns the head SHAs of every merged PR/MR sourced from
-// branch. Cleanup uses these to confirm squash/rebase merges: a remote-gone
-// branch counts as merged only when its local tip equals one of the returned
-// SHAs, so local commits made after a merge are never discarded.
-//
-// Cross-fork pull requests whose head lives under another owner do not match
-// the GitHub head filter; such branches report no SHAs.
-func MergedPRHeadSHAs(forgeType Type, repoSlug, host, branch string) ([]string, error) {
+// MergedPRHead reports whether branch at sha was merged into defaultBranch.
+// The forge query is scoped to one candidate so cleanup cost scales with
+// current worktrees rather than repository history.
+func MergedPRHead(forgeType Type, repoSlug, host, defaultBranch, branch, sha string) (bool, error) {
 	switch forgeType {
 	case GitHub:
-		return githubMergedHeadSHAs(repoSlug, branch)
+		return githubMergedHead(repoSlug, defaultBranch, branch, sha)
 	case GitLab:
-		return gitlabMergedHeadSHAs(repoSlug, host, branch)
+		return gitlabMergedHead(repoSlug, host, defaultBranch, branch, sha)
 	default:
-		return nil, fmt.Errorf("unsupported forge: %q", forgeType)
+		return false, fmt.Errorf("unsupported forge: %q", forgeType)
 	}
 }
 
@@ -122,7 +118,7 @@ func CLITool(forge Type) string {
 
 func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", repoSlug, prNumber)
-	out, err := ghAPI(endpoint)
+	out, err := githubAPICall(endpoint)
 	if err != nil {
 		return PRInfo{}, err
 	}
@@ -147,19 +143,19 @@ func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 
 func githubPRList(repoSlug string) ([]PRInfo, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls?state=open&per_page=100", repoSlug)
-	out, err := ghAPI(endpoint)
+	out, err := githubAPICall(endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	var data []struct {
+	data, err := decodePaginated[struct {
 		Number int    `json:"number"`
 		Title  string `json:"title"`
 		Head   struct {
 			Ref string `json:"ref"`
 		} `json:"head"`
-	}
-	if err := json.Unmarshal(out, &data); err != nil {
+	}](out)
+	if err != nil {
 		return nil, fmt.Errorf("gh: parsing PR list: %w", err)
 	}
 
@@ -174,50 +170,43 @@ func githubPRList(repoSlug string) ([]PRInfo, error) {
 	return prs, nil
 }
 
-func githubMergedHeadSHAs(repoSlug, branch string) ([]string, error) {
-	head := branch
-	if idx := strings.Index(repoSlug, "/"); idx >= 0 {
-		head = repoSlug[:idx] + ":" + branch
-	}
-	endpoint := fmt.Sprintf("repos/%s/pulls?state=closed&head=%s&per_page=100", repoSlug, url.QueryEscape(head))
+func githubMergedHead(repoSlug, defaultBranch, branch, sha string) (bool, error) {
+	endpoint := fmt.Sprintf("repos/%s/commits/%s/pulls?per_page=100", repoSlug, url.PathEscape(sha))
 	out, err := githubAPICall(endpoint)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	return parseGithubMergedHeadSHAs(out)
+	return parseGithubMergedHead(out, defaultBranch, branch, sha)
 }
 
-// parseGithubMergedHeadSHAs extracts the head SHA of each merged pull request
-// in a closed-PR listing. gh api --paginate emits every page as its own JSON
-// array, so pages are decoded sequentially until EOF rather than unmarshalled
-// as a single document.
-func parseGithubMergedHeadSHAs(data []byte) ([]string, error) {
-	var shas []string
-	err := decodePaginatedArrays(data, func(page json.RawMessage) error {
-		var prs []struct {
-			MergedAt *string `json:"merged_at"`
-			Head     struct {
-				SHA string `json:"sha"`
-			} `json:"head"`
-		}
-		if err := json.Unmarshal(page, &prs); err != nil {
-			return err
-		}
-		for _, pr := range prs {
-			if pr.MergedAt != nil && pr.Head.SHA != "" {
-				shas = append(shas, pr.Head.SHA)
-			}
-		}
-		return nil
-	})
+func parseGithubMergedHead(data []byte, defaultBranch, branch, sha string) (bool, error) {
+	prs, err := decodePaginated[struct {
+		MergedAt *time.Time `json:"merged_at"`
+		Head     struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}](data)
 	if err != nil {
-		return nil, fmt.Errorf("gh: parsing closed PR list: %w", err)
+		return false, fmt.Errorf("gh: parsing associated PR list: %w", err)
 	}
-	return shas, nil
+	for _, pr := range prs {
+		if pr.MergedAt != nil && pr.Base.Ref == defaultBranch && pr.Head.Ref == branch && pr.Head.SHA == sha {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func ghAPI(endpoint string) ([]byte, error) {
-	cmd := exec.Command("gh", ghAPIArgs(endpoint)...)
+	return runGHAPI(endpoint, ghAPIArgs(endpoint))
+}
+
+func runGHAPI(endpoint string, args []string) ([]byte, error) {
+	cmd := exec.Command("gh", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -233,12 +222,12 @@ func ghAPIArgs(endpoint string) []string {
 
 func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
-	out, err := ghAPI(endpoint)
+	out, err := githubAPICall(endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	var data []struct {
+	data, err := decodePaginated[struct {
 		Name   string `json:"name"`
 		Commit struct {
 			Commit struct {
@@ -247,8 +236,8 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 				} `json:"committer"`
 			} `json:"commit"`
 		} `json:"commit"`
-	}
-	if err := json.Unmarshal(out, &data); err != nil {
+	}](out)
+	if err != nil {
 		return nil, fmt.Errorf("gh: parsing branch list: %w", err)
 	}
 
@@ -269,7 +258,7 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 func gitlabMRMetadata(repoSlug, host string, prNumber int) (PRInfo, error) {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests/%d", encoded, prNumber)
-	out, err := glabAPI(host, endpoint)
+	out, err := glabAPICall(host, endpoint)
 	if err != nil {
 		return PRInfo{}, err
 	}
@@ -293,17 +282,17 @@ func gitlabMRMetadata(repoSlug, host string, prNumber int) (PRInfo, error) {
 func gitlabMRList(repoSlug, host string) ([]PRInfo, error) {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&per_page=100", encoded)
-	out, err := glabAPI(host, endpoint)
+	out, err := glabAPICall(host, endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	var data []struct {
+	data, err := decodePaginated[struct {
 		IID    int    `json:"iid"`
 		Title  string `json:"title"`
 		Branch string `json:"source_branch"`
-	}
-	if err := json.Unmarshal(out, &data); err != nil {
+	}](out)
+	if err != nil {
 		return nil, fmt.Errorf("glab: parsing MR list: %w", err)
 	}
 
@@ -318,74 +307,73 @@ func gitlabMRList(repoSlug, host string) ([]PRInfo, error) {
 	return mrs, nil
 }
 
-func gitlabMergedHeadSHAs(repoSlug, host, branch string) ([]string, error) {
+func gitlabMergedHead(repoSlug, host, defaultBranch, branch, sha string) (bool, error) {
 	encoded := remote.URLEncode(repoSlug)
-	endpoint := fmt.Sprintf("projects/%s/merge_requests?source_branch=%s&state=merged&per_page=100", encoded, url.QueryEscape(branch))
+	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=merged&source_branch=%s&target_branch=%s&per_page=100", encoded, url.QueryEscape(branch), url.QueryEscape(defaultBranch))
 	out, err := glabAPICall(host, endpoint)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	return parseGitlabMergedHeadSHAs(out)
+	return parseGitlabMergedHead(out, defaultBranch, branch, sha)
 }
 
-// parseGitlabMergedHeadSHAs extracts the source head SHA of each merged MR.
-// glab api --paginate emits every page as its own JSON array, so pages are
-// decoded sequentially until EOF rather than unmarshalled as a single
-// document.
-func parseGitlabMergedHeadSHAs(data []byte) ([]string, error) {
-	var shas []string
-	err := decodePaginatedArrays(data, func(page json.RawMessage) error {
-		var mrs []struct {
-			SHA string `json:"sha"`
-		}
-		if err := json.Unmarshal(page, &mrs); err != nil {
-			return err
-		}
-		for _, mr := range mrs {
-			if mr.SHA != "" {
-				shas = append(shas, mr.SHA)
-			}
-		}
-		return nil
-	})
+func parseGitlabMergedHead(data []byte, defaultBranch, branch, sha string) (bool, error) {
+	mrs, err := decodePaginated[struct {
+		State        string `json:"state"`
+		Branch       string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
+		SHA          string `json:"sha"`
+	}](data)
 	if err != nil {
-		return nil, fmt.Errorf("glab: parsing merged MR list: %w", err)
+		return false, fmt.Errorf("glab: parsing merged MR list: %w", err)
 	}
-	return shas, nil
+	for _, mr := range mrs {
+		if mr.State == "merged" && mr.TargetBranch == defaultBranch && mr.Branch == branch && mr.SHA == sha {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
-// decodePaginatedArrays accepts one or more concatenated JSON array documents,
-// the format emitted by gh and glab with --paginate.
-func decodePaginatedArrays(data []byte, consume func(json.RawMessage) error) error {
+// decodePaginated reads the consecutive JSON arrays emitted by gh and glab
+// when --paginate is used.
+func decodePaginated[T any](data []byte) ([]T, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	pages := 0
+	var values []T
 	for {
 		var page json.RawMessage
 		if err := decoder.Decode(&page); err != nil {
 			if errors.Is(err, io.EOF) {
 				if pages == 0 {
-					return errors.New("empty JSON output")
+					return nil, errors.New("empty JSON output")
 				}
-				return nil
+				return values, nil
 			}
-			return err
+			return nil, err
 		}
 		page = bytes.TrimSpace(page)
 		if bytes.Equal(page, []byte("null")) {
-			return errors.New("expected JSON array, got null")
+			return nil, errors.New("expected JSON array, got null")
 		}
 		if len(page) == 0 || page[0] != '[' {
-			return errors.New("expected JSON array")
+			return nil, errors.New("expected JSON array")
+		}
+		var pageValues []T
+		if err := json.Unmarshal(page, &pageValues); err != nil {
+			return nil, err
 		}
 		pages++
-		if err := consume(page); err != nil {
-			return err
-		}
+		values = append(values, pageValues...)
 	}
 }
 
 func glabAPI(host, endpoint string) ([]byte, error) {
-	cmd := exec.Command("glab", glabAPIArgs(host, endpoint)...)
+	return runGlabAPI(host, endpoint, glabAPIArgs(host, endpoint))
+}
+
+func runGlabAPI(host, endpoint string, args []string) ([]byte, error) {
+	cmd := exec.Command("glab", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -402,18 +390,18 @@ func glabAPIArgs(host, endpoint string) []string {
 func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/repository/branches?per_page=100", encoded)
-	out, err := glabAPI(host, endpoint)
+	out, err := glabAPICall(host, endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	var data []struct {
+	data, err := decodePaginated[struct {
 		Name   string `json:"name"`
 		Commit struct {
 			CommittedDate string `json:"committed_date"`
 		} `json:"commit"`
-	}
-	if err := json.Unmarshal(out, &data); err != nil {
+	}](out)
+	if err != nil {
 		return nil, fmt.Errorf("glab: parsing branch list: %w", err)
 	}
 

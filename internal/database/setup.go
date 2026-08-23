@@ -82,53 +82,68 @@ func SetupBranchDB(worktreePath, branch, envKey string) (SetupResult, error) {
 	return SetupResult{DBName: dbName}, nil
 }
 
-// CleanupBranchDB reads the database URI from the .env in worktreePath using
-// the given envKey, identifies the branch database, and drops it from the
-// running Postgres container.
-//
-// If envKey is "", the function returns nil (database management not configured).
-//
-// Safety: only databases containing "__" (the branch separator) are eligible
-// for auto-drop. This prevents accidentally dropping the main database if
-// someone manually edited their .env.
-//
-// Best-effort: callers should treat errors as non-fatal warnings.
-func CleanupBranchDB(worktreePath, envKey string) error {
+// CleanupPlan is an opaque, validated branch database target prepared before
+// its worktree is removed.
+type CleanupPlan struct {
+	container string
+	baseURI   string
+	dbName    string
+	valid     bool
+}
+
+// PrepareBranchDBCleanup reads the worktree environment and snapshots the
+// database target. It returns nil when no eligible PostgreSQL database exists.
+// It does not delete data.
+func PrepareBranchDBCleanup(worktreePath, envKey string) (*CleanupPlan, error) {
 	if envKey == "" {
-		return nil
+		return nil, nil
 	}
 
 	uri, err := ReadDatabaseURI(worktreePath, envKey)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", envKey, err)
+		return nil, fmt.Errorf("reading %s: %w", envKey, err)
 	}
 	if uri == "" {
-		return nil // No database URI, nothing to clean up.
+		return nil, nil
 	}
 
 	lower := strings.ToLower(uri)
 	if !strings.HasPrefix(lower, "postgres://") && !strings.HasPrefix(lower, "postgresql://") {
-		return nil
+		return nil, nil
 	}
 
 	parsed, err := ParseURI(uri)
 	if err != nil {
-		return fmt.Errorf("parsing %s: %w", envKey, err)
+		return nil, fmt.Errorf("parsing %s: %w", envKey, err)
 	}
 
 	// Safety: never drop a database that doesn't look like a branch database.
 	if !strings.Contains(parsed.Database, "__") {
-		return nil
+		return nil, nil
 	}
 
 	container, err := findPostgresContainerFn(parsed.Port)
 	if err != nil {
-		return fmt.Errorf("finding postgres container: %w", err)
+		return nil, fmt.Errorf("finding postgres container: %w", err)
 	}
+	return &CleanupPlan{
+		container: container,
+		baseURI:   parsed.BaseURI,
+		dbName:    parsed.Database,
+		valid:     true,
+	}, nil
+}
 
-	if err := dropDatabaseFn(container, parsed.BaseURI, parsed.Database); err != nil {
-		return fmt.Errorf("dropping database %q: %w", parsed.Database, err)
+// ExecuteBranchDBCleanup drops a database captured by PrepareBranchDBCleanup.
+func ExecuteBranchDBCleanup(plan *CleanupPlan) error {
+	if plan == nil {
+		return nil
 	}
-
+	if !plan.valid {
+		return fmt.Errorf("invalid database cleanup plan")
+	}
+	if err := dropDatabaseFn(plan.container, plan.baseURI, plan.dbName); err != nil {
+		return fmt.Errorf("dropping database %q: %w", plan.dbName, err)
+	}
 	return nil
 }
