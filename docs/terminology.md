@@ -16,7 +16,7 @@ Use these terms with the specified meaning.
 | post-create hook | Shell command that TreeMan runs after worktree creation |
 | project configuration | `.treeman.toml` found at or above the main worktree |
 | remote branch | Branch returned by the GitHub or GitLab API |
-| shell wrapper | Bash, Zsh, or Fish function from `treeman init` |
+| shell integration | Managed Bash, Zsh, or Fish functions from `treeman shell install` |
 | tap | Homebrew repository that provides formulas |
 | worktree | Git checkout with its own directory and branch state |
 

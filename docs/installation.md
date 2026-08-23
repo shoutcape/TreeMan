@@ -8,19 +8,13 @@ Install TreeMan with Homebrew:
 brew install shoutcape/tap/treeman
 ```
 
-Add one command to your shell startup file:
+Enable shell integration:
 
 ```bash
-eval "$(treeman init zsh)"
+treeman shell install
 ```
 
-Use `bash` instead of `zsh` for Bash. For Fish, add this command to `$XDG_CONFIG_HOME/fish/config.fish`. Use `~/.config/fish/config.fish` when `XDG_CONFIG_HOME` is not set.
-
-```fish
-treeman init fish | source
-```
-
-Homebrew installs the `treeman` binary. It does not add shell startup-file entries or shell wrappers.
+Homebrew installs the `treeman` binary. `treeman shell install` detects Bash, Zsh, or Fish and safely manages the appropriate startup-file entry. Use `--shell` or `--config` to override detection.
 
 ### Move From the Curl Installer
 
@@ -44,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh |
 
 The installer supports Linux and macOS. It supports amd64 and arm64 processors.
 
-The installer puts `treeman` in `~/.treeman/bin` by default. It adds that directory to your shell startup file. It also adds a shell wrapper command.
+The installer puts `treeman` in `~/.treeman/bin` by default. It adds that directory and managed shell integration to your shell startup file.
 
 Restart your shell after installation.
 
@@ -58,17 +52,13 @@ Set `TREEMAN_INSTALL_DIR` to use a different installation directory. Set `TREEMA
 
 Download a matching archive from [GitHub Releases](https://github.com/shoutcape/TreeMan/releases/latest). Put the `treeman` binary on `PATH`.
 
-Add one command to your shell startup file.
+Enable shell integration.
 
 ```bash
-eval "$(treeman init zsh)"
+treeman shell install
 ```
 
-Use `bash` instead of `zsh` for Bash. For Fish, add this command to `$XDG_CONFIG_HOME/fish/config.fish`. Use `~/.config/fish/config.fish` when `XDG_CONFIG_HOME` is not set.
-
-```fish
-treeman init fish | source
-```
+Use `--shell` or `--config` when automatic detection does not select the intended shell or configuration file.
 
 ## Install Local Changes
 
@@ -88,7 +78,7 @@ Install Go 1.23 or later. Then run:
 go install github.com/shoutcape/treeman/cmd/treeman@latest
 ```
 
-Add the shell wrapper command from the manual installation section.
+Run `treeman shell install` after the binary is on `PATH`.
 
 For repository development, read [Development Setup](development/setup.md).
 

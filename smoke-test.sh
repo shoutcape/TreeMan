@@ -110,8 +110,8 @@ mkdir -p "$TEST_HOME/.treeman/bin"
 cp "$TREEMAN_BIN" "$TEST_HOME/.treeman/bin/treeman"
 export PATH="$TEST_HOME/.treeman/bin:$MOCK_BIN:$PATH"
 
-# Load shell wrappers (wt, wtpr, wtmr, wts, wtd) into this shell session.
-eval "$(treeman init bash)"
+# Load shell integration and shortcuts into this shell session.
+eval "$(treeman shell init bash)"
 
 # ---------------------------------------------------------------------------
 # install / uninstall
@@ -127,10 +127,10 @@ TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
 # Binary should be in the install dir.
 assert_exists "$TEST_HOME/.treeman-install-test/bin/treeman"
 
-# Shell rc must contain the marker and both new lines.
-assert_file_contains "$TEST_HOME/.bashrc" '# TreeMan'
+# Shell rc must contain the managed block, PATH, and init command.
+assert_file_contains "$TEST_HOME/.bashrc" '# >>> TreeMan shell integration >>>'
 assert_file_contains "$TEST_HOME/.bashrc" '.treeman-install-test/bin'
-assert_file_contains "$TEST_HOME/.bashrc" 'treeman init'
+assert_file_contains "$TEST_HOME/.bashrc" 'treeman shell init'
 
 # Malformed integration blocks must survive removal.
 printf '# TreeMan\nexport PATH="/opt/unrelated/bin:$PATH"\neval "$(treeman init bash)"\n' >> "$TEST_HOME/.bashrc"
@@ -161,9 +161,9 @@ SHELL=/usr/bin/fish \
   XDG_CONFIG_HOME="$TEST_HOME/nonstandard-config" \
   bash "$SCRIPT_DIR/install.sh"
 
-assert_file_contains "$FISH_CONFIG" '# TreeMan'
-assert_file_contains "$FISH_CONFIG" "set -gx PATH \"$TEST_HOME/.treeman-fish-install-test/bin\" \$PATH"
-assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
+assert_file_contains "$FISH_CONFIG" '# >>> TreeMan shell integration >>>'
+assert_file_contains "$FISH_CONFIG" "set -gx PATH '$TEST_HOME/.treeman-fish-install-test/bin' \$PATH"
+assert_file_contains "$FISH_CONFIG" 'treeman shell init fish | source'
 assert_missing "$TEST_HOME/.config/fish/config.fish"
 
 # Source the installed Fish configuration. Verify a wrapper forwards arguments

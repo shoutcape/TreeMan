@@ -14,13 +14,13 @@ Install with Homebrew:
 brew install shoutcape/tap/treeman
 ```
 
-Add TreeMan shell wrappers to your shell startup file:
+Enable TreeMan shell integration:
 
 ```bash
-eval "$(treeman init zsh)"
+treeman shell install
 ```
 
-Use `bash` instead of `zsh` for Bash. For Fish, use `treeman init fish | source`.
+This enables both `treeman create` and `wt`-style shortcuts to change your current directory.
 
 Or, install the latest release with the curl installer:
 

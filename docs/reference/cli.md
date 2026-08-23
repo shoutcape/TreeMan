@@ -2,7 +2,7 @@
 
 Run `treeman --help` for current command help. TreeMan sends status and warnings to stderr. Commands that select or create worktrees can send a path to stdout.
 
-Shell wrappers use stdout to change the current shell directory. Native commands never change the caller directory.
+Shell integration uses stdout destinations to change the current interactive shell directory. Native commands never change the caller directory.
 
 ## Commands
 
@@ -15,7 +15,7 @@ Shell wrappers use stdout to change the current shell directory. Native commands
 | `treeman list [--json]` | `wtl` | List worktrees and their status |
 | `treeman clean [--dry-run] [--yes]` | `wtc` | Remove clean worktrees merged into the default branch |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
-| `treeman init <shell>` | None | Print shell wrappers |
+| `treeman shell` | None | Install and manage shell integration |
 | `treeman doctor` | None | Check repository readiness and configuration |
 | `treeman theme` | None | Select a terminal color theme |
 | `treeman version` | None | Print build data |
@@ -66,7 +66,7 @@ treeman switch [query]
 
 `switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
 
-It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. The `wts` wrapper changes directory when it receives a path.
+It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. Shell integration changes directory when it receives a path.
 
 ## `delete`
 
@@ -83,7 +83,7 @@ TreeMan verifies that `--path` names a linked worktree and that it has the suppl
 
 TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files. `--yes` skips the confirmation prompt but does not bypass safety checks.
 
-When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so the `wtd` shell wrapper can change directory safely.
+When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so shell integration can change directory safely.
 
 ## `list`
 
@@ -101,19 +101,22 @@ List the repository worktrees with branch, path, main, current, dirty, and merge
 treeman clean [--dry-run] [--yes]
 ```
 
-`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the fetched `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path so the `wtc` shell wrapper returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the fetched `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path so shell integration returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
 
-## `init`
+## `shell`
 
 ```text
-treeman init bash
-treeman init zsh
-treeman init fish
+treeman shell install [--shell <shell>] [--config <file>] [--path <directory>]
+treeman shell uninstall [--shell <shell>] [--config <file>] [--all]
+treeman shell status [--shell <shell>] [--config <file>]
+treeman shell init <bash|zsh|fish>
 ```
 
-This command prints `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, and `wtd` shell functions. For Bash or Zsh, add its output through `eval` in your shell startup file.
+Run `treeman shell install` once after TreeMan is on `PATH`. It detects the current Bash, Zsh, or Fish configuration file and writes a marked, idempotent integration block. Use `--shell` or `--config` to choose a different target. `--path` also adds a binary directory to the managed block and is used by the release installer.
 
-For Fish, add its output with `treeman init fish | source`.
+The integration defines a `treeman` adapter and the `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, and `wtd` shortcuts. Both command styles change the shell directory after commands that return a worktree path. Other native commands pass through unchanged.
+
+`treeman shell init` prints the sourceable integration without modifying files. `treeman init <shell>` remains available for existing startup files.
 
 ## `doctor`
 
@@ -127,7 +130,7 @@ Check Git repository, forge CLI, optional configuration and database setup, `fzf
 
 Docker readiness uses a read-only daemon connectivity check. It does not inspect containers or connect to PostgreSQL. A missing Docker executable or unavailable daemon is a warning.
 
-Shell integration is checked only when `SHELL` identifies active `bash` or `zsh`. TreeMan recognizes an enabled startup-file entry such as `eval "$(treeman init zsh)"`, including ordinary whitespace and quote variants. Missing or unsupported `SHELL` values are informational and are not treated as bash.
+Shell integration is checked only when `SHELL` identifies active `bash` or `zsh`. TreeMan recognizes its managed block and legacy `treeman init` entries. Missing or unsupported `SHELL` values are informational and are not treated as bash.
 
 ## `version`
 
@@ -139,11 +142,11 @@ This command prints version, commit, and build date when build data exists.
 
 ## Terminal Behavior
 
-TreeMan detects terminal capabilities separately for each input and output stream. Status messages and warnings use stderr. Commands that create, select, or delete a worktree can write a path to stdout for shell wrappers and scripts.
+TreeMan detects terminal capabilities separately for each input and output stream. Status messages and warnings use stderr. Commands that create, select, or delete a worktree can write a path to stdout for shell integration and scripts.
 
 Color and rich terminal UI are enabled only when the relevant output stream is a terminal. Redirected output is plain. Set `NO_COLOR` to disable color. Set `TERM=dumb` to disable color and interactive selection.
 
-Interactive selection and confirmation require both stdin and stderr to be terminals. TreeMan disables them when `CI` is set. When a picker is unavailable, pass an exact branch, worktree path, PR or MR number, or direct deletion flags instead. Redirecting stdout does not prevent shell wrappers from receiving a selected path.
+Interactive selection and confirmation require both stdin and stderr to be terminals. TreeMan disables them when `CI` is set. When a picker is unavailable, pass an exact branch, worktree path, PR or MR number, or direct deletion flags instead. Redirecting stdout does not prevent shell integration from receiving a selected path.
 
 ## Picker Rules
 
