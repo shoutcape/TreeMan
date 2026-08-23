@@ -169,18 +169,25 @@ assert_missing "$TEST_HOME/.config/fish/config.fish"
 # Source the installed Fish configuration. Verify a wrapper forwards arguments
 # and changes directory without requiring a Git repository.
 FISH_WRAPPER_TARGET="$TMP_DIR/fish-wrapper-target"
+FISH_MOCK_BIN="$TMP_DIR/fish-mock-bin"
 mkdir -p "$FISH_WRAPPER_TARGET"
+mkdir -p "$FISH_MOCK_BIN"
+cat > "$FISH_MOCK_BIN/treeman" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "create" && "${2:-}" == "fish-test" ]]; then
+  printf '%s\n' "$FISH_WRAPPER_TARGET"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$FISH_MOCK_BIN/treeman"
 if command -v fish >/dev/null 2>&1; then
-  fish -c '
+  FISH_WRAPPER_TARGET="$FISH_WRAPPER_TARGET" fish -c '
     source "$argv[1]"
-    function treeman
-      test "$argv[1]" = create; or return 1
-      test "$argv[2]" = fish-test; or return 1
-      printf "%s\\n" "$argv[3]"
-    end
+    set -gx PATH "$argv[3]" $PATH
     wt fish-test "$argv[2]"
     test (pwd) = "$argv[2]"
-  ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET"
+  ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET" "$FISH_MOCK_BIN"
 else
   echo "warning: Fish is not installed. Skipping Fish wrapper runtime test."
 fi

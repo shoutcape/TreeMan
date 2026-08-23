@@ -170,7 +170,11 @@ print_done
 
 # --- Configure shell integration ---------------------------------------------
 print_step "Adding TreeMan to $SHELL_RC"
-"$BINARY" shell install --shell "$SHELL_NAME" --config "$SHELL_RC" --path "$BIN_DIR"
+if [[ "${TREEMAN_SKIP_PATH_SETUP:-}" == "1" ]]; then
+  "$BINARY" shell install --shell "$SHELL_NAME" --config "$SHELL_RC"
+else
+  "$BINARY" shell install --shell "$SHELL_NAME" --config "$SHELL_RC" --path "$BIN_DIR"
+fi
 print_done
 
 # --- Check optional dependencies --------------------------------------------

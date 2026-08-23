@@ -52,10 +52,18 @@ if [[ "$detected_prefix" != "$homebrew_prefix" ]]; then
 fi
 
 local_binary="$TMP_DIR/local-treeman"
-printf 'local binary\n' > "$local_binary"
+shell_command_log="$TMP_DIR/shell-command.log"
+cat > "$local_binary" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TREEMAN_SHELL_COMMAND_LOG:?}"
+EOF
+chmod +x "$local_binary"
 homebrew_shell_rc="$TMP_DIR/homebrew.zshrc"
-TREEMAN_LOCAL_BIN="$local_binary" \
+touch "$homebrew_shell_rc"
+SHELL=/usr/bin/zsh \
+  TREEMAN_LOCAL_BIN="$local_binary" \
   TREEMAN_INSTALL_DIR="$homebrew_prefix" \
+  TREEMAN_SHELL_COMMAND_LOG="$shell_command_log" \
   TREEMAN_SKIP_PATH_SETUP=1 \
   TREEMAN_SHELL_RC="$homebrew_shell_rc" \
   bash "$SCRIPT_DIR/install.sh" >/dev/null
@@ -69,6 +77,14 @@ if ! cmp -s "$local_binary" "$homebrew_prefix/bin/treeman"; then
 fi
 if grep -qF "$homebrew_prefix/bin" "$homebrew_shell_rc"; then
   echo "local installer added a versioned Homebrew path to shell configuration" >&2
+  exit 1
+fi
+if ! grep -qFx "shell install --shell zsh --config $homebrew_shell_rc" "$shell_command_log"; then
+  echo "local installer did not configure shell integration through the installed binary" >&2
+  exit 1
+fi
+if grep -qF -- '--path' "$shell_command_log"; then
+  echo "local installer added a Homebrew versioned path to shell integration" >&2
   exit 1
 fi
 
