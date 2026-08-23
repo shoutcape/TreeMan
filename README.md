@@ -8,6 +8,22 @@ TreeMan has one compiled binary. Shell wrappers support Bash, Zsh, and Fish.
 
 ## Install
 
+Install with Homebrew:
+
+```bash
+brew install shoutcape/tap/treeman
+```
+
+Add TreeMan shell wrappers to your shell startup file:
+
+```bash
+eval "$(treeman init zsh)"
+```
+
+Use `bash` instead of `zsh` for Bash. For Fish, use `treeman init fish | source`.
+
+Or, install the latest release with the curl installer:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shoutcape/TreeMan/main/install.sh | bash
 ```
@@ -25,6 +41,10 @@ To install the version from the current local worktree instead of a release:
 ```
 
 Read [installation details](docs/installation.md) for manual installation, source builds, requirements, and removal.
+
+## License
+
+TreeMan is available under the [MIT License](LICENSE).
 
 ## Start
 

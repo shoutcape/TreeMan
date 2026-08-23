@@ -25,17 +25,41 @@ builds:
 
 archives:
   - id: treeman
-    builds:
+    ids:
       - treeman
     # Matches what install.sh expects: treeman_linux_amd64.tar.gz
     name_template: "treeman_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats:
+      - tar.gz
     files:
       - none*  # binary only, no extra files
 
 checksum:
   name_template: "treeman_checksums.txt"
   algorithm: sha256
+
+release:
+  prerelease: auto
+
+brews:
+  - name: treeman
+    ids:
+      - treeman
+    repository:
+      owner: shoutcape
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/shoutcape/TreeMan
+    description: Git worktree management CLI
+    license: MIT
+    skip_upload: auto
+    dependencies:
+      - name: git
+    install: |
+      bin.install "treeman"
+    test: |
+      system "#{bin}/treeman", "version"
 
 changelog:
   sort: asc
