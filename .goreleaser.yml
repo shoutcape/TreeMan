@@ -49,6 +49,9 @@ brews:
       owner: shoutcape
       name: homebrew-tap
       token: "{{ .Env.TREEMAN_HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: Ville Kautiainen
+      email: 74509593+shoutcape@users.noreply.github.com
     directory: Formula
     homepage: https://github.com/shoutcape/TreeMan
     description: Git worktree management CLI
