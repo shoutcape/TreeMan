@@ -47,7 +47,7 @@ For squash and rebase cleanup, TreeMan verifies the source branch name and exact
 
 GitHub uses a fresh GraphQL snapshot. Normal worktree counts use one request. Larger sets use bounded batches.
 
-GitHub candidates requiring more data, including fork PRs, use per-branch verification. GitLab and other configurations use at most four requests at once.
+GitHub candidates requiring more data, including fork PRs, use per-branch verification. GitLab batches remote-gone candidates in a paginated GraphQL merge-request query, matching source branch, target branch, and diff-head SHA exactly. If that query is unavailable, GitLab and other configurations use at most four requests at once.
 
 ## Authentication Errors
 

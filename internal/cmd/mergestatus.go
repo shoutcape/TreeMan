@@ -44,6 +44,10 @@ var forgeMergedLookup = defaultForgeMergedLookup
 // GitHub repository. It returns false when callers should use Git instead.
 var githubSnapshotLookup = defaultGitHubSnapshotLookup
 
+// gitlabMergedHeadsLookup batches GitLab merged-MR verification. It returns
+// false when callers should use the existing per-branch verifier instead.
+var gitlabMergedHeadsLookup = defaultGitLabMergedHeadsLookup
+
 func defaultForgeMergedLookup(defaultBranch string) (forgeMergeVerifier, error) {
 	remoteURL, err := git.OriginRemoteURL()
 	if err != nil {
@@ -93,6 +97,25 @@ func defaultGitHubSnapshotLookup(defaultBranch string, candidates []forge.Snapsh
 		return forge.GitHubSnapshot{}, false
 	}
 	return snapshot, true
+}
+
+func defaultGitLabMergedHeadsLookup(defaultBranch string, candidates []forge.SnapshotCandidate) (map[string]bool, bool) {
+	remoteURL, err := git.OriginRemoteURL()
+	if err != nil {
+		return nil, false
+	}
+	forgeType, repoSlug, host, err := forge.ResolveFromRemote(remoteURL)
+	if err != nil || forgeType != forge.GitLab {
+		return nil, false
+	}
+	if _, err := exec.LookPath(forge.CLITool(forgeType)); err != nil {
+		return nil, false
+	}
+	matched, err := forge.GitLabMergedHeads(repoSlug, host, defaultBranch, candidates)
+	if err != nil {
+		return nil, false
+	}
+	return matched, true
 }
 
 func refreshMergeState(defaultBranch string, branches []string) (mergeState, error) {
@@ -265,6 +288,14 @@ func classifyCleanable(target, defaultBranch string, branches []string, state me
 		candidates = append(candidates, forge.SnapshotCandidate{Branch: branch, SHA: tip})
 	}
 	if len(candidates) == 0 {
+		return verified, warning, nil
+	}
+	if matched, handled := gitlabMergedHeadsLookup(defaultBranch, candidates); handled {
+		for _, candidate := range candidates {
+			if matched[candidate.Branch] {
+				verified[candidate.Branch] = candidate.SHA
+			}
+		}
 		return verified, warning, nil
 	}
 

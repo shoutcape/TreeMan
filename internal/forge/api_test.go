@@ -345,6 +345,46 @@ func TestMergedPRHeadGitLab(t *testing.T) {
 	assert.True(t, merged)
 }
 
+func TestGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
+	previous := gitlabGraphQLCall
+	calls := 0
+	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
+		assert.Equal(t, "gitlab.example", host)
+		assert.Contains(t, query, "sourceBranches: $sourceBranches")
+		assert.Contains(t, query, "diffHeadSha")
+		assert.Equal(t, "group/project", variables["fullPath"])
+		assert.Equal(t, []string{"feature", "reused"}, variables["sourceBranches"])
+		assert.Equal(t, []string{"main"}, variables["targetBranches"])
+		calls++
+		if calls == 1 {
+			assert.Nil(t, variables["endCursor"])
+			return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"feature","targetBranch":"main","diffHeadSha":"aaa111"},{"sourceBranch":"reused","targetBranch":"main","diffHeadSha":"old111"},{"sourceBranch":"reused","targetBranch":"other","diffHeadSha":"bbb222"}],"pageInfo":{"endCursor":"next","hasNextPage":true}}}}}`), nil
+		}
+		assert.Equal(t, "next", variables["endCursor"])
+		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"reused","targetBranch":"main","diffHeadSha":"bbb222"}],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`), nil
+	}
+	t.Cleanup(func() { gitlabGraphQLCall = previous })
+
+	matched, err := GitLabMergedHeads("group/project", "gitlab.example", "main", []SnapshotCandidate{
+		{Branch: "feature", SHA: "aaa111"},
+		{Branch: "reused", SHA: "bbb222"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"feature": true, "reused": true}, matched)
+	assert.Equal(t, 2, calls)
+}
+
+func TestGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
+	previous := gitlabGraphQLCall
+	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
+		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":true}}}}}`), nil
+	}
+	t.Cleanup(func() { gitlabGraphQLCall = previous })
+
+	_, err := GitLabMergedHeads("group/project", "gitlab.example", "main", []SnapshotCandidate{{Branch: "feature", SHA: "aaa111"}})
+	assert.Error(t, err)
+}
+
 func TestMergedPRHeadError(t *testing.T) {
 	previousAPI := githubAPICall
 	githubAPICall = func(string) ([]byte, error) { return nil, assert.AnError }
