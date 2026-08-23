@@ -62,7 +62,7 @@ brews:
     install: |
       bin.install "treeman"
     test: |
-      system "#{bin}/treeman", "version"
+      system bin/"treeman", "version"
 
 changelog:
   sort: asc
