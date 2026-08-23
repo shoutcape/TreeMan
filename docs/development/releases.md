@@ -41,7 +41,7 @@ The release workflow uses GoReleaser v2.9.0. `GITHUB_TOKEN` publishes the TreeMa
 
 GoReleaser updates `Formula/treeman.rb` in `shoutcape/homebrew-tap` after it publishes a stable release. Preview releases do not update the formula.
 
-Set the `HOMEBREW_TAP_GITHUB_TOKEN` Actions secret before you publish a release. Use a dedicated credential with write access only to `shoutcape/homebrew-tap` repository contents.
+Set the `TREEMAN_HOMEBREW_TAP_GITHUB_TOKEN` Actions secret before you publish a release. Use a dedicated credential with write access only to `shoutcape/homebrew-tap` repository contents.
 
 The tap workflow validates formula style and strict audit. It installs and tests the formula on macOS and Linux.
 

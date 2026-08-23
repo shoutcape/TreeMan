@@ -48,7 +48,7 @@ brews:
     repository:
       owner: shoutcape
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      token: "{{ .Env.TREEMAN_HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: https://github.com/shoutcape/TreeMan
     description: Git worktree management CLI
