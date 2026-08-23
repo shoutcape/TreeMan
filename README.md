@@ -1,5 +1,3 @@
-# TreeMan README
-
 <p align="center">
   <img width="420" alt="TreeMan logo" src="https://github.com/user-attachments/assets/d12d7c55-cd61-4116-932d-e0f5f63ae613" />
 </p>
