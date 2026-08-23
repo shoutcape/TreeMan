@@ -1,12 +1,10 @@
-<p align="center">
-  <img width="420" alt="TreeMan logo" src="https://github.com/user-attachments/assets/d12d7c55-cd61-4116-932d-e0f5f63ae613" />
-</p>
+<img width="800" alt="TreeMan logo" src="assets/readme-banner.png" />
 
 # TreeMan
 
-Git worktrees, ready to run.
+Git worktrees, ready to run. 
 
-TreeMan is a Git worktree manager. It creates worktrees and can run project setup after creation.
+Create isolated branches with their setup, dependencies, environment files, databases, and hooks already in place.
 
 ## Installation
 
@@ -136,16 +134,16 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 
 ## Documentation
 
-* [Documentation index](docs/README.md)
-* [Workflows](docs/guides/workflows.md)
-* [Configuration](docs/reference/configuration.md)
-* [GitHub and GitLab](docs/integrations/github-gitlab.md)
-* [Agents](docs/integrations/agents.md)
-* [PostgreSQL branch databases](docs/integrations/postgresql.md)
-* [Troubleshooting](docs/operations/troubleshooting.md)
-* [Known limitations](docs/known-limitations.md)
-* [Architecture](docs/architecture/overview.md)
-* [Development](docs/development/setup.md)
+- [Documentation index](docs/README.md)
+- [Workflows](docs/guides/workflows.md)
+- [Configuration](docs/reference/configuration.md)
+- [GitHub and GitLab](docs/integrations/github-gitlab.md)
+- [Agents](docs/integrations/agents.md)
+- [PostgreSQL branch databases](docs/integrations/postgresql.md)
+- [Troubleshooting](docs/operations/troubleshooting.md)
+- [Known limitations](docs/known-limitations.md)
+- [Architecture](docs/architecture/overview.md)
+- [Development](docs/development/setup.md)
 
 ## License
 
@@ -154,4 +152,3 @@ TreeMan is available under the [MIT License](LICENSE).
 ## Documentation Standard
 
 Project documentation uses ASD-STE100 Simplified Technical English, Issue 9, as its writing standard. Read [writing controls](docs/writing-standard.md).
-
