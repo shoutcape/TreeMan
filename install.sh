@@ -168,30 +168,14 @@ fi
 
 print_done
 
-# --- Add shell integration to shell config -----------------------------------
-
-SOURCE_MARKER="# TreeMan"
-PATH_LINE="export PATH=\"${BIN_DIR}:\$PATH\""
-EVAL_LINE="eval \"\$(treeman init ${SHELL_NAME})\""
-if [[ "$SHELL_NAME" == "fish" ]]; then
-  PATH_LINE="set -gx PATH \"${BIN_DIR}\" \$PATH"
-  EVAL_LINE="treeman init fish | source"
-fi
-
+# --- Configure shell integration ---------------------------------------------
 print_step "Adding TreeMan to $SHELL_RC"
-
-if grep -qF "$SOURCE_MARKER" "$SHELL_RC" 2>/dev/null; then
-  print_warn "TreeMan already present in $SHELL_RC, skipping."
+if [[ "${TREEMAN_SKIP_PATH_SETUP:-}" == "1" ]]; then
+  "$BINARY" shell install --shell "$SHELL_NAME" --config "$SHELL_RC"
 else
-  mkdir -p "$(dirname "$SHELL_RC")"
-  touch "$SHELL_RC"
-  if [[ "${TREEMAN_SKIP_PATH_SETUP:-}" == "1" ]]; then
-    printf '\n%s\n%s\n' "$SOURCE_MARKER" "$EVAL_LINE" >> "$SHELL_RC"
-  else
-    printf '\n%s\n%s\n%s\n' "$SOURCE_MARKER" "$PATH_LINE" "$EVAL_LINE" >> "$SHELL_RC"
-  fi
-  print_done
+  "$BINARY" shell install --shell "$SHELL_NAME" --config "$SHELL_RC" --path "$BIN_DIR"
 fi
+print_done
 
 # --- Check optional dependencies --------------------------------------------
 

@@ -190,11 +190,14 @@ func collectShellDiagnostic() diagnostic {
 	}
 	return diagnostic{
 		status: diagnosticInfo, name: "Shell integration", message: "Not configured",
-		hint: fmt.Sprintf("Add to ~/.%src:\neval \"$(treeman init %s)\"", shell, shell),
+		hint: "Run: treeman shell install",
 	}
 }
 
 func hasShellIntegration(contents, shell string) bool {
+	if strings.Contains(contents, shellBlockStart) && strings.Contains(contents, shellBlockEnd) {
+		return true
+	}
 	pattern := regexp.MustCompile(fmt.Sprintf(shellIntegrationPattern.String(), regexp.QuoteMeta(shell), regexp.QuoteMeta(shell), regexp.QuoteMeta(shell)))
 	for _, line := range strings.Split(contents, "\n") {
 		if pattern.MatchString(line) {

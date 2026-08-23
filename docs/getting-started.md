@@ -2,10 +2,10 @@
 
 ## Prepare Your Shell
 
-Install TreeMan. Then add this command to your shell startup file if the installer did not add it.
+Install TreeMan, then enable shell integration if the installer did not do so.
 
 ```bash
-eval "$(treeman init zsh)"
+treeman shell install
 ```
 
 Start a new shell. Run these commands from a Git repository with `origin` configured.
@@ -20,7 +20,7 @@ wt feature/login
 
 TreeMan fetches the default branch. It makes `feature/login`. It puts the worktree at `.worktrees/feature-login` in the main worktree.
 
-The `wt` wrapper changes your current directory when TreeMan prints a path.
+Both `wt` and `treeman create` change your current directory when TreeMan prints a path.
 
 ## Use an Existing Remote Branch
 
@@ -56,7 +56,7 @@ Use the worktree picker.
 wts
 ```
 
-The wrapper changes the current shell directory.
+Shell integration changes the current shell directory.
 
 ## Delete a Worktree
 

@@ -110,8 +110,8 @@ mkdir -p "$TEST_HOME/.treeman/bin"
 cp "$TREEMAN_BIN" "$TEST_HOME/.treeman/bin/treeman"
 export PATH="$TEST_HOME/.treeman/bin:$MOCK_BIN:$PATH"
 
-# Load shell wrappers (wt, wtpr, wtmr, wts, wtd) into this shell session.
-eval "$(treeman init bash)"
+# Load shell integration and shortcuts into this shell session.
+eval "$(treeman shell init bash)"
 
 # ---------------------------------------------------------------------------
 # install / uninstall
@@ -127,10 +127,10 @@ TREEMAN_LOCAL_BIN="$TREEMAN_BIN" \
 # Binary should be in the install dir.
 assert_exists "$TEST_HOME/.treeman-install-test/bin/treeman"
 
-# Shell rc must contain the marker and both new lines.
-assert_file_contains "$TEST_HOME/.bashrc" '# TreeMan'
+# Shell rc must contain the managed block, PATH, and init command.
+assert_file_contains "$TEST_HOME/.bashrc" '# >>> TreeMan shell integration >>>'
 assert_file_contains "$TEST_HOME/.bashrc" '.treeman-install-test/bin'
-assert_file_contains "$TEST_HOME/.bashrc" 'treeman init'
+assert_file_contains "$TEST_HOME/.bashrc" 'treeman shell init'
 
 # Malformed integration blocks must survive removal.
 printf '# TreeMan\nexport PATH="/opt/unrelated/bin:$PATH"\neval "$(treeman init bash)"\n' >> "$TEST_HOME/.bashrc"
@@ -161,26 +161,33 @@ SHELL=/usr/bin/fish \
   XDG_CONFIG_HOME="$TEST_HOME/nonstandard-config" \
   bash "$SCRIPT_DIR/install.sh"
 
-assert_file_contains "$FISH_CONFIG" '# TreeMan'
-assert_file_contains "$FISH_CONFIG" "set -gx PATH \"$TEST_HOME/.treeman-fish-install-test/bin\" \$PATH"
-assert_file_contains "$FISH_CONFIG" 'treeman init fish | source'
+assert_file_contains "$FISH_CONFIG" '# >>> TreeMan shell integration >>>'
+assert_file_contains "$FISH_CONFIG" "set -gx PATH '$TEST_HOME/.treeman-fish-install-test/bin' \$PATH"
+assert_file_contains "$FISH_CONFIG" 'treeman shell init fish | source'
 assert_missing "$TEST_HOME/.config/fish/config.fish"
 
 # Source the installed Fish configuration. Verify a wrapper forwards arguments
 # and changes directory without requiring a Git repository.
 FISH_WRAPPER_TARGET="$TMP_DIR/fish-wrapper-target"
+FISH_MOCK_BIN="$TMP_DIR/fish-mock-bin"
 mkdir -p "$FISH_WRAPPER_TARGET"
+mkdir -p "$FISH_MOCK_BIN"
+cat > "$FISH_MOCK_BIN/treeman" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "create" && "${2:-}" == "fish-test" ]]; then
+  printf '%s\n' "$FISH_WRAPPER_TARGET"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$FISH_MOCK_BIN/treeman"
 if command -v fish >/dev/null 2>&1; then
-  fish -c '
+  FISH_WRAPPER_TARGET="$FISH_WRAPPER_TARGET" fish -c '
     source "$argv[1]"
-    function treeman
-      test "$argv[1]" = create; or return 1
-      test "$argv[2]" = fish-test; or return 1
-      printf "%s\\n" "$argv[3]"
-    end
+    set -gx PATH "$argv[3]" $PATH
     wt fish-test "$argv[2]"
     test (pwd) = "$argv[2]"
-  ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET"
+  ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET" "$FISH_MOCK_BIN"
 else
   echo "warning: Fish is not installed. Skipping Fish wrapper runtime test."
 fi

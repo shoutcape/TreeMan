@@ -20,26 +20,21 @@ func TestInitCmd_Bash(t *testing.T) {
 
 	out := buf.String()
 	assert.NotContains(t, out, "\x1b")
-	assert.Contains(t, out, "treeman init bash")
-	assert.Contains(t, out, "~/.bashrc")
-	assert.Contains(t, out, "wt()")
-	assert.Contains(t, out, "wtpr()")
-	assert.Contains(t, out, "wtmr()")
-	assert.Contains(t, out, "wts()")
-	assert.Contains(t, out, "wtl()")
-	assert.Contains(t, out, "wtc()")
-	assert.Contains(t, out, "wtd()")
+	assert.Contains(t, out, "treeman shell init bash")
+	assert.Contains(t, out, "treeman()")
+	assert.Contains(t, out, "command treeman \"$@\"")
+	assert.Contains(t, out, "wt() { treeman create \"$@\"; }")
+	assert.Contains(t, out, "wtpr() { treeman review \"$@\"; }")
+	assert.Contains(t, out, "wtmr() { treeman review \"$@\"; }")
+	assert.Contains(t, out, "wts() { treeman switch \"$@\"; }")
+	assert.Contains(t, out, "wtl() { treeman list \"$@\"; }")
+	assert.Contains(t, out, "wtc() { treeman clean \"$@\"; }")
+	assert.Contains(t, out, "wtd() { treeman delete \"$@\"; }")
 	assert.NotContains(t, out, "lg()")
 	assert.NotContains(t, out, "wto()")
-	assert.Contains(t, out, "treeman create")
-	assert.Contains(t, out, "treeman review")
-	assert.Contains(t, out, "treeman switch")
-	assert.Contains(t, out, "treeman list")
-	assert.Contains(t, out, "treeman clean")
-	assert.Contains(t, out, "treeman delete")
-	assert.Contains(t, out, "_tm_dir=$(treeman clean \"$@\") || return $?")
-	assert.Contains(t, out, "_tm_dir=$(treeman delete \"$@\") || return $?")
-	assert.Contains(t, out, "[ -n \"$_tm_dir\" ] && cd \"$_tm_dir\"")
+	assert.Contains(t, out, "create|branch|review|switch|clean|delete|wtb|wtpr|wtmr|wts|wtc|wtd)")
+	assert.Contains(t, out, "if [ -d \"$_tm_output\" ]")
+	assert.Contains(t, out, "printf '%s\\n' \"$_tm_output\"")
 }
 
 func TestRootCmd_HasNoOpenCommand(t *testing.T) {
@@ -128,8 +123,8 @@ func TestInitCmd_Zsh(t *testing.T) {
 
 	out := buf.String()
 	assert.NotContains(t, out, "\x1b")
-	assert.Contains(t, out, "treeman init zsh")
-	assert.Contains(t, out, "~/.zshrc")
+	assert.Contains(t, out, "treeman shell init zsh")
+	assert.Contains(t, out, "wt() { treeman create \"$@\"; }")
 }
 
 func TestInitCmd_Fish(t *testing.T) {
@@ -141,11 +136,12 @@ func TestInitCmd_Fish(t *testing.T) {
 
 	out := buf.String()
 	assert.NotContains(t, out, "\x1b")
-	assert.Contains(t, out, "treeman init fish | source")
+	assert.Contains(t, out, "treeman shell init fish")
 	assert.Contains(t, out, "function wt")
-	assert.Contains(t, out, "set -l _tm_dir (treeman create $argv); or return $status")
-	assert.Contains(t, out, "test -n \"$_tm_dir\"; and cd \"$_tm_dir\"")
-	assert.Contains(t, out, "function wtc\n  set -l _tm_dir (treeman clean $argv); or return $status\n  test -n \"$_tm_dir\"; and cd \"$_tm_dir\"\nend")
+	assert.Contains(t, out, "function treeman")
+	assert.Contains(t, out, "set -l _tm_output (command treeman $argv)")
+	assert.Contains(t, out, "if test -d \"$_tm_output\"")
+	assert.Contains(t, out, "function wtc; treeman clean $argv; end")
 	assert.NotContains(t, out, "function lg")
 }
 

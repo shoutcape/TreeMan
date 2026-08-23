@@ -11,6 +11,26 @@ print_step() { echo "==> $1"; }
 print_done() { echo "    done."; }
 print_warn() { echo "    warning: $1"; }
 
+remove_managed_block() {
+  local rc_file="$1"
+  if [[ ! -f "$rc_file" ]]; then
+    return
+  fi
+  if grep -qF '# >>> TreeMan shell integration >>>' "$rc_file" 2>/dev/null; then
+    if ! grep -qF '# <<< TreeMan shell integration <<<' "$rc_file" 2>/dev/null; then
+      print_warn "TreeMan integration block in $rc_file is malformed; leaving it unchanged."
+      return
+    fi
+    print_step "Removing TreeMan from $rc_file..."
+    awk '
+      $0 == "# >>> TreeMan shell integration >>>" { removing = 1; next }
+      $0 == "# <<< TreeMan shell integration <<<" && removing { removing = 0; next }
+      !removing { print }
+    ' "$rc_file" > "${rc_file}.tmp" && mv "${rc_file}.tmp" "$rc_file"
+    print_done
+  fi
+}
+
 # Remove exact TreeMan integration blocks from a shell rc file.
 # The current block is:
 #   # TreeMan
@@ -42,6 +62,15 @@ remove_from_rc() {
     print_done
   fi
 }
+
+if [[ -x "$INSTALL_DIR/bin/treeman" ]]; then
+  "$INSTALL_DIR/bin/treeman" shell uninstall --all
+else
+  remove_managed_block "$HOME/.zshrc"
+  remove_managed_block "$HOME/.bashrc"
+  remove_managed_block "$HOME/.bash_profile"
+  remove_managed_block "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+fi
 
 remove_from_rc "$HOME/.zshrc"
 remove_from_rc "$HOME/.bashrc"
