@@ -30,7 +30,9 @@ Remove the curl installer directory before you install with Homebrew:
 rm -rf ~/.treeman/bin
 ```
 
-Alternatively, make sure the Homebrew `bin` directory has priority in `PATH`. Keep only one TreeMan shell initialization block.
+Alternatively, give the Homebrew `bin` directory priority in `PATH`.
+
+Remove the TreeMan shell initialization block from the curl installer.
 
 ## Release Binary
 
