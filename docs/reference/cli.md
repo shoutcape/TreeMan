@@ -79,7 +79,7 @@ treeman delete --path <path> --branch <branch> [--yes] [--force]
 
 `--path` and `--branch` use direct mode. Direct mode requires both flags. `--yes` and `-y` skip confirmation.
 
-TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion cleans a branch database, removes the worktree, and deletes the branch before the command returns.
+TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion prepares branch database cleanup, removes the worktree and branch, then drops the prepared database before the command returns.
 
 TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files. `--yes` skips the confirmation prompt but does not bypass safety checks.
 
@@ -91,7 +91,7 @@ When the deleted worktree is the current directory, TreeMan prints the main work
 treeman list [--json]
 ```
 
-List the repository worktrees with branch, path, main, current, dirty, and merged state. TreeMan fetches the default branch before checking merge state. A `YES` value in the `MERGED` column means the local branch is merged into the default branch on `origin`. If `origin` is unavailable, merged state is left blank. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields for scripts and agents.
+List the repository worktrees with branch, path, main, current, dirty, and merged state. TreeMan fetches the default branch before checking merge state. A `YES` value in the `MERGED` column means that the branch tip is an ancestor of the fetched default branch on `origin`, or that the remote branch is gone and GitHub or GitLab confirms a squash or rebase merge with the same source branch, target branch, and head commit. If TreeMan cannot detect or fetch the default branch, merged state is left blank. If forge verification is unavailable, only forge-confirmed results are left blank; normal Git ancestry results still show `YES`. TreeMan shows a warning when it detects a forge but cannot query it. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields for scripts and agents.
 
 `wtl` is a shell shortcut for `treeman list`.
 
@@ -101,7 +101,7 @@ List the repository worktrees with branch, path, main, current, dirty, and merge
 treeman clean [--dry-run] [--yes]
 ```
 
-`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into `origin/main` or `origin/master`. Branches merged via squash or rebase (whose remote branch was deleted after merge) also qualify when `gh` or `glab` reports a merged PR/MR whose head commit equals the local branch tip; without that confirmation such branches are retained. It does not remove detached worktrees or the default branch. If it removes the current worktree, it prints the main worktree path so the `wtc` shell wrapper returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the fetched `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path so the `wtc` shell wrapper returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
 
 ## `init`
 

@@ -53,7 +53,7 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		}
 		branchNames = append(branchNames, entry.Branch)
 	}
-	verified, warning, err := classifyCleanable("origin/"+defaultBranch, branchNames)
+	verified, warning, err := classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames)
 	if err != nil {
 		return err
 	}

@@ -43,6 +43,8 @@ TreeMan requests at most 100 remote branches. It also requests at most 100 open 
 
 TreeMan excludes the detected default branch and existing local branches. It gets protected-branch data but does not use it to filter branches.
 
+For squash- and rebase-merge cleanup, TreeMan verifies each remote-gone local branch by both source branch name and exact head SHA. It runs at most four bounded forge requests at once, so verification scales with current worktrees rather than historical PR or MR volume. GitHub fork PRs are included.
+
 ## Authentication Errors
 
 Run the forge CLI command directly when TreeMan reports an API error.

@@ -65,7 +65,7 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 				}
 			}
 			var warning string
-			verified, warning, err = classifyCleanable("origin/"+defaultBranch, branchNames)
+			verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames)
 			if err != nil {
 				verified = map[string]string{}
 			} else if warning != "" {

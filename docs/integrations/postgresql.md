@@ -43,7 +43,7 @@ TreeMan runs `psql` through `docker exec`. Docker access and a PostgreSQL client
 
 ## Delete a Branch Database
 
-TreeMan reads the worktree environment file before it removes the worktree. It drops the database only when its name contains `__`.
+TreeMan reads and prepares the worktree database target before it removes the worktree. It drops the database only after it removes both the worktree and branch, and only when its name contains `__`.
 
 This check helps protect the base database. It does not prove that the database belongs to the worktree.
 
