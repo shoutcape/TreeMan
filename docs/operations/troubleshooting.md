@@ -33,12 +33,13 @@ Check these items:
 3. The configured environment key exists in copied `.env`.
 4. The URI starts with `postgres://` or `postgresql://`.
 5. The Docker container has `psql` and accepts the URI user.
+6. Exactly one PostgreSQL container publishes the local URI port, or `[database].container` names the intended running container.
 
 Database setup is warning-only. Read [Branch Databases](../integrations/postgresql.md).
 
 ## Delete Finished With an Error
 
-TreeMan returns deletion errors immediately. Correct the reported Git or database issue, then run the command again.
+TreeMan returns Git deletion errors immediately. A failed owned database drop is retained as pending state and retried by `treeman clean`. Legacy databases without TreeMan ownership metadata are preserved and reported as warnings.
 
 Verify Git worktree state before manual cleanup.
 

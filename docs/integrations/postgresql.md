@@ -9,6 +9,7 @@ Put this text in `.treeman.toml`.
 ```toml
 [database]
 env_key = "DATABASE_URI"
+container = "project-postgres-1" # optional
 ```
 
 Put a PostgreSQL URI in a root-level environment file.
@@ -17,41 +18,35 @@ Put a PostgreSQL URI in a root-level environment file.
 DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp
 ```
 
-TreeMan accepts `postgres://` and `postgresql://` URIs. It skips other URI types.
+TreeMan accepts `postgres://` and `postgresql://` URIs. It skips other URI types. `container` is optional, but required for remote database hosts, unexposed ports, and ambiguous local Docker environments.
 
 ## Create a Branch Database
 
 TreeMan copies environment files before database setup. It reads the configured key from the copied `.env` file.
 
-It makes this database name:
+It makes a readable, collision-resistant database name:
 
 ```text
-<base-database>__<branch-slug>
+<base-prefix>__<branch-prefix>_<repository-and-branch-hash>
 ```
 
-For database names, TreeMan changes `/`, `-`, and `.` to `_`. PostgreSQL names have a 63-character limit. TreeMan truncates longer names.
+TreeMan normalizes readable prefixes and reserves a stable hash of the repository and full branch name. It keeps names within PostgreSQL's 63-byte identifier limit without splitting UTF-8 characters.
 
-Two long branch names can produce the same truncated database name.
+TreeMan takes one snapshot of running Docker containers. It uses the configured `container` exactly when set. Otherwise, it requires exactly one PostgreSQL-image container publishing the URI port on `localhost`, `127.0.0.1`, or `::1`. It refuses ambiguous or remote targets instead of guessing.
 
-TreeMan finds a running PostgreSQL container in this order:
-
-1. A container that publishes the URI port.
-2. A container from the `postgres` image.
-3. A container with `postgres` in its image name.
-
-TreeMan runs `psql` through `docker exec`. Docker access and a PostgreSQL client inside the container are required.
+TreeMan runs `psql` through `docker exec` against the `postgres` maintenance database. Docker access, a PostgreSQL client inside the container, and a user permitted to create and drop databases are required.
 
 ## Delete a Branch Database
 
-TreeMan reads and prepares the worktree database target before it removes the worktree. It drops the database only after it removes both the worktree and branch, and only when its name contains `__`.
+TreeMan records a database ownership record in Git's common directory before setup completes. It reads that record before removing the worktree, marks it pending only after both worktree and branch deletion succeed, then drops the recorded database.
 
-This check helps protect the base database. It does not prove that the database belongs to the worktree.
+TreeMan never authorizes deletion from the current `.env` value. Older branch databases without an ownership record are preserved with a warning and require manual cleanup.
 
 ## Failure Rules
 
-Database actions are warning-only. TreeMan can create a database and then fail to rewrite the environment file. This leaves an orphan database.
+Database actions are warning-only. If environment rewriting fails, TreeMan immediately attempts to drop the newly created database. If that fails, it retains a pending ownership record for recovery.
 
-Use `docker exec` and `psql` to remove an orphan database after you verify its name.
+After Git deletion, failed drops remain pending and a later `treeman clean` retries them. Use `docker exec` and `psql` only when recovering a legacy database without ownership metadata.
 
 > [!warning]
 > TreeMan safely escapes branch database names before using them as PostgreSQL identifiers.

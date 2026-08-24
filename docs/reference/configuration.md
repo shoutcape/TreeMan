@@ -11,6 +11,7 @@ update_gitignore = true
 
 [database]
 env_key = "DATABASE_URI"
+container = "project-postgres-1"
 
 [hooks]
 post_create = ["pnpm generate", "git status --short"]
@@ -29,9 +30,12 @@ When `true`, TreeMan appends `.worktrees/` to the root `.gitignore` the first ti
 ```toml
 [database]
 env_key = "DATABASE_URI"
+container = "project-postgres-1"
 ```
 
 `env_key` is required when `[database]` exists. It identifies a PostgreSQL URI in the copied `.env` file.
+
+`container` is optional. It names the running Docker container that hosts PostgreSQL. Without it, TreeMan requires exactly one PostgreSQL container publishing the URI port on a local host. Set it for remote URI hosts, unexposed Docker ports, or machines with multiple matching containers.
 
 Read [Branch Databases](../integrations/postgresql.md).
 

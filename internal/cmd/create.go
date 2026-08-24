@@ -130,7 +130,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		dbEnvKey := cfgResult.Config.DatabaseEnvKey()
 		databaseStatus = "skipped (database management not configured)"
 		if dbEnvKey != "" {
-			dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey)
+			dbResult, dbErr := database.SetupBranchDB(worktreePath, branch, dbEnvKey, cfgResult.Config.DatabaseContainer())
 			switch {
 			case dbErr != nil:
 				fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))

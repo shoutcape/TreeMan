@@ -1,8 +1,9 @@
 package database
 
 import (
-	"fmt"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -10,400 +11,235 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubDocker replaces the docker-dependent function variables with test stubs
-// and returns a cleanup function that restores the originals. The stubs record
-// calls and return configurable results.
-type dockerStubs struct {
-	// FindContainer controls what FindPostgresContainer returns.
-	FindContainer    string
-	FindContainerErr error
-
-	// CreateDB controls what CreateDatabase returns.
-	CreateDBErr error
-
-	// DropDB controls what DropDatabase returns.
-	DropDBErr error
-
-	// Recorded calls for assertions.
-	FindCalls  []string // port arguments
-	CreateArgs []createCall
-	DropArgs   []dropCall
+type testResolver struct {
+	target ContainerTarget
+	err    error
+	calls  int
 }
 
-type createCall struct {
-	Container string
-	BaseURI   string
-	DBName    string
+func (r *testResolver) Resolve(string, string, string) (ContainerTarget, error) {
+	r.calls++
+	return r.target, r.err
 }
 
-type dropCall struct {
-	Container string
-	BaseURI   string
-	DBName    string
-}
-
-func (s *dockerStubs) install(t *testing.T) {
+func newDatabaseWorktree(t *testing.T) (string, string) {
 	t.Helper()
-	origFind := findPostgresContainerFn
-	origCreate := createDatabaseFn
-	origDrop := dropDatabaseFn
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README"), []byte("test\n"), 0o644))
+	runGit(t, repo, "add", "README")
+	runGit(t, repo, "commit", "-m", "initial")
+	worktree := filepath.Join(t.TempDir(), "feature")
+	runGit(t, repo, "worktree", "add", "-b", "feature/test", worktree)
+	return repo, worktree
+}
 
-	findPostgresContainerFn = func(port string) (string, error) {
-		s.FindCalls = append(s.FindCalls, port)
-		return s.FindContainer, s.FindContainerErr
-	}
-	createDatabaseFn = func(container, baseURI, dbName string) error {
-		s.CreateArgs = append(s.CreateArgs, createCall{container, baseURI, dbName})
-		return s.CreateDBErr
-	}
-	dropDatabaseFn = func(container, baseURI, dbName string) error {
-		s.DropArgs = append(s.DropArgs, dropCall{container, baseURI, dbName})
-		return s.DropDBErr
-	}
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "git %v: %s", args, output)
+}
 
+func installDatabaseStubs(t *testing.T, resolver ContainerResolver, create func(string, string, string) error, drop func(string, string, []string) error) {
+	t.Helper()
+	originalResolver := newContainerResolverFn
+	originalCreate := createDatabaseFn
+	originalDrop := dropDatabasesFn
+	newContainerResolverFn = func() (ContainerResolver, error) { return resolver, nil }
+	createDatabaseFn = create
+	dropDatabasesFn = drop
 	t.Cleanup(func() {
-		findPostgresContainerFn = origFind
-		createDatabaseFn = origCreate
-		dropDatabaseFn = origDrop
+		newContainerResolverFn = originalResolver
+		createDatabaseFn = originalCreate
+		dropDatabasesFn = originalDrop
 	})
 }
 
-// writeEnv is a test helper that creates a .env file in dir.
-func writeEnv(t *testing.T, dir, content string) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0600))
-}
+func TestSetupPersistsOwnershipWithoutCredentials(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app:secret@127.0.0.1:5432/myapp\n"), 0o640))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	var created string
+	installDatabaseStubs(t, resolver, func(_, _, name string) error { created = name; return nil }, func(string, string, []string) error { return nil })
 
-func cleanupBranchDB(worktreePath, envKey string) error {
-	plan, err := PrepareBranchDBCleanup(worktreePath, envKey)
-	if err != nil {
-		return err
-	}
-	return ExecuteBranchDBCleanup(plan)
-}
-
-// --- SetupBranchDB tests ---
-
-func TestSetupBranchDB_EmptyEnvKey(t *testing.T) {
-	result, err := SetupBranchDB("/any/path", "feature/branch", "")
+	result, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
-	assert.True(t, result.Skipped)
-	assert.Equal(t, "", result.DBName)
-}
-
-func TestSetupBranchDB_NoEnvFile(t *testing.T) {
-	dir := t.TempDir()
-	// No .env file -- ReadDatabaseURI returns "" with no error.
-	result, err := SetupBranchDB(dir, "feature/branch", "DATABASE_URI")
+	assert.Equal(t, created, result.DBName)
+	assert.Equal(t, 1, resolver.calls)
+	value, err := ReadEnvValue(worktree, "DATABASE_URL")
 	require.NoError(t, err)
-	assert.True(t, result.Skipped)
-}
-
-func TestSetupBranchDB_EnvKeyNotInFile(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "OTHER_VAR=some_value\n")
-
-	result, err := SetupBranchDB(dir, "feature/branch", "DATABASE_URI")
+	assert.Contains(t, value, result.DBName)
+	info, err := os.Stat(filepath.Join(worktree, ".env"))
 	require.NoError(t, err)
-	assert.True(t, result.Skipped)
-}
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
 
-func TestSetupBranchDB_NonPostgresURI(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=mysql://user:pass@host:3306/mydb\n")
-
-	result, err := SetupBranchDB(dir, "feature/branch", "DATABASE_URI")
+	store, worktreeID, err := databaseStoreForWorktree(worktree)
 	require.NoError(t, err)
-	assert.True(t, result.Skipped)
+	record, err := store.load(worktreeID)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.Equal(t, databaseStatusActive, record.Status)
+	assert.Equal(t, result.DBName, record.Database)
+	assert.Empty(t, record.Container)
+	assert.NotContains(t, mustMarshalRecord(t, record), "secret")
 }
 
-func TestSetupBranchDB_InvalidPostgresURI(t *testing.T) {
-	dir := t.TempDir()
-	// postgres:// scheme but no database in path.
-	writeEnv(t, dir, "DATABASE_URI=postgres://user:pass@host:5432\n")
+func TestSetupRollsBackWhenEnvironmentRewriteFails(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	target := filepath.Join(worktree, "outside-env")
+	require.NoError(t, os.WriteFile(target, []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(worktree, ".env")))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	dropped := 0
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { dropped++; return nil })
 
-	_, err := SetupBranchDB(dir, "feature/branch", "DATABASE_URI")
+	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
+	require.ErrorContains(t, err, "refusing to rewrite symlinked")
+	assert.Equal(t, 1, dropped)
+	store, worktreeID, storeErr := databaseStoreForWorktree(worktree)
+	require.NoError(t, storeErr)
+	record, loadErr := store.load(worktreeID)
+	require.NoError(t, loadErr)
+	require.NotNil(t, record)
+	assert.Equal(t, databaseStatusSetupPending, record.Status)
+}
+
+func TestSetupRetryRecreatesDatabaseAfterRewriteRollback(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	target := filepath.Join(worktree, "outside-env")
+	require.NoError(t, os.WriteFile(target, []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(worktree, ".env")))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	creates := 0
+	drops := 0
+	installDatabaseStubs(t, resolver, func(string, string, string) error { creates++; return nil }, func(string, string, []string) error { drops++; return nil })
+
+	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parsing DATABASE_URI")
+	require.NoError(t, os.Remove(filepath.Join(worktree, ".env")))
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+
+	result, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
+	require.NoError(t, err)
+	assert.Equal(t, 2, creates)
+	assert.Equal(t, 1, drops)
+	value, err := ReadEnvValue(worktree, "DATABASE_URL")
+	require.NoError(t, err)
+	assert.Contains(t, value, result.DBName)
 }
 
-func TestSetupBranchDB_FindContainerFails(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp\n")
+func TestCleanupUsesRecordAfterEnvironmentRemoval(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	var dropped []string
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(_ string, _ string, names []string) error { dropped = append(dropped, names...); return nil })
+	result, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(worktree, ".env")))
 
-	stubs := &dockerStubs{
-		FindContainerErr: fmt.Errorf("docker not available"),
-	}
-	stubs.install(t)
-
-	_, err := SetupBranchDB(dir, "feat/add-users", "DATABASE_URI")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "finding postgres container")
-	assert.Contains(t, err.Error(), "docker not available")
-
-	// Should have tried to find a container with the port from the URI.
-	require.Len(t, stubs.FindCalls, 1)
-	assert.Equal(t, "5432", stubs.FindCalls[0])
+	session := NewCleanupSession()
+	session.resolver = resolver
+	ticket, err := session.Prepare(worktree)
+	require.NoError(t, err)
+	require.NotNil(t, ticket)
+	require.NoError(t, session.MarkDeleted(ticket))
+	require.NoError(t, session.Flush())
+	assert.Equal(t, []string{result.DBName}, dropped)
+	store, worktreeID, storeErr := databaseStoreForWorktree(worktree)
+	require.NoError(t, storeErr)
+	record, loadErr := store.load(worktreeID)
+	require.NoError(t, loadErr)
+	assert.Nil(t, record)
 }
 
-func TestSetupBranchDB_CreateDatabaseFails(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "my-postgres-1",
-		CreateDBErr:   fmt.Errorf("permission denied"),
-	}
-	stubs.install(t)
-
-	_, err := SetupBranchDB(dir, "feat/add-users", "DATABASE_URI")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "creating database")
-	assert.Contains(t, err.Error(), "permission denied")
-
-	// Should have called create with the correct args.
-	require.Len(t, stubs.CreateArgs, 1)
-	assert.Equal(t, "my-postgres-1", stubs.CreateArgs[0].Container)
-	assert.Equal(t, "myapp__feat_add_users", stubs.CreateArgs[0].DBName)
-}
-
-func TestSetupBranchDB_Success(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "NODE_ENV=development\nDATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp\nSECRET=abc\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "my-postgres-1",
-	}
-	stubs.install(t)
-
-	result, err := SetupBranchDB(dir, "jd/fix-123/add-user-auth", "DATABASE_URI")
-	require.NoError(t, err)
-	assert.False(t, result.Skipped)
-	assert.Equal(t, "myapp__jd_fix_123_add_user_auth", result.DBName)
-
-	// Verify docker interactions.
-	require.Len(t, stubs.FindCalls, 1)
-	assert.Equal(t, "5432", stubs.FindCalls[0])
-
-	require.Len(t, stubs.CreateArgs, 1)
-	assert.Equal(t, "my-postgres-1", stubs.CreateArgs[0].Container)
-	assert.Equal(t, "postgres://postgres:postgres@127.0.0.1:5432", stubs.CreateArgs[0].BaseURI)
-	assert.Equal(t, "myapp__jd_fix_123_add_user_auth", stubs.CreateArgs[0].DBName)
-
-	// Verify .env was rewritten with the branch-specific database.
-	got, err := ReadEnvValue(dir, "DATABASE_URI")
-	require.NoError(t, err)
-	assert.Equal(t, "postgres://postgres:postgres@127.0.0.1:5432/myapp__jd_fix_123_add_user_auth", got)
-
-	// Verify other env vars are untouched.
-	nodeEnv, err := ReadEnvValue(dir, "NODE_ENV")
-	require.NoError(t, err)
-	assert.Equal(t, "development", nodeEnv)
-}
-
-func TestSetupBranchDB_SuccessWithQueryParams(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://user:pass@host:5432/mydb?sslmode=verify-full\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "pg-1",
-	}
-	stubs.install(t)
-
-	result, err := SetupBranchDB(dir, "hotfix", "DATABASE_URI")
-	require.NoError(t, err)
-	assert.Equal(t, "mydb__hotfix", result.DBName)
-
-	// Verify query params are preserved in the rewritten URI.
-	got, err := ReadEnvValue(dir, "DATABASE_URI")
-	require.NoError(t, err)
-	assert.Equal(t, "postgres://user:pass@host:5432/mydb__hotfix?sslmode=verify-full", got)
-}
-
-func TestSetupBranchDB_PostgresqlScheme(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URL=postgresql://user:pass@localhost:5432/testdb\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "pg-1",
-	}
-	stubs.install(t)
-
-	result, err := SetupBranchDB(dir, "feat/v2.0-support", "DATABASE_URL")
-	require.NoError(t, err)
-	assert.False(t, result.Skipped)
-	assert.Equal(t, "testdb__feat_v2_0_support", result.DBName)
-}
-
-func TestSetupBranchDB_QuotedEnvValue(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=\"postgres://postgres:postgres@127.0.0.1:5432/myapp\"\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "pg-1",
-	}
-	stubs.install(t)
-
-	result, err := SetupBranchDB(dir, "fix/bug", "DATABASE_URI")
-	require.NoError(t, err)
-	assert.Equal(t, "myapp__fix_bug", result.DBName)
-}
-
-// --- CleanupBranchDB tests ---
-
-func TestPrepareBranchDBCleanupSnapshotsTargetBeforeWorktreeRemoval(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp__feature\n")
-	stubs := &dockerStubs{FindContainer: "postgres-1"}
-	stubs.install(t)
-
-	plan, err := PrepareBranchDBCleanup(dir, "DATABASE_URI")
-
-	require.NoError(t, err)
-	require.NotNil(t, plan)
-	assert.Equal(t, "postgres-1", plan.container)
-	assert.Equal(t, "myapp__feature", plan.dbName)
-	assert.Empty(t, stubs.DropArgs)
-	require.NoError(t, os.Remove(filepath.Join(dir, ".env")))
-	require.NoError(t, ExecuteBranchDBCleanup(plan))
-	require.Len(t, stubs.DropArgs, 1)
-	assert.Equal(t, "myapp__feature", stubs.DropArgs[0].DBName)
-}
-
-func TestPrepareBranchDBCleanupReturnsNilWhenNoCleanupApplies(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=mysql://user:pass@host:3306/mydb\n")
-
-	plan, err := PrepareBranchDBCleanup(dir, "DATABASE_URI")
-
+func TestCleanupDoesNotAuthorizeLegacyEnvironmentName(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp__feature\n"), 0o600))
+	plan, err := NewCleanupSession().Prepare(worktree)
 	require.NoError(t, err)
 	assert.Nil(t, plan)
+	legacy, err := LegacyBranchDatabase(worktree, "DATABASE_URL")
+	require.NoError(t, err)
+	assert.Equal(t, "myapp__feature", legacy)
 }
 
-func TestExecuteBranchDBCleanupRejectsUnpreparedPlan(t *testing.T) {
-	stubs := &dockerStubs{}
-	stubs.install(t)
+func TestCleanRetriesPendingCleanupAfterWorktreeIsGone(t *testing.T) {
+	repo, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	var drops int
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
+	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
+	require.NoError(t, err)
+	session := NewCleanupSession()
+	session.resolver = resolver
+	plan, err := session.Prepare(worktree)
+	require.NoError(t, err)
+	require.NoError(t, session.MarkDeleted(plan))
+	require.NoError(t, os.RemoveAll(worktree))
 
-	err := ExecuteBranchDBCleanup(&CleanupPlan{})
-
-	require.EqualError(t, err, "invalid database cleanup plan")
-	assert.Empty(t, stubs.DropArgs)
+	retrySession := NewCleanupSession()
+	retrySession.resolver = resolver
+	retried, err := retrySession.RetryPending(repo)
+	require.NoError(t, err)
+	assert.Equal(t, 1, retried)
+	assert.Equal(t, 1, drops)
 }
 
-func TestCleanupBranchDB_EmptyEnvKey(t *testing.T) {
-	err := cleanupBranchDB("/any/path", "")
-	assert.NoError(t, err)
+func TestCleanRetriesOrphanedActiveCleanup(t *testing.T) {
+	repo, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	drops := 0
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
+	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(worktree))
+
+	session := NewCleanupSession()
+	session.resolver = resolver
+	retried, err := session.RetryPending(repo)
+	require.NoError(t, err)
+	assert.Equal(t, 1, retried)
+	assert.Equal(t, 1, drops)
 }
 
-func TestCleanupBranchDB_NoEnvFile(t *testing.T) {
-	dir := t.TempDir()
-	err := cleanupBranchDB(dir, "DATABASE_URI")
-	assert.NoError(t, err)
-}
-
-func TestCleanupBranchDB_EnvKeyNotInFile(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "OTHER_VAR=some_value\n")
-
-	err := cleanupBranchDB(dir, "DATABASE_URI")
-	assert.NoError(t, err)
-}
-
-func TestCleanupBranchDB_NonPostgresURI(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=mysql://user:pass@host:3306/mydb\n")
-
-	err := cleanupBranchDB(dir, "DATABASE_URI")
-	assert.NoError(t, err)
-}
-
-func TestCleanupBranchDB_SafetyRefusesMainDB(t *testing.T) {
-	dir := t.TempDir()
-	// URI points to "myapp" (no "__" separator) -- should NOT be dropped.
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "pg-1",
-	}
-	stubs.install(t)
-
-	err := cleanupBranchDB(dir, "DATABASE_URI")
-	assert.NoError(t, err)
-
-	// Docker functions should NOT have been called.
-	assert.Empty(t, stubs.FindCalls)
-	assert.Empty(t, stubs.DropArgs)
-}
-
-func TestCleanupBranchDB_InvalidPostgresURI(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://user:pass@host:5432\n")
-
-	_, err := SetupBranchDB(dir, "feature/branch", "DATABASE_URI")
-	require.Error(t, err)
-}
-
-func TestCleanupBranchDB_FindContainerFails(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp__feat_branch\n")
-
-	stubs := &dockerStubs{
-		FindContainerErr: fmt.Errorf("docker not running"),
-	}
-	stubs.install(t)
-
-	err := cleanupBranchDB(dir, "DATABASE_URI")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "finding postgres container")
-}
-
-func TestCleanupBranchDB_DropFails(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp__feat_branch\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "pg-1",
-		DropDBErr:     fmt.Errorf("database in use"),
-	}
-	stubs.install(t)
-
-	err := cleanupBranchDB(dir, "DATABASE_URI")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "dropping database")
-	assert.Contains(t, err.Error(), "database in use")
-}
-
-func TestCleanupBranchDB_Success(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp__jd_fix_123\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "my-postgres-1",
-	}
-	stubs.install(t)
-
-	err := cleanupBranchDB(dir, "DATABASE_URI")
+func TestCleanupNeverDropsUnmarkedRecord(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	drops := 0
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
+	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 
-	// Verify drop was called with the correct args.
-	require.Len(t, stubs.DropArgs, 1)
-	assert.Equal(t, "my-postgres-1", stubs.DropArgs[0].Container)
-	assert.Equal(t, "postgres://postgres:postgres@127.0.0.1:5432", stubs.DropArgs[0].BaseURI)
-	assert.Equal(t, "myapp__jd_fix_123", stubs.DropArgs[0].DBName)
+	session := NewCleanupSession()
+	session.resolver = resolver
+	ticket, err := session.Prepare(worktree)
+	require.NoError(t, err)
+	require.NotNil(t, ticket)
+	err = executeCleanupBatch([]*cleanupPlan{ticket.plan})
+	require.ErrorContains(t, err, "changed before cleanup")
+	assert.Zero(t, drops)
 }
 
-func TestCleanupBranchDB_PostgresqlScheme(t *testing.T) {
-	dir := t.TempDir()
-	writeEnv(t, dir, "DATABASE_URL=postgresql://user:pass@host:5432/testdb__feat_v2\n")
-
-	stubs := &dockerStubs{
-		FindContainer: "pg-1",
-	}
-	stubs.install(t)
-
-	err := cleanupBranchDB(dir, "DATABASE_URL")
+func TestWorktreeMissingFailsClosed(t *testing.T) {
+	missing, err := worktreeMissing(filepath.Join(t.TempDir(), "missing"))
 	require.NoError(t, err)
+	assert.True(t, missing)
 
-	require.Len(t, stubs.DropArgs, 1)
-	assert.Equal(t, "testdb__feat_v2", stubs.DropArgs[0].DBName)
+	missing, err = worktreeMissing(t.TempDir())
+	require.NoError(t, err)
+	assert.False(t, missing)
+}
+
+func mustMarshalRecord(t *testing.T, record *DatabaseRecord) string {
+	t.Helper()
+	data, err := json.Marshal(record)
+	require.NoError(t, err)
+	return string(data)
 }

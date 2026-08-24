@@ -173,7 +173,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	// Set up branch-specific database (best-effort, non-fatal).
 	if !setupOptions.skipDatabase {
 		dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-		dbResult, dbErr := database.SetupBranchDB(worktreePath, info.Branch, dbEnvKey)
+		dbResult, dbErr := database.SetupBranchDB(worktreePath, info.Branch, dbEnvKey, cfgResult.Config.DatabaseContainer())
 		switch {
 		case dbErr != nil:
 			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))

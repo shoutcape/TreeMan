@@ -18,7 +18,7 @@ TreeMan tries to add `.worktrees/` to the main `.gitignore`. This action is warn
 
 TreeMan copies each root-level, non-directory file with a name that starts with `.env`. Examples include `.env`, `.env.local`, and `.env.test`.
 
-The copy overwrites a destination file. TreeMan preserves source permissions during the copy. A branch-database rewrite changes the rewritten file mode to `0600`.
+The copy overwrites a destination file. TreeMan preserves source permissions during the copy. A branch-database rewrite preserves the current file mode, writes atomically, and refuses to follow a symlink.
 
 Copy failures create warnings and do not stop creation.
 
@@ -47,5 +47,6 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Worktree directories | Git and file system |
 | Environment values | `.env*` files |
 | Branch databases | Docker PostgreSQL container |
+| Branch database ownership and pending cleanup | `<git-common-dir>/treeman/databases/` |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
 | Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |

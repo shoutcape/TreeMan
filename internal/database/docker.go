@@ -2,57 +2,106 @@ package database
 
 import (
 	"fmt"
-	"net/url"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
-// FindPostgresContainer discovers a running PostgreSQL container via docker ps.
-// If a port is provided, it tries to match a container exposing that port.
-// Otherwise it falls back to scanning for any postgres container.
-func FindPostgresContainer(port string) (string, error) {
-	// If we have a port, try to find a container publishing that specific port.
-	if port != "" {
-		out, err := exec.Command("docker", "ps",
-			"--filter", "publish="+port,
-			"--format", "{{.Names}}\t{{.Image}}",
-		).CombinedOutput()
-		if err == nil {
-			name := findPostgresInOutput(string(out))
-			if name != "" {
-				return name, nil
-			}
-		}
-	}
-
-	// Fallback: try ancestor filter.
-	out, err := exec.Command("docker", "ps", "--filter", "ancestor=postgres", "--format", "{{.Names}}").CombinedOutput()
-	if err == nil {
-		name := parseContainerName(string(out))
-		if name != "" {
-			return name, nil
-		}
-	}
-
-	// Final fallback: scan all containers for postgres in image name.
-	out, err = exec.Command("docker", "ps", "--format", "{{.Names}}\t{{.Image}}").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("docker ps failed: %w", err)
-	}
-
-	name := findPostgresInOutput(string(out))
-	if name == "" {
-		return "", fmt.Errorf("no running PostgreSQL container found")
-	}
-	return name, nil
+// ContainerTarget identifies a running container selected for database work.
+type ContainerTarget struct {
+	ID   string
+	Name string
 }
 
-// CreateDatabase creates a new database in the given PostgreSQL container.
-// If the database already exists, it returns nil.
-// The user is extracted from the baseURI and psql connects locally inside
-// the container (avoiding network address ambiguity).
-func CreateDatabase(container, baseURI, dbName string) error {
-	args := buildPsqlArgs(container, baseURI, dbName)
+// ContainerResolver resolves configured containers or unambiguous local port
+// matches from one Docker snapshot.
+type ContainerResolver interface {
+	Resolve(host, port, configuredName string) (ContainerTarget, error)
+}
+
+type dockerContainer struct {
+	ID    string
+	Name  string
+	Image string
+	Ports string
+}
+
+type containerResolver struct {
+	containers []dockerContainer
+}
+
+// NewContainerResolver loads running Docker containers once. Reusing the
+// resolver lets bulk cleanup avoid repeated docker ps calls.
+func NewContainerResolver() (ContainerResolver, error) {
+	out, err := exec.Command("docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("docker ps failed: %w", err)
+	}
+	containers := make([]dockerContainer, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		container := dockerContainer{
+			ID:    strings.TrimSpace(parts[0]),
+			Name:  strings.TrimSpace(parts[1]),
+			Image: strings.TrimSpace(parts[2]),
+			Ports: strings.TrimSpace(parts[3]),
+		}
+		if container.ID != "" && container.Name != "" {
+			containers = append(containers, container)
+		}
+	}
+	return containerResolver{containers: containers}, nil
+}
+
+func (r containerResolver) Resolve(host, port, configuredName string) (ContainerTarget, error) {
+	if configuredName != "" {
+		for _, container := range r.containers {
+			if container.Name == configuredName || container.ID == configuredName {
+				return ContainerTarget{ID: container.ID, Name: container.Name}, nil
+			}
+		}
+		return ContainerTarget{}, fmt.Errorf("configured PostgreSQL container %q is not running", configuredName)
+	}
+	if !isLocalDatabaseHost(host) {
+		return ContainerTarget{}, fmt.Errorf("database host %q requires [database].container", host)
+	}
+	var matches []dockerContainer
+	for _, container := range r.containers {
+		if strings.Contains(strings.ToLower(container.Image), "postgres") && publishesPort(container.Ports, port) {
+			matches = append(matches, container)
+		}
+	}
+	if len(matches) == 0 {
+		return ContainerTarget{}, fmt.Errorf("no running PostgreSQL container publishes port %s", port)
+	}
+	if len(matches) > 1 {
+		names := make([]string, 0, len(matches))
+		for _, match := range matches {
+			names = append(names, match.Name)
+		}
+		sort.Strings(names)
+		return ContainerTarget{}, fmt.Errorf("multiple PostgreSQL containers publish port %s (%s); set [database].container", port, strings.Join(names, ", "))
+	}
+	return ContainerTarget{ID: matches[0].ID, Name: matches[0].Name}, nil
+}
+
+func isLocalDatabaseHost(host string) bool {
+	host = strings.Trim(strings.ToLower(host), "[]")
+	return host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func publishesPort(ports, port string) bool {
+	return strings.Contains(ports, ":"+port+"->")
+}
+
+// CreateDatabase creates a database through the PostgreSQL maintenance
+// database. Callers create the ownership record before invoking this function,
+// so accepting an existing name makes an interrupted setup retryable.
+func CreateDatabase(container, user, dbName string) error {
+	args := buildPsqlArgs(container, user, dbName)
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "already exists") {
@@ -63,80 +112,56 @@ func CreateDatabase(container, baseURI, dbName string) error {
 	return nil
 }
 
-// DropDatabase drops a database in the given PostgreSQL container.
-func DropDatabase(container, baseURI, dbName string) error {
-	args := buildDropArgs(container, baseURI, dbName)
+// DropDatabases terminates active connections and drops a set of owned
+// databases in one psql invocation.
+func DropDatabases(container, user string, dbNames []string) error {
+	if len(dbNames) == 0 {
+		return nil
+	}
+	args := buildDropArgs(container, user, dbNames...)
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("drop database %q failed: %s", dbName, strings.TrimSpace(string(out)))
+		return fmt.Errorf("drop databases failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// extractUser extracts the username from a postgres URI.
-// Falls back to "postgres" if parsing fails.
-func extractUser(baseURI string) string {
-	parsed, err := url.Parse(baseURI)
-	if err != nil || parsed.User == nil {
-		return "postgres"
-	}
-	user := parsed.User.Username()
-	if user == "" {
-		return "postgres"
-	}
-	return user
+// DropDatabase drops one database. It remains available for focused callers.
+func DropDatabase(container, user, dbName string) error {
+	return DropDatabases(container, user, []string{dbName})
 }
 
-// buildPsqlArgs constructs the docker exec arguments for CREATE DATABASE.
-// It uses -U <user> to connect locally inside the container instead of
-// passing the full URI (which would have incorrect network addresses).
-func buildPsqlArgs(container, baseURI, dbName string) []string {
-	user := extractUser(baseURI)
+// buildPsqlArgs constructs docker exec arguments for CREATE DATABASE.
+func buildPsqlArgs(container, user, dbName string) []string {
 	return []string{
 		"exec", container,
-		"psql", "-U", user,
+		"psql", "-U", user, "-d", "postgres",
+		"-v", "ON_ERROR_STOP=1",
 		"-c", fmt.Sprintf("CREATE DATABASE %s", quoteIdentifier(dbName)),
 	}
 }
 
-// buildDropArgs constructs the docker exec arguments for DROP DATABASE IF EXISTS.
-func buildDropArgs(container, baseURI, dbName string) []string {
-	user := extractUser(baseURI)
+// buildDropArgs constructs one psql command for a batch of owned databases.
+func buildDropArgs(container, user string, dbNames ...string) []string {
+	commands := make([]string, 0, len(dbNames)*2)
+	for _, dbName := range dbNames {
+		commands = append(commands,
+			fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", quoteLiteral(dbName)),
+			fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdentifier(dbName)),
+		)
+	}
 	return []string{
 		"exec", container,
-		"psql", "-U", user,
-		"-c", fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdentifier(dbName)),
+		"psql", "-U", user, "-d", "postgres",
+		"-v", "ON_ERROR_STOP=1",
+		"-c", strings.Join(commands, "; "),
 	}
 }
 
-// quoteIdentifier returns name as one PostgreSQL identifier.
 func quoteIdentifier(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// parseContainerName extracts the first non-empty line from docker ps output.
-func parseContainerName(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
-// findPostgresInOutput scans tab-separated "name\timage" lines for a postgres image.
-func findPostgresInOutput(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		name := strings.TrimSpace(parts[0])
-		image := strings.TrimSpace(parts[1])
-		if name != "" && strings.Contains(strings.ToLower(image), "postgres") {
-			return name
-		}
-	}
-	return ""
+func quoteLiteral(value string) string {
+	return `'` + strings.ReplaceAll(value, `'`, `''`) + `'`
 }

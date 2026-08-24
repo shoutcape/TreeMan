@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -46,6 +47,9 @@ type DatabaseConfig struct {
 	// EnvKey is the environment variable name that holds the database URI
 	// (e.g. "DATABASE_URI", "DATABASE_URL"). Required when [database] is present.
 	EnvKey string `toml:"env_key"`
+	// Container optionally names the running Docker container that hosts
+	// PostgreSQL. Without it, TreeMan requires one unambiguous local port match.
+	Container string `toml:"container"`
 }
 
 // DatabaseEnvKey returns the configured env variable name for the database URI.
@@ -55,6 +59,14 @@ func (c Config) DatabaseEnvKey() string {
 		return ""
 	}
 	return c.Database.EnvKey
+}
+
+// DatabaseContainer returns the optional configured PostgreSQL container.
+func (c Config) DatabaseContainer() string {
+	if c.Database == nil {
+		return ""
+	}
+	return c.Database.Container
 }
 
 // PostCreateHooks returns the list of post-create hook commands.
@@ -118,6 +130,12 @@ func Load(dir string) LoadResult {
 		return LoadResult{
 			Path:    path,
 			Warning: fmt.Sprintf("%s: [database] section requires env_key", path),
+		}
+	}
+	if cfg.Database != nil && cfg.Database.Container != "" && strings.TrimSpace(cfg.Database.Container) == "" {
+		return LoadResult{
+			Path:    path,
+			Warning: fmt.Sprintf("%s: [database].container cannot be whitespace", path),
 		}
 	}
 

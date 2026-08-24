@@ -41,7 +41,7 @@ func ReadEnvValue(dir, key string) (string, error) {
 			continue
 		}
 
-		if k == key {
+		if strings.TrimSpace(strings.TrimPrefix(k, "export ")) == key {
 			return stripQuotes(value), nil
 		}
 	}
@@ -60,6 +60,13 @@ func ReadEnvValue(dir, key string) (string, error) {
 func RewriteEnvValue(dir, key, newValue string) error {
 	envPath := filepath.Join(dir, envFileName)
 
+	info, err := os.Lstat(envPath)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", envPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to rewrite symlinked environment file %s", envPath)
+	}
 	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", envPath, err)
@@ -82,7 +89,7 @@ func RewriteEnvValue(dir, key, newValue string) error {
 			continue
 		}
 
-		if k == key {
+		if strings.TrimSpace(strings.TrimPrefix(k, "export ")) == key {
 			lines[i] = key + "=" + newValue
 			found = true
 			break
@@ -94,7 +101,7 @@ func RewriteEnvValue(dir, key, newValue string) error {
 	}
 
 	output := strings.Join(lines, "\n")
-	if err := os.WriteFile(envPath, []byte(output), 0600); err != nil {
+	if err := writePrivateFile(envPath, []byte(output), info.Mode().Perm()); err != nil {
 		return fmt.Errorf("writing %s: %w", envPath, err)
 	}
 
