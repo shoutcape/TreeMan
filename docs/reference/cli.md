@@ -18,6 +18,7 @@ Shell integration uses stdout destinations to change the current interactive she
 | `treeman shell` | None | Install and manage shell integration |
 | `treeman doctor` | None | Check repository readiness and configuration |
 | `treeman theme` | None | Select a terminal color theme |
+| `treeman benchmark` | None | Measure list execution time |
 | `treeman version` | None | Print build data |
 
 ## `create`
@@ -102,6 +103,16 @@ treeman clean [--dry-run] [--yes]
 ```
 
 `clean` checks the detected default branch against the current remote tip and fetches it only when the local tracking ref is missing or differs. It then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the refreshed `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. If fresh remote state cannot be established, `clean` stops without deleting anything. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path so shell integration returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
+
+## `benchmark`
+
+```text
+treeman benchmark [--runs <count>] [--warmup <count>]
+```
+
+Measure `list` repeatedly and report mean, standard deviation, minimum, and maximum execution time. Warmup runs are excluded from the results. `--runs` must be at least one and `--warmup` cannot be negative.
+
+Benchmark results are directional measurements of the list command path. Use request-count tests to verify network-round-trip optimizations. Run with `--warmup 0 --runs 1` when investigating first-run work such as a conditional default-branch fetch.
 
 ## `shell`
 

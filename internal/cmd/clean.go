@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +26,20 @@ func newCleanCmd() *cobra.Command {
 }
 
 func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
+	return runCleanWithClassifier(cmd, merge.NewClassifier(), dryRun, skipConfirm)
+}
+
+type cleanCandidate struct {
+	entry       git.WorktreeEntry
+	verifiedSHA string
+}
+
+type cleanSelection struct {
+	candidates  []cleanCandidate
+	diagnostics []merge.Diagnostic
+}
+
+func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
@@ -43,39 +58,20 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 	}
 
 	out := cmd.ErrOrStderr()
-	var branchNames []string
-	for _, entry := range entries {
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) {
-			continue
-		}
-		branchNames = append(branchNames, entry.Branch)
-	}
-	state, err := refreshMergeState(defaultBranch, branchNames)
+	preview, err := selectCleanCandidates(classifier, defaultBranch, mainRoot, entries)
 	if err != nil {
 		return err
 	}
-	verified, warning, err := classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames, state)
-	if err != nil {
-		return err
-	}
-	if warning != "" {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", warning))
-	}
-
-	var candidates []git.WorktreeEntry
-	for _, entry := range entries {
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) || verified[entry.Branch] == "" {
-			continue
+	writeMergeDiagnostics(out, render, preview.diagnostics)
+	if len(preview.candidates) == 0 {
+		if dryRun {
+			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneInfo, "→", "Would remove 0 merged, clean worktree(s)."))
+			return nil
 		}
-		dirty, err := git.WorktreeDirty(entry.Path)
-		if err != nil {
-			return err
-		}
-		if dirty {
-			continue
-		}
-		candidates = append(candidates, entry)
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", "Removed 0 merged, clean worktree(s)."))
+		return nil
 	}
+	candidates := preview.candidates
 
 	// Remove the current worktree last so its process working directory remains valid.
 	currentRoot, err := git.CurrentWorktreeRoot()
@@ -83,7 +79,7 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		return err
 	}
 	for i := range candidates {
-		if samePath(candidates[i].Path, currentRoot) {
+		if samePath(candidates[i].entry.Path, currentRoot) {
 			candidates = append(append(candidates[:i:i], candidates[i+1:]...), candidates[i])
 			break
 		}
@@ -91,8 +87,8 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 
 	if len(candidates) > 0 {
 		branchWidth := len("BRANCH")
-		for _, entry := range candidates {
-			branchWidth = max(branchWidth, len(entry.Branch))
+		for _, candidate := range candidates {
+			branchWidth = max(branchWidth, len(candidate.entry.Branch))
 		}
 
 		// Stdout is reserved for the main worktree path when the current
@@ -101,8 +97,8 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		fmt.Fprintln(out, render.Muted("Merged, clean worktrees and branches to remove"))
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "BRANCH")), render.Header("WORKTREE"))
-		for _, entry := range candidates {
-			fmt.Fprintf(out, "  %s  %s\n", render.Branch(fmt.Sprintf("%-*s", branchWidth, entry.Branch)), render.Path(entry.Path))
+		for _, candidate := range candidates {
+			fmt.Fprintf(out, "  %s  %s\n", render.Branch(fmt.Sprintf("%-*s", branchWidth, candidate.entry.Branch)), render.Path(candidate.entry.Path))
 		}
 		fmt.Fprintln(out)
 	}
@@ -121,43 +117,114 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 		}
 	}
 	if len(candidates) > 0 {
-		candidateBranches := make([]string, 0, len(candidates))
-		for _, entry := range candidates {
-			candidateBranches = append(candidateBranches, entry.Branch)
-		}
-		state, err := refreshMergeState(defaultBranch, candidateBranches)
+		revalidated, err := selectCleanCandidates(classifier, defaultBranch, mainRoot, cleanCandidateEntries(candidates))
 		if err != nil {
 			return err
 		}
-		verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, candidateBranches, state)
-		if err != nil {
-			return err
-		}
-		if warning != "" {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", warning))
-		}
+		writeMergeDiagnostics(out, render, revalidated.diagnostics)
+		candidates = revalidated.candidates
 	}
 
 	removed := 0
-	for _, entry := range candidates {
-		expectedSHA := verified[entry.Branch]
-		if expectedSHA == "" {
-			continue
-		}
-		dirty, err := git.WorktreeDirty(entry.Path)
-		if err != nil {
-			return err
-		}
-		if dirty {
-			continue
-		}
+	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteWorktreeAtSHA(cmd, entry.Path, entry.Branch, mainRoot, false, true, expectedSHA); err != nil {
+		if err := deleteWorktreeAtSHA(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA); err != nil {
 			return err
 		}
 		removed++
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", removed)))
 	return nil
+}
+
+func selectCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, mainRoot string, entries []git.WorktreeEntry) (cleanSelection, error) {
+	cleanEntries := make([]git.WorktreeEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) {
+			continue
+		}
+		dirty, err := git.WorktreeDirty(entry.Path)
+		if err != nil {
+			return cleanSelection{}, err
+		}
+		if !dirty {
+			cleanEntries = append(cleanEntries, entry)
+		}
+	}
+	if len(cleanEntries) == 0 {
+		return cleanSelection{}, nil
+	}
+
+	branches := make([]string, len(cleanEntries))
+	for index, entry := range cleanEntries {
+		branches[index] = entry.Branch
+	}
+	result, err := classifier(defaultBranch, branches)
+	if err != nil {
+		return cleanSelection{}, err
+	}
+	if err := validateCleanCandidates(branches, result.Cleanable); err != nil {
+		return cleanSelection{}, err
+	}
+	cleanable := make(map[string]merge.Candidate, len(result.Cleanable))
+	for _, candidate := range result.Cleanable {
+		cleanable[candidate.Branch] = candidate
+	}
+	selection := cleanSelection{diagnostics: result.Diagnostics}
+	for _, entry := range cleanEntries {
+		candidate, ok := cleanable[entry.Branch]
+		if ok {
+			selection.candidates = append(selection.candidates, cleanCandidate{entry: entry, verifiedSHA: candidate.SHA})
+		}
+	}
+	return selection, nil
+}
+
+// validateCleanCandidates ensures a classifier result cannot authorize deletion
+// without identifying the exact requested branch tip.
+func validateCleanCandidates(branches []string, candidates []merge.Candidate) error {
+	requested := make(map[string]struct{}, len(branches))
+	for _, branch := range branches {
+		requested[branch] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		branch := candidate.Branch
+		if _, duplicate := seen[branch]; duplicate {
+			return fmt.Errorf("classifier returned duplicate cleanable branch %q", branch)
+		}
+		seen[branch] = struct{}{}
+		if branch == "" {
+			return fmt.Errorf("classifier returned cleanable branch without a name")
+		}
+		if candidate.SHA == "" {
+			return fmt.Errorf("classifier returned cleanable branch %q without a SHA", branch)
+		}
+		if _, ok := requested[branch]; !ok {
+			return fmt.Errorf("classifier returned unknown cleanable branch %q", branch)
+		}
+		sha, err := git.BranchSHA(branch)
+		if err != nil {
+			return fmt.Errorf("could not resolve classifier branch %q: %w", branch, err)
+		}
+		if sha != candidate.SHA {
+			return fmt.Errorf("classifier returned stale SHA for branch %q", branch)
+		}
+	}
+	return nil
+}
+
+func cleanCandidateEntries(candidates []cleanCandidate) []git.WorktreeEntry {
+	entries := make([]git.WorktreeEntry, len(candidates))
+	for index, candidate := range candidates {
+		entries[index] = candidate.entry
+	}
+	return entries
+}
+
+func writeMergeDiagnostics(out interface{ Write([]byte) (int, error) }, render ui.Renderer, diagnostics []merge.Diagnostic) {
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", diagnostic.String()))
+	}
 }

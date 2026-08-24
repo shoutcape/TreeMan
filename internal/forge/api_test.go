@@ -385,6 +385,21 @@ func TestGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestGitLabMergedHeadsRejectsUnchangedCursor(t *testing.T) {
+	previous := gitlabGraphQLCall
+	calls := 0
+	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
+		calls++
+		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[],"pageInfo":{"endCursor":"stuck","hasNextPage":true}}}}}`), nil
+	}
+	t.Cleanup(func() { gitlabGraphQLCall = previous })
+
+	_, err := GitLabMergedHeads("group/project", "gitlab.example", "main", []SnapshotCandidate{{Branch: "feature", SHA: "aaa111"}})
+
+	require.EqualError(t, err, `glab: GitLab merged-MR query cursor did not advance from "stuck"`)
+	assert.Equal(t, 2, calls)
+}
+
 func TestMergedPRHeadError(t *testing.T) {
 	previousAPI := githubAPICall
 	githubAPICall = func(string) ([]byte, error) { return nil, assert.AnError }

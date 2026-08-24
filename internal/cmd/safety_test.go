@@ -231,6 +231,17 @@ func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testi
 	assert.Equal(t, gitRevParse(t, repo, "refs/heads/main"), gitRevParse(t, repo, "refs/heads/feature/verified"))
 }
 
+func TestDeleteWorktreeAtSHARequiresExpectedSHAWhenSkippingMergeCheck(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/verified")
+	chdirForTest(t, repo)
+
+	err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/verified", repo, true, true, "")
+
+	require.EqualError(t, err, "cannot skip merge check for branch \"feature/verified\" without an expected SHA")
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature/verified")
+}
+
 func TestDeleteWorktreeAtSHAPreservesBranchOnCompareAndDeleteMismatch(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/verified")
 	expectedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")

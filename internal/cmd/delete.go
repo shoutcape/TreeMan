@@ -161,6 +161,9 @@ func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, sk
 // cleanup conditional on the exact commit whose merge was verified. Every
 // deletion snapshots its branch SHA and compare-and-deletes that exact ref.
 func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
+	if skipMergeCheck && expectedSHA == "" {
+		return fmt.Errorf("cannot skip merge check for branch %q without an expected SHA", branch)
+	}
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err

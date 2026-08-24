@@ -31,13 +31,12 @@ const (
 // SnapshotBranch contains the remote and merge state for one exact candidate.
 type SnapshotBranch struct {
 	Candidate    SnapshotCandidate
-	RemoteSHA    string
 	RemoteExists bool
 	Verification SnapshotVerification
 }
 
-// GitHubSnapshot is a consistent remote-state read. DefaultSHA is required;
-// Branches retain candidate identity and ordering across query batches.
+// GitHubSnapshot is a batch-consistent remote-state read. DefaultSHA is
+// required; Branches retain candidate identity and ordering across batches.
 type GitHubSnapshot struct {
 	DefaultSHA string
 	Branches   []SnapshotBranch
@@ -183,7 +182,7 @@ func parseGitHubSnapshot(data []byte, defaultBranch string, plan githubSnapshotP
 		if !ok {
 			return GitHubSnapshot{}, fmt.Errorf("gh: GitHub snapshot lacks ref result for %q", slot.candidate.Branch)
 		}
-		remoteSHA, remoteExists, err := parseGitHubSnapshotRef(ref)
+		_, remoteExists, err := parseGitHubSnapshotRef(ref)
 		if err != nil {
 			return GitHubSnapshot{}, fmt.Errorf("gh: parsing ref %q: %w", slot.candidate.Branch, err)
 		}
@@ -203,7 +202,6 @@ func parseGitHubSnapshot(data []byte, defaultBranch string, plan githubSnapshotP
 		}
 		snapshot.Branches = append(snapshot.Branches, SnapshotBranch{
 			Candidate:    slot.candidate,
-			RemoteSHA:    remoteSHA,
 			RemoteExists: remoteExists,
 			Verification: verification,
 		})

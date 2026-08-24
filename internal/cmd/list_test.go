@@ -292,14 +292,14 @@ func TestRunListDetectsSquashMergedBranch(t *testing.T) {
 	// won't catch it. treeman should still mark it merged once the forge
 	// confirms a merged PR/MR whose head SHA equals the local branch tip.
 	repo, _ := createSquashMergedCleanWorktree(t)
-	stubForgeVerifier(t, []string{gitRevParse(t, repo, "refs/heads/feature")}, nil)
+	classifier := stubForgeVerifier(t, []string{gitRevParse(t, repo, "refs/heads/feature")}, nil)
 
 	changeToDir(t, repo)
 
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
-	require.NoError(t, runList(cmd, true))
+	require.NoError(t, runListWithClassifier(cmd, classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
@@ -312,14 +312,14 @@ func TestRunListRemoteGoneWithoutConfirmedMergeNotMarked(t *testing.T) {
 	// merged head SHA matching the local tip the branch must stay unmarked
 	// (and clean will retain it).
 	repo, _ := createSquashMergedCleanWorktree(t)
-	stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
+	classifier := stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
 
 	changeToDir(t, repo)
 
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
-	require.NoError(t, runList(cmd, true))
+	require.NoError(t, runListWithClassifier(cmd, classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))

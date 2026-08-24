@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -37,6 +38,10 @@ func newListCmd() *cobra.Command {
 }
 
 func runList(cmd *cobra.Command, jsonOutput bool) error {
+	return runListWithClassifier(cmd, merge.NewClassifier(), jsonOutput)
+}
+
+func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, jsonOutput bool) error {
 	if !git.IsInsideRepo() {
 		return fmt.Errorf("not inside a git repository")
 	}
@@ -61,17 +66,17 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 				branchNames = append(branchNames, entry.Branch)
 			}
 		}
-		state, stateErr := refreshMergeState(defaultBranch, branchNames)
-		if stateErr != nil {
+		classification, classifyErr := classifier(defaultBranch, branchNames)
+		if classifyErr != nil {
+			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), []merge.Diagnostic{{Kind: merge.DiagnosticUnavailable, Operation: "merge status unavailable", Err: classifyErr}})
 			defaultBranch = ""
 		} else {
-			var warning string
-			verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames, state)
-			if err != nil {
-				verified = map[string]string{}
-			} else if warning != "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), outputRenderer(cmd).Status(ui.ToneWarning, "!", warning))
+			for _, candidate := range classification.Cleanable {
+				if candidate.SHA != "" {
+					verified[candidate.Branch] = candidate.SHA
+				}
 			}
+			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), classification.Diagnostics)
 		}
 	}
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"time"
 
@@ -9,30 +10,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var benchmarkTargets = map[string]func(*cobra.Command) error{
-	"list": func(cmd *cobra.Command) error { return runList(cmd, false) },
-}
-
 func newBenchmarkCmd() *cobra.Command {
 	var runs int
 	var warmup int
 	cmd := &cobra.Command{
-		Use:   "benchmark [command]",
-		Short: "Measure execution time of a treeman command",
-		Long: `Measure execution time of a treeman command.
+		Use:   "benchmark",
+		Short: "Measure execution time of treeman list",
+		Long: `Measure execution time of treeman list.
 
-Runs the target command multiple times and reports mean, min, max, and
-standard deviation. Warmup runs are excluded from results.
-
-Available targets: list`,
-		Args:      cobra.MaximumNArgs(1),
-		ValidArgs: validBenchmarkTargets(),
+Runs list multiple times and reports mean, min, max, and
+standard deviation. Warmup runs are excluded from results.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target := "list"
-			if len(args) == 1 {
-				target = args[0]
-			}
-			return runBenchmark(cmd, target, warmup, runs)
+			return runBenchmark(cmd, warmup, runs)
 		},
 	}
 	cmd.Flags().IntVar(&runs, "runs", 10, "Number of timed runs")
@@ -40,31 +30,27 @@ Available targets: list`,
 	return cmd
 }
 
-func validBenchmarkTargets() []string {
-	keys := make([]string, 0, len(benchmarkTargets))
-	for k := range benchmarkTargets {
-		keys = append(keys, k)
-	}
-	return keys
+func runBenchmark(cmd *cobra.Command, warmup, runs int) error {
+	return runBenchmarkWithRunner(cmd, warmup, runs, discardedListRunner())
 }
 
-func runBenchmark(cmd *cobra.Command, target string, warmup, runs int) error {
-	fn, ok := benchmarkTargets[target]
-	if !ok {
-		return fmt.Errorf("unknown benchmark target %q -- available: %v", target, validBenchmarkTargets())
+func runBenchmarkWithRunner(cmd *cobra.Command, warmup, runs int, run func() error) error {
+	if runs < 1 {
+		return fmt.Errorf("benchmark runs must be at least 1")
+	}
+	if warmup < 0 {
+		return fmt.Errorf("benchmark warmup cannot be negative")
 	}
 
 	render := commandRenderer(cmd)
 	errOut := cmd.ErrOrStderr()
 
 	fmt.Fprintf(errOut, "\n%s\n\n", render.Title("BENCHMARK"))
-	fmt.Fprintf(errOut, "  %s\n\n", render.Muted(fmt.Sprintf("target: %s   warmup: %d   runs: %d", target, warmup, runs)))
+	fmt.Fprintf(errOut, "  %s\n\n", render.Muted(fmt.Sprintf("command: list   warmup: %d   runs: %d", warmup, runs)))
 
-	// Warmup -- redirect output to discard so table doesn't flood the terminal.
-	silenced := silenceOutput(cmd)
 	for i := range warmup {
 		fmt.Fprintf(errOut, "  %s\n", render.Status(ui.ToneMuted, "~", fmt.Sprintf("warmup %d/%d", i+1, warmup)))
-		if err := fn(silenced); err != nil {
+		if err := run(); err != nil {
 			return fmt.Errorf("warmup run %d failed: %w", i+1, err)
 		}
 	}
@@ -72,40 +58,51 @@ func runBenchmark(cmd *cobra.Command, target string, warmup, runs int) error {
 		fmt.Fprintln(errOut)
 	}
 
-	// Timed runs.
 	durations := make([]time.Duration, 0, runs)
 	for i := range runs {
-		start := time.Now()
-		if err := fn(silenced); err != nil {
+		fmt.Fprintf(errOut, "  %s\n", render.Status(ui.ToneInfo, "->", fmt.Sprintf("run %2d/%d", i+1, runs)))
+		duration, err := timeRun(run)
+		if err != nil {
 			return fmt.Errorf("run %d failed: %w", i+1, err)
 		}
-		d := time.Since(start)
-		durations = append(durations, d)
-		fmt.Fprintf(errOut, "  %s\n", render.Status(ui.ToneInfo, "->", fmt.Sprintf("run %2d/%d  %s", i+1, runs, formatDuration(d))))
+		durations = append(durations, duration)
 	}
-
 	mean, stddev, min, max := calcStats(durations)
+	result := benchmarkResult{Durations: durations, Mean: mean, Stddev: stddev, Min: min, Max: max}
+
 	fmt.Fprintf(errOut, "\n  %s\n", render.Header("RESULTS"))
-	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("mean:   %s", formatDuration(mean))))
-	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("stddev: %s", formatDuration(stddev))))
-	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("min:    %s", formatDuration(min))))
-	fmt.Fprintf(errOut, "  %s\n\n", render.Muted(fmt.Sprintf("max:    %s", formatDuration(max))))
+	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("mean:   %s", formatDuration(result.Mean))))
+	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("stddev: %s", formatDuration(result.Stddev))))
+	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("min:    %s", formatDuration(result.Min))))
+	fmt.Fprintf(errOut, "  %s\n\n", render.Muted(fmt.Sprintf("max:    %s", formatDuration(result.Max))))
 
 	return nil
 }
 
-// silenceOutput returns a shallow copy of cmd with stdout/stderr discarded so
-// benchmark runs don't flood the terminal with repeated list output.
-func silenceOutput(cmd *cobra.Command) *cobra.Command {
-	child := *cmd
-	child.SetOut(io_discard{})
-	child.SetErr(io_discard{})
-	return &child
+func discardedListRunner() func() error {
+	return func() error {
+		cmd := newListCmd()
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		return runList(cmd, false)
+	}
 }
 
-type io_discard struct{}
+type benchmarkResult struct {
+	Durations []time.Duration
+	Mean      time.Duration
+	Stddev    time.Duration
+	Min       time.Duration
+	Max       time.Duration
+}
 
-func (io_discard) Write(p []byte) (int, error) { return len(p), nil }
+func timeRun(run func() error) (time.Duration, error) {
+	start := time.Now()
+	if err := run(); err != nil {
+		return 0, err
+	}
+	return time.Since(start), nil
+}
 
 func calcStats(durations []time.Duration) (mean, stddev, min, max time.Duration) {
 	if len(durations) == 0 {
