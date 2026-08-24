@@ -30,42 +30,41 @@ func TestForgeAPIArgs(t *testing.T) {
 		ghGraphQLArgs("query", map[string]string{"owner": "owner", "name": "repo"}))
 }
 
-func TestGitHubRemoteSnapshot(t *testing.T) {
+func TestGitHubRemoteRefs(t *testing.T) {
 	previous := githubGraphQLCall
 	githubGraphQLCall = func(query string, variables map[string]string) ([]byte, error) {
 		assert.Contains(t, query, "ref0: ref(qualifiedName: $ref0)")
 		assert.Contains(t, query, "ref1: ref(qualifiedName: $ref1)")
-		assert.Contains(t, query, "commit0: object(expression: $sha0)")
+		assert.NotContains(t, query, "object(expression:")
+		assert.NotContains(t, query, "associatedPullRequests")
 		assert.NotContains(t, query, variables["ref1"])
 		assert.Equal(t, map[string]string{
 			"owner": "owner",
 			"name":  "repo",
 			"ref0":  "refs/heads/main",
 			"ref1":  "refs/heads/feature/with spaces",
-			"sha0":  "aaa111",
 		}, variables)
-		return []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"commit0":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature/with spaces","headRefOid":"aaa111"}],"pageInfo":{"hasNextPage":false}}}}}}`), nil
+		return []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null}}}`), nil
 	}
 	t.Cleanup(func() { githubGraphQLCall = previous })
 
-	snapshot, err := GitHubRemoteSnapshot("owner/repo", "main", []SnapshotCandidate{{Branch: "feature/with spaces", SHA: "aaa111"}})
+	snapshot, err := GitHubRemoteRefs("owner/repo", "main", []SnapshotCandidate{{Branch: "feature/with spaces", SHA: "aaa111"}})
 	require.NoError(t, err)
 	assert.Equal(t, "main111", snapshot.DefaultSHA)
 	assert.Equal(t, []SnapshotBranch{{
-		Candidate:    SnapshotCandidate{Branch: "feature/with spaces", SHA: "aaa111"},
-		Verification: SnapshotMerged,
+		Candidate: SnapshotCandidate{Branch: "feature/with spaces", SHA: "aaa111"},
 	}}, snapshot.Branches)
 }
 
-func TestParseGitHubSnapshotExactMatching(t *testing.T) {
+func TestParseGitHubEvidenceExactMatching(t *testing.T) {
 	candidates := []SnapshotCandidate{
 		{Branch: "feature", SHA: "merged111"},
 		{Branch: "reused", SHA: "new222"},
 	}
-	plan := newGitHubSnapshotPlan(candidates)
+	plan := newGitHubEvidencePlan(candidates)
 	payload := []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"ref2":null,"commit0":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":"merged111"}],"pageInfo":{"hasNextPage":false}}},"commit1":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"reused","headRefOid":"old111"},{"merged":true,"baseRefName":"other","headRefName":"reused","headRefOid":"new222"},{"merged":false,"baseRefName":"main","headRefName":"reused","headRefOid":"new222"}],"pageInfo":{"hasNextPage":false}}}}}}`)
 
-	snapshot, err := parseGitHubSnapshot(payload, "main", plan)
+	snapshot, err := parseGitHubEvidence(payload, "main", plan)
 	require.NoError(t, err)
 	assert.Equal(t, []SnapshotBranch{
 		{Candidate: candidates[0], Verification: SnapshotMerged},
@@ -73,17 +72,17 @@ func TestParseGitHubSnapshotExactMatching(t *testing.T) {
 	}, snapshot.Branches)
 }
 
-func TestParseGitHubSnapshotMarksIncompleteCandidatesForFallback(t *testing.T) {
+func TestParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {
 	candidates := []SnapshotCandidate{
 		{Branch: "missing", SHA: "aaa111"},
 		{Branch: "paginated", SHA: "bbb222"},
 		{Branch: "null-node", SHA: "ccc333"},
 		{Branch: "missing-field", SHA: "ddd444"},
 	}
-	plan := newGitHubSnapshotPlan(candidates)
+	plan := newGitHubEvidencePlan(candidates)
 	payload := []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"ref2":null,"ref3":null,"ref4":null,"commit0":null,"commit1":{"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":true}}},"commit2":{"associatedPullRequests":{"nodes":[null],"pageInfo":{"hasNextPage":false}}},"commit3":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":null,"headRefName":"missing-field","headRefOid":"ddd444"}],"pageInfo":{"hasNextPage":false}}}}}}`)
 
-	snapshot, err := parseGitHubSnapshot(payload, "main", plan)
+	snapshot, err := parseGitHubEvidence(payload, "main", plan)
 	require.NoError(t, err)
 	assert.Equal(t, []SnapshotBranch{
 		{Candidate: candidates[0], Verification: SnapshotNeedsFallback},
@@ -93,31 +92,34 @@ func TestParseGitHubSnapshotMarksIncompleteCandidatesForFallback(t *testing.T) {
 	}, snapshot.Branches)
 }
 
-func TestParseGitHubSnapshotRejectsInvalidRemoteState(t *testing.T) {
+func TestParseGitHubEvidenceRejectsInvalidRemoteState(t *testing.T) {
 	candidates := []SnapshotCandidate{{Branch: "feature", SHA: "aaa111"}}
-	plan := newGitHubSnapshotPlan(candidates)
+	plan := newGitHubEvidencePlan(candidates)
 	for _, payload := range [][]byte{
 		[]byte(`{"errors":[{"message":"forbidden"}]}`),
 		[]byte(`{"data":{"repository":{"ref0":null,"ref1":null,"commit0":null}}}`),
 		[]byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null}}}`),
 		[]byte(`not-json`),
 	} {
-		_, err := parseGitHubSnapshot(payload, "main", plan)
+		_, err := parseGitHubEvidence(payload, "main", plan)
 		assert.Error(t, err)
 	}
 }
 
-func TestGitHubSnapshotQueryUsesOnlyGeneratedAliases(t *testing.T) {
-	query := newGitHubSnapshotPlan([]SnapshotCandidate{{Branch: "one", SHA: "one"}, {Branch: "two", SHA: "two"}}).query()
+func TestGitHubSnapshotQueriesUseOnlyGeneratedAliases(t *testing.T) {
+	query := newGitHubRefsPlan([]SnapshotCandidate{{Branch: "one", SHA: "one"}, {Branch: "two", SHA: "two"}}).query()
 	assert.Contains(t, query, "ref0")
 	assert.Contains(t, query, "ref1")
 	assert.Contains(t, query, "ref2")
+	assert.NotContains(t, query, "commit0")
+	assert.NotContains(t, query, "associatedPullRequests")
+	query = newGitHubEvidencePlan([]SnapshotCandidate{{Branch: "one", SHA: "one"}, {Branch: "two", SHA: "two"}}).query()
 	assert.Contains(t, query, "commit0")
 	assert.Contains(t, query, "commit1")
 	assert.False(t, strings.Contains(query, "feature/unsafe"))
 }
 
-func TestGitHubRemoteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
+func TestGitHubRemoteRefsBatchesOversizedCandidateLists(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
 	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
@@ -130,7 +132,7 @@ func TestGitHubRemoteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
 	for index := range candidates {
 		candidates[index] = SnapshotCandidate{Branch: fmt.Sprintf("feature/%d", index), SHA: fmt.Sprintf("sha%d", index)}
 	}
-	snapshot, err := GitHubRemoteSnapshot("owner/repo", "main", candidates)
+	snapshot, err := GitHubRemoteRefs("owner/repo", "main", candidates)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls)
 	assert.Equal(t, "main111", snapshot.DefaultSHA)
@@ -138,13 +140,48 @@ func TestGitHubRemoteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
 	assert.Equal(t, candidates[githubSnapshotBatchSize], snapshot.Branches[githubSnapshotBatchSize].Candidate)
 }
 
-func TestGitHubRemoteSnapshotRejectsInvalidCandidates(t *testing.T) {
+func TestGitHubMergeEvidenceRejectsChangedDefaultBranch(t *testing.T) {
+	previous := githubGraphQLCall
+	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
+		return []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"changed"}},"ref1":null,"commit0":{"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`), nil
+	}
+	t.Cleanup(func() { githubGraphQLCall = previous })
+
+	_, err := GitHubMergeEvidence("owner/repo", "main", "expected", []SnapshotCandidate{{Branch: "feature", SHA: "aaa111"}})
+
+	require.ErrorIs(t, err, ErrGitHubDefaultBranchChanged)
+}
+
+func TestGitHubMergeEvidenceDiscardsPartialBatchesOnFailure(t *testing.T) {
+	previous := githubGraphQLCall
+	calls := 0
+	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return githubSnapshotPayload(t, githubSnapshotBatchSize), nil
+		}
+		return nil, assert.AnError
+	}
+	t.Cleanup(func() { githubGraphQLCall = previous })
+
+	candidates := make([]SnapshotCandidate, githubSnapshotBatchSize+1)
+	for index := range candidates {
+		candidates[index] = SnapshotCandidate{Branch: fmt.Sprintf("feature/%d", index), SHA: fmt.Sprintf("sha%d", index)}
+	}
+	snapshot, err := GitHubMergeEvidence("owner/repo", "main", "main111", candidates)
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, GitHubSnapshot{}, snapshot)
+	assert.Equal(t, 2, calls)
+}
+
+func TestGitHubRemoteRefsRejectsInvalidCandidates(t *testing.T) {
 	for _, candidates := range [][]SnapshotCandidate{
 		{{Branch: "", SHA: "aaa111"}},
 		{{Branch: "feature", SHA: ""}},
 		{{Branch: "feature", SHA: "aaa111"}, {Branch: "feature", SHA: "bbb222"}},
 	} {
-		_, err := GitHubRemoteSnapshot("owner/repo", "main", candidates)
+		_, err := GitHubRemoteRefs("owner/repo", "main", candidates)
 		assert.Error(t, err)
 	}
 }
@@ -371,6 +408,88 @@ func TestGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]bool{"feature": true, "reused": true}, matched)
+	assert.Equal(t, 2, calls)
+}
+
+func TestGitLabMergedHeadsBatchesCandidateInputAndMatchesAcrossBatches(t *testing.T) {
+	previous := gitlabGraphQLCall
+	calls := 0
+	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
+		assert.Equal(t, "gitlab.example", host)
+		assert.Contains(t, query, "sourceBranches: $sourceBranches")
+		branches := variables["sourceBranches"].([]string)
+		calls++
+		if calls == 1 {
+			assert.Len(t, branches, gitlabMergedHeadsBatchSize)
+			assert.Equal(t, "feature/0", branches[0])
+			assert.Equal(t, fmt.Sprintf("feature/%d", gitlabMergedHeadsBatchSize-1), branches[len(branches)-1])
+			return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"feature/0","targetBranch":"main","diffHeadSha":"sha0"}],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`), nil
+		}
+		assert.Equal(t, []string{fmt.Sprintf("feature/%d", gitlabMergedHeadsBatchSize)}, branches)
+		return []byte(fmt.Sprintf(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"feature/%d","targetBranch":"main","diffHeadSha":"sha%d"}],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`, gitlabMergedHeadsBatchSize, gitlabMergedHeadsBatchSize)), nil
+	}
+	t.Cleanup(func() { gitlabGraphQLCall = previous })
+
+	candidates := make([]SnapshotCandidate, gitlabMergedHeadsBatchSize+1)
+	for index := range candidates {
+		candidates[index] = SnapshotCandidate{Branch: fmt.Sprintf("feature/%d", index), SHA: fmt.Sprintf("sha%d", index)}
+	}
+	matched, err := GitLabMergedHeads("group/project", "gitlab.example", "main", candidates)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, map[string]bool{
+		"feature/0": true,
+		fmt.Sprintf("feature/%d", gitlabMergedHeadsBatchSize): true,
+	}, matched)
+}
+
+func TestGitLabMergedHeadsRejectsOutOfBatchMatches(t *testing.T) {
+	previous := gitlabGraphQLCall
+	calls := 0
+	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
+		assert.Equal(t, "gitlab.example", host)
+		assert.Contains(t, query, "sourceBranches: $sourceBranches")
+		calls++
+		if calls == 1 {
+			assert.Len(t, variables["sourceBranches"], gitlabMergedHeadsBatchSize)
+			return []byte(fmt.Sprintf(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"feature/0","targetBranch":"main","diffHeadSha":"sha0"},{"sourceBranch":"feature/%d","targetBranch":"main","diffHeadSha":"sha%d"}],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`, gitlabMergedHeadsBatchSize, gitlabMergedHeadsBatchSize)), nil
+		}
+		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`), nil
+	}
+	t.Cleanup(func() { gitlabGraphQLCall = previous })
+
+	candidates := make([]SnapshotCandidate, gitlabMergedHeadsBatchSize+1)
+	for index := range candidates {
+		candidates[index] = SnapshotCandidate{Branch: fmt.Sprintf("feature/%d", index), SHA: fmt.Sprintf("sha%d", index)}
+	}
+	matched, err := GitLabMergedHeads("group/project", "gitlab.example", "main", candidates)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"feature/0": true}, matched)
+	assert.Equal(t, 2, calls)
+}
+
+func TestGitLabMergedHeadsDiscardsPartialMatchesWhenABatchFails(t *testing.T) {
+	previous := gitlabGraphQLCall
+	calls := 0
+	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"feature/0","targetBranch":"main","diffHeadSha":"sha0"}],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`), nil
+		}
+		return nil, assert.AnError
+	}
+	t.Cleanup(func() { gitlabGraphQLCall = previous })
+
+	candidates := make([]SnapshotCandidate, gitlabMergedHeadsBatchSize+1)
+	for index := range candidates {
+		candidates[index] = SnapshotCandidate{Branch: fmt.Sprintf("feature/%d", index), SHA: fmt.Sprintf("sha%d", index)}
+	}
+	matched, err := GitLabMergedHeads("group/project", "gitlab.example", "main", candidates)
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, matched)
 	assert.Equal(t, 2, calls)
 }
 

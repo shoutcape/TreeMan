@@ -37,7 +37,6 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 	}
 
 	root.AddCommand(newVersionCmd(version, commit, date))
-	root.AddCommand(newBenchmarkCmd())
 	root.AddCommand(newCreateCmd())
 	root.AddCommand(newBranchCmd())
 	root.AddCommand(newReviewCmd())
@@ -75,7 +74,6 @@ func printOverview(cmd *cobra.Command) {
 		{use: "treeman delete [query]", short: "Remove a worktree and branch"},
 		{use: "treeman doctor", short: "Check repository readiness and configuration"},
 		{use: "treeman theme", short: "Select a terminal color theme"},
-		{use: "treeman benchmark [command]", short: "Measure execution time of a treeman command"},
 	}
 
 	fmt.Fprintf(out, "\n%s\n%s\n\n", render.Title("TREEMAN"), render.Muted("TreeMan manages isolated Git worktrees."))

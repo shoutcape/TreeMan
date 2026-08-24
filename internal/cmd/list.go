@@ -42,17 +42,15 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 }
 
 func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, jsonOutput bool) error {
-	if !git.IsInsideRepo() {
-		return fmt.Errorf("not inside a git repository")
-	}
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return err
 	}
-	mainRoot, err := git.MainWorktreeRoot()
+	mainRoot, err := mainWorktreeRoot(entries)
 	if err != nil {
 		return err
 	}
+	dirtyResult := worktreeDirtyStates(entries)
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return err
@@ -79,13 +77,12 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), classification.Diagnostics)
 		}
 	}
-
+	dirty := <-dirtyResult
+	if dirty.err != nil {
+		return dirty.err
+	}
 	result := make([]listEntry, 0, len(entries))
-	for _, entry := range entries {
-		dirty, err := git.WorktreeDirty(entry.Path)
-		if err != nil {
-			return err
-		}
+	for index, entry := range entries {
 		// MERGED reports merge eligibility: its tip is an ancestor of
 		// origin/<default>, or its remote counterpart is gone and the forge
 		// confirms a merged PR/MR (squash/rebase merge).
@@ -98,7 +95,7 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			Branch:   entry.Branch,
 			Main:     samePath(entry.Path, mainRoot),
 			Current:  samePath(entry.Path, currentRoot),
-			Dirty:    dirty,
+			Dirty:    dirty.states[index],
 			Detached: entry.Branch == "",
 			Merged:   isMerged,
 		})

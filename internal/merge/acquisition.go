@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -40,7 +41,8 @@ type acquirer struct {
 	originRemoteURL   func() (string, error)
 	resolveForge      func(string) (forge.Type, string, string, error)
 	lookPath          func(string) (string, error)
-	githubSnapshot    func(string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error)
+	githubRefs        func(string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error)
+	githubEvidence    func(string, string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error)
 	gitlabMergedHeads func(string, string, string, []forge.SnapshotCandidate) (map[string]bool, error)
 	mergedPRHead      func(forge.Type, string, string, string, string, string) (bool, error)
 }
@@ -55,14 +57,43 @@ func productionAcquirer() acquirer {
 		originRemoteURL:   git.OriginRemoteURL,
 		resolveForge:      forge.ResolveFromRemote,
 		lookPath:          exec.LookPath,
-		githubSnapshot:    forge.GitHubRemoteSnapshot,
+		githubRefs:        forge.GitHubRemoteRefs,
+		githubEvidence:    forge.GitHubMergeEvidence,
 		gitlabMergedHeads: forge.GitLabMergedHeads,
 		mergedPRHead:      forge.MergedPRHead,
 	}
 }
 
-func snapshotCandidates(branches []string) ([]Candidate, error) {
-	tips, err := git.BranchSHAs(branches)
+func NewClassifier() ClassifierFunc {
+	return productionAcquirer().Classify
+}
+
+// Classify snapshots exact local branch tips, acquires fresh merge evidence,
+// and applies the deletion policy.
+func (a acquirer) Classify(defaultBranch string, branches []string) (Result, error) {
+	candidates, err := a.snapshotCandidates(branches)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(candidates) == 0 {
+		return Result{}, nil
+	}
+	snapshot, diagnostics, err := a.acquire(defaultBranch, candidates)
+	if err != nil {
+		return Result{}, err
+	}
+	decisions := Evaluate(snapshot)
+	cleanable := make([]Candidate, 0, len(decisions))
+	for _, decision := range decisions {
+		if decision.Verdict == VerdictCleanable {
+			cleanable = append(cleanable, decision.Candidate)
+		}
+	}
+	return Result{Cleanable: cleanable, Diagnostics: diagnostics}, nil
+}
+
+func (a acquirer) snapshotCandidates(branches []string) ([]Candidate, error) {
+	tips, err := a.branchSHAs(branches)
 	if err != nil {
 		return nil, err
 	}
@@ -108,10 +139,6 @@ func (a acquirer) resolveProvider() provider {
 // acquire gathers fresh Git and forge observations into a snapshot. Failures
 // that prevent a fresh default-branch view are fatal; forge-only failures are
 // returned as warnings and leave merge evidence unknown.
-func acquire(defaultBranch string, candidates []Candidate) (Snapshot, []Diagnostic, error) {
-	return productionAcquirer().acquire(defaultBranch, candidates)
-}
-
 func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapshot, []Diagnostic, error) {
 	snapshot := Snapshot{Candidates: make([]Evidence, len(candidates))}
 	for index, candidate := range candidates {
@@ -121,10 +148,10 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 	provider := a.resolveProvider()
 	var deferredWarnings []Diagnostic
 	if provider.type_ == forge.GitHub && provider.status == providerAvailable {
-		githubSnapshot, err := a.githubSnapshot(provider.repo, defaultBranch, forgeCandidates(candidates))
+		githubSnapshot, err := a.githubRefs(provider.repo, defaultBranch, forgeCandidates(candidates))
 		if err != nil {
-			deferredWarnings = append(deferredWarnings, Diagnostic{Kind: DiagnosticQueryFailed, Operation: "GitHub merge snapshot failed", Err: err})
-		} else if err := applyGitHubSnapshot(&snapshot, githubSnapshot); err != nil {
+			deferredWarnings = append(deferredWarnings, Diagnostic{Kind: DiagnosticQueryFailed, Operation: "GitHub refs snapshot failed", Err: err})
+		} else if err := applyGitHubRefs(&snapshot, githubSnapshot); err != nil {
 			return Snapshot{}, nil, err
 		}
 	}
@@ -196,6 +223,18 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 		}
 		return snapshot, deferredWarnings, nil
 	}
+	if provider.type_ == forge.GitHub {
+		err := a.enrichGitHubEvidence(&snapshot, verify, provider, defaultBranch)
+		if err != nil {
+			if errors.Is(err, forge.ErrGitHubDefaultBranchChanged) {
+				return Snapshot{}, nil, err
+			}
+			deferredWarnings = append(deferredWarnings, Diagnostic{Kind: DiagnosticQueryFailed, Operation: "GitHub merge verification failed", Err: err})
+			return snapshot, deferredWarnings, nil
+		} else {
+			verify = unresolvedRemoteGone(snapshot, verify)
+		}
+	}
 	if provider.type_ == forge.GitLab {
 		if err := a.enrichGitLabBatch(&snapshot, verify, provider, defaultBranch); err != nil {
 			deferredWarnings = append(deferredWarnings, Diagnostic{Kind: DiagnosticQueryFailed, Operation: "GitLab merge verification failed", Err: err})
@@ -245,7 +284,7 @@ func (a acquirer) refreshDefaultBranch(defaultBranch, expectedSHA string) error 
 	return nil
 }
 
-func applyGitHubSnapshot(snapshot *Snapshot, result forge.GitHubSnapshot) error {
+func applyGitHubRefs(snapshot *Snapshot, result forge.GitHubSnapshot) error {
 	if len(result.Branches) != len(snapshot.Candidates) {
 		return fmt.Errorf("GitHub snapshot returned %d branches for %d candidates", len(result.Branches), len(snapshot.Candidates))
 	}
@@ -258,6 +297,29 @@ func applyGitHubSnapshot(snapshot *Snapshot, result forge.GitHubSnapshot) error 
 		if branch.RemoteExists {
 			candidate.Remote = RemotePresent
 		}
+	}
+	snapshot.DefaultSHA = result.DefaultSHA
+	return nil
+}
+
+func (a acquirer) enrichGitHubEvidence(snapshot *Snapshot, indexes []int, provider provider, defaultBranch string) error {
+	result, err := a.githubEvidence(provider.repo, defaultBranch, snapshot.DefaultSHA, forgeCandidates(evidenceCandidates(*snapshot, indexes)))
+	if err != nil {
+		return err
+	}
+	if result.DefaultSHA != snapshot.DefaultSHA || len(result.Branches) != len(indexes) {
+		return fmt.Errorf("GitHub merge evidence did not match the refs snapshot")
+	}
+	for resultIndex, branch := range result.Branches {
+		candidateIndex := indexes[resultIndex]
+		candidate := &snapshot.Candidates[candidateIndex]
+		if branch.Candidate != (forge.SnapshotCandidate{Branch: candidate.Candidate.Branch, SHA: candidate.Candidate.SHA}) {
+			return fmt.Errorf("GitHub merge evidence returned mismatched candidate %q", branch.Candidate.Branch)
+		}
+		if branch.RemoteExists {
+			candidate.Remote = RemotePresent
+			continue
+		}
 		switch branch.Verification {
 		case forge.SnapshotNotMerged:
 			candidate.Merge = MergeNo
@@ -265,10 +327,9 @@ func applyGitHubSnapshot(snapshot *Snapshot, result forge.GitHubSnapshot) error 
 			candidate.Merge = MergeYes
 		case forge.SnapshotNeedsFallback:
 		default:
-			return fmt.Errorf("GitHub snapshot returned invalid verification for %q", candidate.Candidate.Branch)
+			return fmt.Errorf("GitHub merge evidence returned invalid verification for %q", candidate.Candidate.Branch)
 		}
 	}
-	snapshot.DefaultSHA = result.DefaultSHA
 	return nil
 }
 
@@ -291,6 +352,16 @@ func unresolved(snapshot Snapshot, indexes []int) []int {
 	result := make([]int, 0, len(indexes))
 	for _, index := range indexes {
 		if snapshot.Candidates[index].Merge == MergeUnknown {
+			result = append(result, index)
+		}
+	}
+	return result
+}
+
+func unresolvedRemoteGone(snapshot Snapshot, indexes []int) []int {
+	result := make([]int, 0, len(indexes))
+	for _, index := range indexes {
+		if snapshot.Candidates[index].Remote == RemoteAbsent && snapshot.Candidates[index].Merge == MergeUnknown {
 			result = append(result, index)
 		}
 	}

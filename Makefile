@@ -10,7 +10,7 @@ LDFLAGS    := -X main.version=$(VERSION) \
               -X main.commit=$(COMMIT) \
               -X main.date=$(DATE)
 
-.PHONY: build test lint clean install tidy help
+.PHONY: build test lint clean install tidy benchmark-list help
 
 ## build: compile the binary to ./bin/treeman
 build:
@@ -25,6 +25,10 @@ test:
 ## lint: run go vet (add golangci-lint later)
 lint:
 	go vet ./...
+
+## benchmark-list: build then benchmark treeman list with hyperfine
+benchmark-list: build
+	hyperfine --warmup 3 --runs 10 './bin/treeman list'
 
 ## tidy: tidy and verify go.mod / go.sum
 tidy:

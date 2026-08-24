@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// ErrGitHubDefaultBranchChanged means targeted merge verification observed a
+// different default branch tip than the ref snapshot used for ancestry.
+var ErrGitHubDefaultBranchChanged = errors.New("GitHub default branch changed during verification")
+
 // githubSnapshotBatchSize keeps requests below GitHub's query and argument
 // limits while retaining one request for ordinary worktree counts.
 const githubSnapshotBatchSize = 40
@@ -42,36 +46,41 @@ type GitHubSnapshot struct {
 	Branches   []SnapshotBranch
 }
 
-// GitHubRemoteSnapshot reads remote refs and merge evidence. Ordinary inputs
-// use one GraphQL request; only oversized candidate lists are split.
-func GitHubRemoteSnapshot(repoSlug, defaultBranch string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
-	owner, name, ok := strings.Cut(repoSlug, "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return GitHubSnapshot{}, fmt.Errorf("invalid GitHub repository %q", repoSlug)
+// GitHubRemoteRefs reads the default ref and candidate branch presence without
+// requesting merge evidence for candidates that local Git can classify.
+func GitHubRemoteRefs(repoSlug, defaultBranch string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
+	owner, name, err := githubSnapshotRepository(repoSlug, defaultBranch, candidates)
+	if err != nil {
+		return GitHubSnapshot{}, err
 	}
-	if defaultBranch == "" {
-		return GitHubSnapshot{}, errors.New("GitHub default branch is required")
-	}
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.Branch == "" || candidate.SHA == "" {
-			return GitHubSnapshot{}, errors.New("GitHub snapshot candidates require branch and SHA")
-		}
-		if _, duplicate := seen[candidate.Branch]; duplicate {
-			return GitHubSnapshot{}, fmt.Errorf("duplicate GitHub snapshot branch %q", candidate.Branch)
-		}
-		seen[candidate.Branch] = struct{}{}
-	}
+	return githubSnapshotBatches(owner, name, defaultBranch, candidates, "", githubRemoteRefsBatch)
+}
 
+// GitHubMergeEvidence revalidates refs and returns PR evidence for the exact
+// candidates selected after local ancestry checks.
+func GitHubMergeEvidence(repoSlug, defaultBranch, expectedDefaultSHA string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
+	owner, name, err := githubSnapshotRepository(repoSlug, defaultBranch, candidates)
+	if err != nil {
+		return GitHubSnapshot{}, err
+	}
+	if expectedDefaultSHA == "" {
+		return GitHubSnapshot{}, errors.New("GitHub expected default branch SHA is required")
+	}
+	return githubSnapshotBatches(owner, name, defaultBranch, candidates, expectedDefaultSHA, githubMergeEvidenceBatch)
+}
+
+type githubSnapshotBatch func(string, string, string, []SnapshotCandidate) (GitHubSnapshot, error)
+
+func githubSnapshotBatches(owner, name, defaultBranch string, candidates []SnapshotCandidate, expectedDefaultSHA string, query githubSnapshotBatch) (GitHubSnapshot, error) {
 	snapshot := GitHubSnapshot{Branches: make([]SnapshotBranch, 0, len(candidates))}
 	for start := 0; start < len(candidates) || start == 0; start += githubSnapshotBatchSize {
 		end := min(start+githubSnapshotBatchSize, len(candidates))
-		batch, err := githubRemoteSnapshotBatch(owner, name, defaultBranch, candidates[start:end])
+		batch, err := query(owner, name, defaultBranch, candidates[start:end])
 		if err != nil {
 			return GitHubSnapshot{}, err
 		}
-		if snapshot.DefaultSHA != "" && snapshot.DefaultSHA != batch.DefaultSHA {
-			return GitHubSnapshot{}, errors.New("GitHub default branch changed during snapshot")
+		if (expectedDefaultSHA != "" && batch.DefaultSHA != expectedDefaultSHA) || (snapshot.DefaultSHA != "" && snapshot.DefaultSHA != batch.DefaultSHA) {
+			return GitHubSnapshot{}, ErrGitHubDefaultBranchChanged
 		}
 		snapshot.DefaultSHA = batch.DefaultSHA
 		snapshot.Branches = append(snapshot.Branches, batch.Branches...)
@@ -82,14 +91,36 @@ func GitHubRemoteSnapshot(repoSlug, defaultBranch string, candidates []SnapshotC
 	return snapshot, nil
 }
 
-func githubRemoteSnapshotBatch(owner, name, defaultBranch string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
-	plan := newGitHubSnapshotPlan(candidates)
+func githubSnapshotRepository(repoSlug, defaultBranch string, candidates []SnapshotCandidate) (string, string, error) {
+	owner, name, ok := strings.Cut(repoSlug, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", "", fmt.Errorf("invalid GitHub repository %q", repoSlug)
+	}
+	if defaultBranch == "" {
+		return "", "", errors.New("GitHub default branch is required")
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Branch == "" || candidate.SHA == "" {
+			return "", "", errors.New("GitHub snapshot candidates require branch and SHA")
+		}
+		if _, duplicate := seen[candidate.Branch]; duplicate {
+			return "", "", fmt.Errorf("duplicate GitHub snapshot branch %q", candidate.Branch)
+		}
+		seen[candidate.Branch] = struct{}{}
+	}
+
+	return owner, name, nil
+}
+
+func githubRemoteRefsBatch(owner, name, defaultBranch string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
+	plan := newGitHubRefsPlan(candidates)
 	variables := plan.variables(owner, name, defaultBranch)
 	out, err := githubGraphQLCall(plan.query(), variables)
 	if err != nil {
 		return GitHubSnapshot{}, err
 	}
-	return parseGitHubSnapshot(out, defaultBranch, plan)
+	return parseGitHubRefs(out, defaultBranch, plan)
 }
 
 type githubSnapshotSlot struct {
@@ -99,25 +130,23 @@ type githubSnapshotSlot struct {
 	commitAlias string
 }
 
-type githubSnapshotPlan struct {
+type githubRefsPlan struct {
 	defaultRefAlias string
 	slots           []githubSnapshotSlot
 }
 
-func newGitHubSnapshotPlan(candidates []SnapshotCandidate) githubSnapshotPlan {
-	plan := githubSnapshotPlan{defaultRefAlias: "ref0", slots: make([]githubSnapshotSlot, len(candidates))}
+func newGitHubRefsPlan(candidates []SnapshotCandidate) githubRefsPlan {
+	plan := githubRefsPlan{defaultRefAlias: "ref0", slots: make([]githubSnapshotSlot, len(candidates))}
 	for index, candidate := range candidates {
 		plan.slots[index] = githubSnapshotSlot{
-			candidate:   candidate,
-			refAlias:    fmt.Sprintf("ref%d", index+1),
-			shaAlias:    fmt.Sprintf("sha%d", index),
-			commitAlias: fmt.Sprintf("commit%d", index),
+			candidate: candidate,
+			refAlias:  fmt.Sprintf("ref%d", index+1),
 		}
 	}
 	return plan
 }
 
-func (plan githubSnapshotPlan) variables(owner, name, defaultBranch string) map[string]string {
+func (plan githubRefsPlan) variables(owner, name, defaultBranch string) map[string]string {
 	variables := map[string]string{
 		"owner": owner,
 		"name":  name,
@@ -125,12 +154,47 @@ func (plan githubSnapshotPlan) variables(owner, name, defaultBranch string) map[
 	}
 	for _, slot := range plan.slots {
 		variables[slot.refAlias] = "refs/heads/" + slot.candidate.Branch
+	}
+	return variables
+}
+
+func (plan githubRefsPlan) query() string {
+	var query strings.Builder
+	query.WriteString("query($owner: String!, $name: String!, $ref0: String!")
+	for _, slot := range plan.slots {
+		fmt.Fprintf(&query, ", $%s: String!", slot.refAlias)
+	}
+	query.WriteString(") { repository(owner: $owner, name: $name) {")
+	fmt.Fprintf(&query, "%s: ref(qualifiedName: $%s) { target { ... on Commit { oid } } }", plan.defaultRefAlias, plan.defaultRefAlias)
+	for _, slot := range plan.slots {
+		fmt.Fprintf(&query, "%s: ref(qualifiedName: $%s) { target { ... on Commit { oid } } }", slot.refAlias, slot.refAlias)
+	}
+	query.WriteString("} }")
+	return query.String()
+}
+
+type githubEvidencePlan struct {
+	githubRefsPlan
+}
+
+func newGitHubEvidencePlan(candidates []SnapshotCandidate) githubEvidencePlan {
+	refs := newGitHubRefsPlan(candidates)
+	for index := range refs.slots {
+		refs.slots[index].shaAlias = fmt.Sprintf("sha%d", index)
+		refs.slots[index].commitAlias = fmt.Sprintf("commit%d", index)
+	}
+	return githubEvidencePlan{githubRefsPlan: refs}
+}
+
+func (plan githubEvidencePlan) variables(owner, name, defaultBranch string) map[string]string {
+	variables := plan.githubRefsPlan.variables(owner, name, defaultBranch)
+	for _, slot := range plan.slots {
 		variables[slot.shaAlias] = slot.candidate.SHA
 	}
 	return variables
 }
 
-func (plan githubSnapshotPlan) query() string {
+func (plan githubEvidencePlan) query() string {
 	var query strings.Builder
 	query.WriteString("query($owner: String!, $name: String!, $ref0: String!")
 	for _, slot := range plan.slots {
@@ -146,7 +210,17 @@ func (plan githubSnapshotPlan) query() string {
 	return query.String()
 }
 
-func parseGitHubSnapshot(data []byte, defaultBranch string, plan githubSnapshotPlan) (GitHubSnapshot, error) {
+func githubMergeEvidenceBatch(owner, name, defaultBranch string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
+	plan := newGitHubEvidencePlan(candidates)
+	variables := plan.variables(owner, name, defaultBranch)
+	out, err := githubGraphQLCall(plan.query(), variables)
+	if err != nil {
+		return GitHubSnapshot{}, err
+	}
+	return parseGitHubEvidence(out, defaultBranch, plan)
+}
+
+func parseGitHubRefs(data []byte, defaultBranch string, plan githubRefsPlan) (GitHubSnapshot, error) {
 	var response struct {
 		Data *struct {
 			Repository map[string]json.RawMessage `json:"repository"`
@@ -186,25 +260,42 @@ func parseGitHubSnapshot(data []byte, defaultBranch string, plan githubSnapshotP
 		if err != nil {
 			return GitHubSnapshot{}, fmt.Errorf("gh: parsing ref %q: %w", slot.candidate.Branch, err)
 		}
+		snapshot.Branches = append(snapshot.Branches, SnapshotBranch{
+			Candidate:    slot.candidate,
+			RemoteExists: remoteExists,
+		})
+	}
+	return snapshot, nil
+}
+
+func parseGitHubEvidence(data []byte, defaultBranch string, plan githubEvidencePlan) (GitHubSnapshot, error) {
+	snapshot, err := parseGitHubRefs(data, defaultBranch, plan.githubRefsPlan)
+	if err != nil {
+		return GitHubSnapshot{}, err
+	}
+	var response struct {
+		Data *struct {
+			Repository map[string]json.RawMessage `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return GitHubSnapshot{}, fmt.Errorf("gh: parsing GitHub merge evidence: %w", err)
+	}
+	for index, slot := range plan.slots {
 		commit, ok := response.Data.Repository[slot.commitAlias]
 		if !ok {
-			return GitHubSnapshot{}, fmt.Errorf("gh: GitHub snapshot lacks commit result for %q", slot.candidate.Branch)
+			return GitHubSnapshot{}, fmt.Errorf("gh: GitHub merge evidence lacks commit result for %q", slot.candidate.Branch)
 		}
 		merged, complete, err := parseGitHubSnapshotCommit(commit, defaultBranch, slot.candidate)
 		if err != nil {
 			return GitHubSnapshot{}, fmt.Errorf("gh: parsing commit %q: %w", slot.candidate.SHA, err)
 		}
-		verification := SnapshotNotMerged
+		snapshot.Branches[index].Verification = SnapshotNotMerged
 		if !complete {
-			verification = SnapshotNeedsFallback
+			snapshot.Branches[index].Verification = SnapshotNeedsFallback
 		} else if merged {
-			verification = SnapshotMerged
+			snapshot.Branches[index].Verification = SnapshotMerged
 		}
-		snapshot.Branches = append(snapshot.Branches, SnapshotBranch{
-			Candidate:    slot.candidate,
-			RemoteExists: remoteExists,
-			Verification: verification,
-		})
 	}
 	return snapshot, nil
 }

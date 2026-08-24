@@ -407,7 +407,8 @@ func TestRunList_OutsideRepository(t *testing.T) {
 
 	err := runList(&cobra.Command{}, true)
 
-	require.EqualError(t, err, "not inside a git repository")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not list worktrees")
 }
 
 func createTestWorktree(t *testing.T, branch string) (string, string) {

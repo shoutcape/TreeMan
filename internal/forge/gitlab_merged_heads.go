@@ -9,6 +9,8 @@ import (
 	"github.com/shoutcape/treeman/internal/remote"
 )
 
+const gitlabMergedHeadsBatchSize = 40
+
 func gitlabMergedHead(repoSlug, host, defaultBranch, branch, sha string) (bool, error) {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=merged&source_branch=%s&target_branch=%s&per_page=100", encoded, url.QueryEscape(branch), url.QueryEscape(defaultBranch))
@@ -44,6 +46,26 @@ func GitLabMergedHeads(repoSlug, host, defaultBranch string, candidates []Snapsh
 	}
 
 	matched := make(map[string]bool, len(candidates))
+	for start := 0; start < len(sourceBranches); start += gitlabMergedHeadsBatchSize {
+		end := min(start+gitlabMergedHeadsBatchSize, len(sourceBranches))
+		batchBranches := sourceBranches[start:end]
+		batchExpected := make(map[string]string, len(batchBranches))
+		for _, branch := range batchBranches {
+			batchExpected[branch] = expected[branch]
+		}
+		batchMatched, err := gitlabMergedHeadsBatch(repoSlug, host, defaultBranch, batchBranches, batchExpected)
+		if err != nil {
+			return nil, err
+		}
+		for branch := range batchMatched {
+			matched[branch] = true
+		}
+	}
+	return matched, nil
+}
+
+func gitlabMergedHeadsBatch(repoSlug, host, defaultBranch string, sourceBranches []string, expected map[string]string) (map[string]bool, error) {
+	matched := make(map[string]bool, len(sourceBranches))
 	variables := map[string]any{
 		"fullPath":       repoSlug,
 		"sourceBranches": sourceBranches,

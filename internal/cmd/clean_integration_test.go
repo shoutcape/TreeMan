@@ -52,6 +52,49 @@ func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
+func TestCleanSkipsDirtyMergedWorktreeBeforeClassification(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "dirty"), []byte("keep\n"), 0o644))
+	changeToDir(t, repo)
+
+	classifier := merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+		t.Fatal("dirty worktree must not be classified")
+		return merge.Result{}, nil
+	})
+
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanClassifiesOnlyCleanWorktrees(t *testing.T) {
+	repo, dirtyWorktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "checkout", "-b", "clean")
+	runGitInDir(t, repo, "push", "-u", "origin", "clean")
+	runGitInDir(t, repo, "checkout", "main")
+	cleanWorktree := filepath.Join(t.TempDir(), "clean-worktree")
+	runGitInDir(t, repo, "worktree", "add", cleanWorktree, "clean")
+	require.NoError(t, os.WriteFile(filepath.Join(dirtyWorktree, "dirty"), []byte("keep\n"), 0o644))
+	changeToDir(t, repo)
+
+	calls := 0
+	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+		calls++
+		assert.Equal(t, []string{"clean"}, branches)
+		sha := gitRevParse(t, repo, "refs/heads/clean")
+		return merge.Result{Cleanable: []merge.Candidate{{Branch: "clean", SHA: sha}}}, nil
+	})
+
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	assert.Equal(t, 2, calls)
+	assert.DirExists(t, dirtyWorktree)
+	assert.NoDirExists(t, cleanWorktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/clean")
+	command.Dir = repo
+	require.Error(t, command.Run())
+}
+
 func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
 	repo, worktree := createMergedCleanWorktree(t)
 	changeToDir(t, worktree)
@@ -340,7 +383,7 @@ func TestCleanRemovesGitHubSnapshotVerifiedSquashMergedWorktree(t *testing.T) {
 	require.NoError(t, runClean(&cobra.Command{}, false, true))
 
 	assert.NoDirExists(t, worktree)
-	assert.Equal(t, 2, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 4, countGitHubCommands(githubCommands(), "api graphql"))
 	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
 	assert.Zero(t, countGitCommands(gitCommands(), "ls-remote"))
 }
@@ -480,7 +523,7 @@ func TestCleanSurfacesForgeParserWarning(t *testing.T) {
 	require.NoError(t, runClean(cmd, true, true))
 
 	cleanOutput := ui.StripANSI(stderr.String())
-	assert.Contains(t, cleanOutput, "merge verification for \"feature\" failed: gh: parsing associated PR list")
+	assert.Contains(t, cleanOutput, "GitHub merge verification failed: gh: parsing GitHub snapshot")
 }
 
 func createSquashMergedCleanWorktree(t *testing.T) (string, string) {

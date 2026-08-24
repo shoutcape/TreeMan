@@ -64,6 +64,6 @@ TreeMan reads and prepares the database target before Git removes the worktree. 
 
 ## List and Clean
 
-`list` and `clean` capture local branch tips, then read fresh remote merge state. GitHub uses a typed GraphQL snapshot and GitLab batches deleted-branch merge verification. Other remotes use Git and bounded forge verification.
+`list` and `clean` capture local branch tips, then read fresh remote merge state. GitHub first uses a refs-only GraphQL snapshot and requests PR evidence only for stable, remote-gone non-ancestors, revalidating refs in that second request. GitLab batches deleted-branch merge verification. Other remotes use Git and bounded forge verification.
 
 TreeMan fetches the default branch only when its tracking ref is stale. GitHub requests over the batch limit are not globally atomic; TreeMan verifies that the default branch SHA remains stable between batches. `clean` repeats classification after confirmation, including with `--yes`, and deletes only matching branch tips.

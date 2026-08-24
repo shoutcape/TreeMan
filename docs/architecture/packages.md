@@ -18,7 +18,6 @@
 | `internal/cmd/delete.go` | Interactive and direct worktree deletion |
 | `internal/cmd/list.go` | Worktree listing and merge-state rendering |
 | `internal/cmd/clean.go` | Merge-aware worktree cleanup |
-| `internal/cmd/benchmark.go` | List benchmark progress and result rendering |
 | `internal/cmd/init.go` | Bash, Zsh, and Fish wrapper text |
 | `internal/cmd/version.go` | Version output |
 
@@ -49,7 +48,7 @@
 | `database.SetupResult` | Database creation result |
 | `forge.PRInfo` | PR or MR data for selection and review |
 | `forge.BranchInfo` | Remote branch data |
-| `forge.GitHubSnapshot` | Fresh GitHub branch and merge evidence |
+| `forge.GitHubSnapshot` | Fresh GitHub refs or targeted PR merge evidence |
 | `merge.Candidate` | Exact local branch tip eligible for cleanup |
 | `merge.Snapshot` | Normalized fresh merge evidence before policy evaluation |
 
