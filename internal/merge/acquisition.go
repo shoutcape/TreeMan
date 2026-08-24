@@ -1,7 +1,6 @@
 package merge
 
 import (
-	"errors"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -141,9 +140,6 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 	if provider.type_ == forge.GitHub && provider.status == providerAvailable {
 		githubSnapshot, err := a.githubSnapshot(provider.repo, defaultBranch, forgeCandidates(candidates))
 		if err != nil {
-			if errors.Is(err, forge.ErrGitHubDefaultBranchChanged) {
-				return Snapshot{}, nil, err
-			}
 			deferredWarnings = append(deferredWarnings, Diagnostic{Operation: "GitHub snapshot failed", Err: err})
 		} else {
 			githubState := Snapshot{Candidates: append([]Evidence(nil), snapshot.Candidates...)}
@@ -191,7 +187,7 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 		}
 	}
 	if len(remoteGone) == 0 {
-		return snapshot, nil, nil
+		return snapshot, deferredWarnings, nil
 	}
 
 	branches := make([]string, len(remoteGone))
@@ -214,7 +210,7 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 		}
 	}
 	if len(verify) == 0 {
-		return snapshot, nil, nil
+		return snapshot, deferredWarnings, nil
 	}
 	if provider.status != providerAvailable {
 		if provider.message != "" {

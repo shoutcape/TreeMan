@@ -41,10 +41,6 @@ type cleanSelection struct {
 
 func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
 	render := commandRenderer(cmd)
-	defaultBranch, err := git.DetectDefaultBranch()
-	if err != nil {
-		return err
-	}
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return err
@@ -55,9 +51,21 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 
 	out := cmd.ErrOrStderr()
-	preview, err := selectCleanCandidates(classifier, defaultBranch, mainRoot, entries)
+	cleanEntries, err := cleanLinkedWorktreeEntries(mainRoot, entries)
 	if err != nil {
 		return err
+	}
+	var defaultBranch string
+	preview := cleanSelection{}
+	if len(cleanEntries) > 0 {
+		defaultBranch, err = git.DetectDefaultBranch()
+		if err != nil {
+			return err
+		}
+		preview, err = classifyCleanCandidates(classifier, defaultBranch, cleanEntries)
+		if err != nil {
+			return err
+		}
 	}
 	writeMergeDiagnostics(out, render, preview.diagnostics)
 	if len(preview.candidates) == 0 {
@@ -136,24 +144,42 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 }
 
 func selectCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, mainRoot string, entries []git.WorktreeEntry) (cleanSelection, error) {
+	cleanEntries, err := cleanLinkedWorktreeEntries(mainRoot, entries)
+	if err != nil {
+		return cleanSelection{}, err
+	}
+	return classifyCleanCandidates(classifier, defaultBranch, cleanEntries)
+}
+
+func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([]git.WorktreeEntry, error) {
 	eligible := make([]git.WorktreeEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Branch == "" || entry.Branch == defaultBranch || samePath(entry.Path, mainRoot) {
+		if entry.Branch == "" || samePath(entry.Path, mainRoot) {
 			continue
 		}
 		eligible = append(eligible, entry)
 	}
 	if len(eligible) == 0 {
-		return cleanSelection{}, nil
+		return nil, nil
 	}
 
 	dirty, err := worktreeDirtyStates(eligible)
 	if err != nil {
-		return cleanSelection{}, err
+		return nil, err
 	}
 	cleanEntries := make([]git.WorktreeEntry, 0, len(eligible))
 	for index, entry := range eligible {
 		if !dirty[index] {
+			cleanEntries = append(cleanEntries, entry)
+		}
+	}
+	return cleanEntries, nil
+}
+
+func classifyCleanCandidates(classifier merge.ClassifierFunc, defaultBranch string, entries []git.WorktreeEntry) (cleanSelection, error) {
+	cleanEntries := make([]git.WorktreeEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Branch != defaultBranch {
 			cleanEntries = append(cleanEntries, entry)
 		}
 	}

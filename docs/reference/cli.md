@@ -13,6 +13,7 @@ Shell integration uses stdout destinations to change the current interactive she
 | `treeman review [number]` | `wtpr`, `wtmr` | Add a PR or MR worktree |
 | `treeman switch [query]` | `wts` | Select a worktree path |
 | `treeman list [--json]` | `wtl` | List worktrees and their status |
+| `treeman benchmark [command]` | None | Measure command execution time |
 | `treeman clean [--dry-run] [--yes]` | `wtc` | Remove clean worktrees merged into the default branch |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman shell` | None | Install and manage shell integration |
@@ -91,9 +92,17 @@ When the deleted worktree is the current directory, TreeMan prints the main work
 treeman list [--json]
 ```
 
-List the repository worktrees with branch, path, main, current, dirty, and merged state. TreeMan checks the current remote default-branch tip and fetches that branch only when the local tracking ref is missing or differs. A `YES` value in the `MERGED` column means that the branch tip is an ancestor of the refreshed default branch on `origin`, or that the remote branch is gone and GitHub or GitLab confirms a squash or rebase merge with the same source branch, target branch, and head commit. If TreeMan cannot establish fresh default-branch state, merged state is left blank. If forge verification is unavailable, only forge-confirmed results are left blank; normal Git ancestry results still show `YES`. TreeMan shows a warning when it detects a forge but cannot query it. `--json` writes an array of objects with `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields for scripts and agents.
+List repository worktrees with branch, path, main, current, dirty, and merged state. TreeMan checks the current remote default-branch tip. It fetches that branch only when the local tracking ref is missing or different. `YES` in the `MERGED` column can mean that the branch tip is an ancestor of the refreshed default branch. It can also mean that GitHub or GitLab confirms a squash or rebase merge for a deleted remote branch. This confirmation must match the source branch, target branch, and head commit. If TreeMan cannot establish fresh default-branch state, merged state is blank. If forge verification is unavailable, only forge-confirmed results are blank. Normal Git ancestry results still show `YES`. TreeMan shows a warning when it detects a forge but cannot query it. `--json` writes objects for scripts and agents. Each object contains `path`, `branch`, `main`, `current`, `dirty`, `detached`, and `merged` fields.
 
 `wtl` is a shell shortcut for `treeman list`.
+
+## `benchmark`
+
+```text
+treeman benchmark [list] [--runs <count>] [--warmup <count>]
+```
+
+Measure execution time for a supported command. The default and currently supported command is `list`. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
 
 ## `clean`
 
@@ -101,7 +110,7 @@ List the repository worktrees with branch, path, main, current, dirty, and merge
 treeman clean [--dry-run] [--yes]
 ```
 
-`clean` checks the detected default branch against the current remote tip and fetches it only when the local tracking ref is missing or differs. It then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the refreshed `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. If fresh remote state cannot be established, `clean` stops without deleting anything. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path so shell integration returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
+`clean` checks the detected default branch against the current remote tip. It fetches that branch only when the local tracking ref is missing or different. A removable linked worktree must not be main, must have no changes, and must be merged into the refreshed `origin/<default-branch>`. Squash or rebase merged branches can also qualify after their remote branch is deleted. `gh` or `glab` must report a merged PR or MR that targets the default branch. Its source branch and head commit must equal the local branch and tip. This rule includes GitHub fork PRs. Without confirmation, TreeMan retains the branch. If TreeMan cannot establish fresh remote state, `clean` stops without deleting anything. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path. Shell integration uses this path to return safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
 
 ## `shell`
 

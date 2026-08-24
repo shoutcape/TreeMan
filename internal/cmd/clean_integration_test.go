@@ -220,6 +220,7 @@ func TestCleanSkipsFetchWhenDefaultBranchIsCurrent(t *testing.T) {
 func TestCleanSkipsRemoteClassificationWithoutLinkedWorktrees(t *testing.T) {
 	repo, worktree := createMergedCleanWorktree(t)
 	runGitInDir(t, repo, "worktree", "remove", worktree)
+	runGitInDir(t, repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
 	changeToDir(t, repo)
 	commands := traceGitCommands(t, false)
 

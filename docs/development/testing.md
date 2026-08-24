@@ -12,7 +12,13 @@ Tests cover command helpers, configuration, database logic, dependency detection
 
 ## List Benchmark
 
-Install [hyperfine](https://github.com/sharkdp/hyperfine), then build and benchmark `treeman list`.
+Use the public command for a quick directional measurement.
+
+```bash
+treeman benchmark list --warmup 3 --runs 10
+```
+
+Install [hyperfine](https://github.com/sharkdp/hyperfine) to run the repeatable development benchmark.
 
 ```bash
 make benchmark-list

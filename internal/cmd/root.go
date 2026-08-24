@@ -42,6 +42,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 	root.AddCommand(newReviewCmd())
 	root.AddCommand(newSwitchCmd())
 	root.AddCommand(newListCmd())
+	root.AddCommand(newBenchmarkCmd())
 	root.AddCommand(newCleanCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newShellCmd())
@@ -70,6 +71,7 @@ func printOverview(cmd *cobra.Command) {
 		{use: "treeman review [number]", short: "Check out a PR or MR"},
 		{use: "treeman switch [query]", short: "Select a worktree"},
 		{use: "treeman list [--json]", short: "List worktrees and state"},
+		{use: "treeman benchmark [command]", short: "Measure command execution time"},
 		{use: "treeman clean", short: "Remove clean worktrees merged into default branch"},
 		{use: "treeman delete [query]", short: "Remove a worktree and branch"},
 		{use: "treeman doctor", short: "Check repository readiness and configuration"},
