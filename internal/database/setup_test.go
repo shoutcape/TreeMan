@@ -22,6 +22,14 @@ func (r *testResolver) Resolve(string, string, string) (ContainerTarget, error) 
 	return r.target, r.err
 }
 
+func (r *testResolver) ResolveID(id string) (ContainerTarget, error) {
+	r.calls++
+	if r.target.ID != id {
+		return ContainerTarget{}, os.ErrNotExist
+	}
+	return r.target, r.err
+}
+
 func newDatabaseWorktree(t *testing.T) (string, string) {
 	t.Helper()
 	repo := t.TempDir()
@@ -68,7 +76,7 @@ func TestSetupPersistsOwnershipWithoutCredentials(t *testing.T) {
 	result, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 	assert.Equal(t, created, result.DBName)
-	assert.Equal(t, 1, resolver.calls)
+	assert.Equal(t, 2, resolver.calls)
 	value, err := ReadEnvValue(worktree, "DATABASE_URL")
 	require.NoError(t, err)
 	assert.Contains(t, value, result.DBName)
@@ -129,6 +137,52 @@ func TestSetupRetryRecreatesDatabaseAfterRewriteRollback(t *testing.T) {
 	value, err := ReadEnvValue(worktree, "DATABASE_URL")
 	require.NoError(t, err)
 	assert.Contains(t, value, result.DBName)
+}
+
+func TestSetupRetryUsesRecordedTargetWhenEnvironmentDrifts(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	target := filepath.Join(worktree, "outside-env")
+	require.NoError(t, os.WriteFile(target, []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(worktree, ".env")))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "original-db"}}
+	creates := 0
+	installDatabaseStubs(t, resolver, func(string, string, string) error { creates++; return nil }, func(string, string, []string) error { return nil })
+	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "original-db")
+	require.Error(t, err)
+	require.NoError(t, os.Remove(filepath.Join(worktree, ".env")))
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://other@localhost:5544/other\n"), 0o600))
+
+	_, err = SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "replacement-db")
+	require.ErrorContains(t, err, "database setup target changed")
+	assert.Equal(t, 1, creates)
+	contents, readErr := os.ReadFile(filepath.Join(worktree, ".env"))
+	require.NoError(t, readErr)
+	assert.Equal(t, "DATABASE_URL=postgres://other@localhost:5544/other\n", string(contents))
+	store, worktreeID, storeErr := databaseStoreForWorktree(worktree)
+	require.NoError(t, storeErr)
+	record, loadErr := store.load(worktreeID)
+	require.NoError(t, loadErr)
+	require.NotNil(t, record)
+	assert.Equal(t, databaseStatusSetupPending, record.Status)
+}
+
+func TestCleanupRejectsReplacementContainer(t *testing.T) {
+	for _, configuredContainer := range []string{"configured-db", ""} {
+		t.Run(configuredContainer, func(t *testing.T) {
+			_, worktree := newDatabaseWorktree(t)
+			require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1:5432/myapp\n"), 0o600))
+			resolver := &testResolver{target: ContainerTarget{ID: "old-id", Name: "configured-db"}}
+			drops := 0
+			installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
+			_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", configuredContainer)
+			require.NoError(t, err)
+			resolver.target = ContainerTarget{ID: "new-id", Name: "configured-db"}
+
+			_, err = NewCleanupSession().Prepare(worktree)
+			require.ErrorContains(t, err, "finding recorded postgres container")
+			assert.Zero(t, drops)
+		})
+	}
 }
 
 func TestCleanupUsesRecordAfterEnvironmentRemoval(t *testing.T) {
@@ -199,6 +253,8 @@ func TestCleanRetriesOrphanedActiveCleanup(t *testing.T) {
 	_, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 	require.NoError(t, os.RemoveAll(worktree))
+	runGit(t, repo, "worktree", "prune")
+	runGit(t, repo, "branch", "-D", "feature/test")
 
 	session := NewCleanupSession()
 	session.resolver = resolver
@@ -206,6 +262,23 @@ func TestCleanRetriesOrphanedActiveCleanup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, retried)
 	assert.Equal(t, 1, drops)
+}
+
+func TestCleanDoesNotRetryOrphanedDatabaseWhileBranchExists(t *testing.T) {
+	repo, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	drops := 0
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
+	require.NoError(t, func() error { _, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", ""); return err }())
+	require.NoError(t, os.RemoveAll(worktree))
+
+	session := NewCleanupSession()
+	session.resolver = resolver
+	retried, err := session.RetryPending(repo)
+	require.NoError(t, err)
+	assert.Zero(t, retried)
+	assert.Zero(t, drops)
 }
 
 func TestCleanupNeverDropsUnmarkedRecord(t *testing.T) {

@@ -27,20 +27,19 @@ const (
 // DatabaseRecord is TreeMan's durable ownership record for one branch database.
 // It intentionally excludes connection URIs and passwords.
 type DatabaseRecord struct {
-	Version       int            `json:"version"`
-	RepositoryID  string         `json:"repository_id"`
-	WorktreeID    string         `json:"worktree_id"`
-	WorktreePath  string         `json:"worktree_path"`
-	Branch        string         `json:"branch"`
-	Database      string         `json:"database"`
-	Container     string         `json:"container,omitempty"`
-	ContainerID   string         `json:"container_id"`
-	ContainerName string         `json:"container_name"`
-	Host          string         `json:"host"`
-	Port          string         `json:"port"`
-	User          string         `json:"user"`
-	Status        databaseStatus `json:"status"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	Version      int            `json:"version"`
+	RepositoryID string         `json:"repository_id"`
+	WorktreeID   string         `json:"worktree_id"`
+	WorktreePath string         `json:"worktree_path"`
+	Branch       string         `json:"branch"`
+	Database     string         `json:"database"`
+	Container    string         `json:"container,omitempty"`
+	ContainerID  string         `json:"container_id"`
+	Host         string         `json:"host"`
+	Port         string         `json:"port"`
+	User         string         `json:"user"`
+	Status       databaseStatus `json:"status"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 type databaseStore struct {

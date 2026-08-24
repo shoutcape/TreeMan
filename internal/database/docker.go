@@ -17,6 +17,7 @@ type ContainerTarget struct {
 // matches from one Docker snapshot.
 type ContainerResolver interface {
 	Resolve(host, port, configuredName string) (ContainerTarget, error)
+	ResolveID(id string) (ContainerTarget, error)
 }
 
 type dockerContainer struct {
@@ -86,6 +87,18 @@ func (r containerResolver) Resolve(host, port, configuredName string) (Container
 		return ContainerTarget{}, fmt.Errorf("multiple PostgreSQL containers publish port %s (%s); set [database].container", port, strings.Join(names, ", "))
 	}
 	return ContainerTarget{ID: matches[0].ID, Name: matches[0].Name}, nil
+}
+
+// ResolveID confirms that the exact container recorded during setup is still
+// running. Cleanup must not fall back to a container that later reused a name
+// or published the same port.
+func (r containerResolver) ResolveID(id string) (ContainerTarget, error) {
+	for _, container := range r.containers {
+		if container.ID == id {
+			return ContainerTarget{ID: container.ID, Name: container.Name}, nil
+		}
+	}
+	return ContainerTarget{}, fmt.Errorf("recorded PostgreSQL container %q is not running", id)
 }
 
 func isLocalDatabaseHost(host string) bool {

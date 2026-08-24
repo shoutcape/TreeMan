@@ -226,6 +226,18 @@ func TestRewriteEnvValue_ReplacesQuotedValue(t *testing.T) {
 	got, err := os.ReadFile(envPath)
 	require.NoError(t, err)
 
-	expected := "DATABASE_URI=postgres://new@host:5432/newdb\nOTHER=value\n"
+	expected := "DATABASE_URI=\"postgres://new@host:5432/newdb\"\nOTHER=value\n"
 	assert.Equal(t, expected, string(got))
+}
+
+func TestRewriteEnvValue_PreservesExportWhitespaceAndQuotes(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(" export  DATABASE_URI = 'postgres://old@host/old'  \n"), 0o600))
+
+	require.NoError(t, RewriteDatabaseURI(dir, "DATABASE_URI", "postgres://new@host/new"))
+
+	got, err := os.ReadFile(envPath)
+	require.NoError(t, err)
+	assert.Equal(t, " export  DATABASE_URI = 'postgres://new@host/new'  \n", string(got))
 }

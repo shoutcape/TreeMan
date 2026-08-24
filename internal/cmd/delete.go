@@ -17,7 +17,14 @@ import (
 var (
 	removeWorktree    = git.WorktreeRemove
 	deleteBranchAtSHA = git.DeleteBranchAtSHA
+	newCleanupSession = func() databaseCleanupSession { return database.NewCleanupSession() }
 )
+
+type databaseCleanupSession interface {
+	Prepare(string) (*database.CleanupTicket, error)
+	MarkDeleted(*database.CleanupTicket) error
+	Flush() error
+}
 
 func newDeleteCmd() *cobra.Command {
 	var flagPath string
@@ -168,7 +175,7 @@ func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot string, f
 // cleanup conditional on the exact commit whose merge was verified. Every
 // deletion snapshots its branch SHA and compare-and-deletes that exact ref.
 func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
-	session := database.NewCleanupSession()
+	session := newCleanupSession()
 	if err := deleteWorktreeAtSHAWithDatabase(cmd, dest, branch, mainRoot, force, skipMergeCheck, expectedSHA, session); err != nil {
 		return err
 	}
@@ -180,7 +187,7 @@ func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, forc
 
 // deleteWorktreeAtSHAWithDatabase lets clean share one cleanup session across
 // worktrees while keeping ownership transitions inside the database package.
-func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string, session *database.CleanupSession) error {
+func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string, session databaseCleanupSession) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err
@@ -234,7 +241,7 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", cfgResult.Warning))
 	}
 	if session == nil {
-		session = database.NewCleanupSession()
+		session = newCleanupSession()
 	}
 	if dbTicket, err = session.Prepare(entry.Path); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))

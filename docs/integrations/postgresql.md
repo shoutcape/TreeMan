@@ -36,9 +36,11 @@ TreeMan takes one snapshot of running Docker containers. It uses the configured 
 
 TreeMan runs `psql` through `docker exec` against the `postgres` maintenance database. Docker access, a PostgreSQL client inside the container, and a user permitted to create and drop databases are required.
 
+If a setup must be retried, its original host, effective port, user, and configured container must remain unchanged. Changing only the source database name is allowed: TreeMan replaces it with the owned branch database.
+
 ## Delete a Branch Database
 
-TreeMan records a database ownership record in Git's common directory before setup completes. It reads that record before removing the worktree, marks it pending only after both worktree and branch deletion succeed, then drops the recorded database.
+TreeMan records a database ownership record in Git's common directory before setup completes. The record pins the exact Docker container ID selected during setup. It reads that record before removing the worktree, marks it pending only after both worktree and branch deletion succeed, then drops the recorded database. If that exact container is no longer running, cleanup fails safely rather than selecting a replacement by name or port.
 
 TreeMan never authorizes deletion from the current `.env` value. Older branch databases without an ownership record are preserved with a warning and require manual cleanup.
 

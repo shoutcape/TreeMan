@@ -44,90 +44,93 @@ func SetupBranchDB(worktreePath, branch, envKey, configuredContainer string) (Se
 	if err != nil {
 		return SetupResult{}, err
 	}
-	resolver, err := newContainerResolverFn()
-	if err != nil {
-		return SetupResult{}, fmt.Errorf("listing PostgreSQL containers: %w", err)
-	}
-	target, err := resolver.Resolve(parsed.Host, parsed.Port, configuredContainer)
-	if err != nil {
-		return SetupResult{}, fmt.Errorf("finding postgres container: %w", err)
-	}
-
-	var dbName string
+	var record *DatabaseRecord
 	err = store.withLock(func() error {
 		existing, err := store.load(worktreeID)
 		if err != nil {
 			return err
 		}
-		var record *DatabaseRecord
 		if existing != nil {
 			if existing.Branch != branch || existing.Status != databaseStatusSetupPending {
 				return fmt.Errorf("database ownership record already exists for worktree %q", worktreePath)
 			}
-			dbName = existing.Database
 			record = existing
-		} else {
-			dbName = BranchDBNameForRepository(parsed.Database, branch, store.repoID)
-			record = &DatabaseRecord{
-				WorktreeID:    worktreeID,
-				WorktreePath:  worktreePath,
-				Branch:        branch,
-				Database:      dbName,
-				Container:     configuredContainer,
-				ContainerID:   target.ID,
-				ContainerName: target.Name,
-				Host:          parsed.Host,
-				Port:          parsed.Port,
-				User:          parsed.User,
-				Status:        databaseStatusSetupPending,
-			}
-			if err := store.save(record); err != nil {
-				return err
-			}
 		}
-		// Creation is idempotent, so every retry can safely re-establish the
-		// database before changing the worktree environment.
-		if err := createDatabaseFn(target.Name, parsed.User, dbName); err != nil {
-			return fmt.Errorf("creating database %q: %w", dbName, err)
-		}
-
-		newURI, err := ReplaceDatabase(uri, dbName)
-		if err != nil {
-			return fmt.Errorf("building new URI: %w", err)
-		}
-		if err := RewriteDatabaseURI(worktreePath, envKey, newURI); err != nil {
-			if dropErr := dropDatabasesFn(target.Name, parsed.User, []string{dbName}); dropErr != nil {
-				return fmt.Errorf("rewriting .env: %w; rolling back database %q: %v", err, dbName, dropErr)
-			}
-			// Keep the setup-pending record even after a successful rollback. A
-			// retry recreates the database before attempting the rewrite again.
-			return fmt.Errorf("rewriting .env: %w", err)
-		}
-		activeRecord, err := store.load(worktreeID)
-		if err != nil {
-			return fmt.Errorf("loading database ownership record after setup: %w", err)
-		}
-		if activeRecord == nil {
-			return fmt.Errorf("database ownership record disappeared during setup")
-		}
-		activeRecord.Status = databaseStatusActive
-		activeRecord.ContainerID = target.ID
-		activeRecord.ContainerName = target.Name
-		return store.save(activeRecord)
+		return nil
 	})
 	if err != nil {
 		return SetupResult{}, err
 	}
-	return SetupResult{DBName: dbName}, nil
+	if record != nil && (parsed.Host != record.Host || parsed.Port != record.Port || parsed.User != record.User || configuredContainer != record.Container) {
+		return SetupResult{}, fmt.Errorf("database setup target changed since the pending setup; restore host, port, user, and container configuration before retrying")
+	}
+	resolver, err := newContainerResolverFn()
+	if err != nil {
+		return SetupResult{}, fmt.Errorf("listing PostgreSQL containers: %w", err)
+	}
+	if record == nil {
+		target, err := resolver.Resolve(parsed.Host, parsed.Port, configuredContainer)
+		if err != nil {
+			return SetupResult{}, fmt.Errorf("finding postgres container: %w", err)
+		}
+		record = &DatabaseRecord{WorktreeID: worktreeID, WorktreePath: worktreePath, Branch: branch, Database: BranchDBNameForRepository(parsed.Database, branch, store.repoID), Container: configuredContainer, ContainerID: target.ID, Host: parsed.Host, Port: parsed.Port, User: parsed.User, Status: databaseStatusSetupPending}
+		if err := store.withLock(func() error {
+			if existing, err := store.load(worktreeID); err != nil {
+				return err
+			} else if existing != nil {
+				if existing.Branch != branch || existing.Status != databaseStatusSetupPending {
+					return fmt.Errorf("database ownership record already exists for worktree %q", worktreePath)
+				}
+				record = existing
+				return nil
+			}
+			return store.save(record)
+		}); err != nil {
+			return SetupResult{}, err
+		}
+	}
+	target, err := resolver.ResolveID(record.ContainerID)
+	if err != nil {
+		return SetupResult{}, fmt.Errorf("finding recorded postgres container: %w", err)
+	}
+	// Creation is idempotent, so every retry can safely re-establish the
+	// recorded database before changing the worktree environment.
+	if err := createDatabaseFn(target.ID, record.User, record.Database); err != nil {
+		return SetupResult{}, fmt.Errorf("creating database %q: %w", record.Database, err)
+	}
+	newURI, err := ReplaceDatabase(uri, record.Database)
+	if err != nil {
+		return SetupResult{}, fmt.Errorf("building new URI: %w", err)
+	}
+	if err := RewriteDatabaseURI(worktreePath, envKey, newURI); err != nil {
+		if dropErr := dropDatabasesFn(target.ID, record.User, []string{record.Database}); dropErr != nil {
+			return SetupResult{}, fmt.Errorf("rewriting .env: %w; rolling back database %q: %v", err, record.Database, dropErr)
+		}
+		return SetupResult{}, fmt.Errorf("rewriting .env: %w", err)
+	}
+	if err := store.withLock(func() error {
+		current, err := store.load(worktreeID)
+		if err != nil {
+			return err
+		}
+		if current == nil || current.Status != databaseStatusSetupPending || current.Database != record.Database || current.ContainerID != record.ContainerID {
+			return fmt.Errorf("database ownership record changed during setup")
+		}
+		current.Status = databaseStatusActive
+		return store.save(current)
+	}); err != nil {
+		return SetupResult{}, err
+	}
+	return SetupResult{DBName: record.Database}, nil
 }
 
 // cleanupPlan is an owned database target. It never derives deletion authority
 // from a mutable environment file.
 type cleanupPlan struct {
-	store      *databaseStore
-	worktreeID string
-	record     DatabaseRecord
-	target     ContainerTarget
+	store       *databaseStore
+	worktreeID  string
+	record      DatabaseRecord
+	containerID string
 }
 
 // CleanupTicket captures an owned database target before its worktree is
@@ -172,11 +175,11 @@ func (s *CleanupSession) Prepare(worktreePath string) (*CleanupTicket, error) {
 			return nil, fmt.Errorf("listing PostgreSQL containers: %w", err)
 		}
 	}
-	target, err := s.resolver.Resolve(record.Host, record.Port, record.Container)
+	target, err := s.resolver.ResolveID(record.ContainerID)
 	if err != nil {
-		return nil, fmt.Errorf("finding postgres container: %w", err)
+		return nil, fmt.Errorf("finding recorded postgres container: %w", err)
 	}
-	return &CleanupTicket{session: s, plan: &cleanupPlan{store: store, worktreeID: worktreeID, record: *record, target: target}}, nil
+	return &CleanupTicket{session: s, plan: &cleanupPlan{store: store, worktreeID: worktreeID, record: *record, containerID: target.ID}}, nil
 }
 
 // MarkDeleted makes a successfully deleted worktree's database retryable
@@ -246,9 +249,9 @@ func executeCleanupBatch(plans []*cleanupPlan) error {
 			errs = append(errs, err)
 			continue
 		}
-		key := plan.target.Name + "\x00" + plan.record.User
+		key := plan.containerID + "\x00" + plan.record.User
 		if groups[key] == nil {
-			groups[key] = &group{container: plan.target.Name, user: plan.record.User}
+			groups[key] = &group{container: plan.containerID, user: plan.record.User}
 		}
 		groups[key].plans = append(groups[key].plans, plan)
 	}
@@ -289,41 +292,57 @@ func (s *CleanupSession) RetryPending(mainRoot string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	pending := make([]DatabaseRecord, 0)
+	records := make([]DatabaseRecord, 0)
 	if err := store.withLock(func() error {
-		records, err := store.list()
-		if err != nil {
-			return err
+		var err error
+		records, err = store.list()
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	pending := make([]DatabaseRecord, 0, len(records))
+	for _, record := range records {
+		if record.Status == databaseStatusPendingCleanup {
+			pending = append(pending, record)
+			continue
 		}
-		for _, record := range records {
-			missing, err := worktreeMissing(record.WorktreePath)
+		if record.Status != databaseStatusActive && record.Status != databaseStatusSetupPending {
+			continue
+		}
+		missing, err := worktreeMissing(record.WorktreePath)
+		if err != nil {
+			return 0, err
+		}
+		if !missing {
+			continue
+		}
+		branchMissing, err := git.BranchMissing(mainRoot, record.Branch)
+		if err != nil {
+			return 0, err
+		}
+		if !branchMissing {
+			continue
+		}
+		if err := store.withLock(func() error {
+			current, err := store.load(record.WorktreeID)
 			if err != nil {
 				return err
 			}
-			if !missing {
-				continue
+			if current == nil {
+				return fmt.Errorf("database ownership record disappeared while scheduling cleanup")
 			}
-			switch record.Status {
-			case databaseStatusPendingCleanup:
-				pending = append(pending, record)
-			case databaseStatusActive, databaseStatusSetupPending:
-				current, err := store.load(record.WorktreeID)
-				if err != nil {
-					return err
-				}
-				if current == nil {
-					return fmt.Errorf("database ownership record disappeared while scheduling cleanup")
-				}
-				current.Status = databaseStatusPendingCleanup
-				if err := store.save(current); err != nil {
-					return err
-				}
-				pending = append(pending, *current)
+			if current.Status != record.Status || current.Database != record.Database || current.Branch != record.Branch || current.WorktreePath != record.WorktreePath {
+				return fmt.Errorf("database ownership record changed while scheduling cleanup")
 			}
+			current.Status = databaseStatusPendingCleanup
+			if err := store.save(current); err != nil {
+				return err
+			}
+			pending = append(pending, *current)
+			return nil
+		}); err != nil {
+			return 0, err
 		}
-		return nil
-	}); err != nil {
-		return 0, err
 	}
 	if len(pending) == 0 {
 		return 0, nil
@@ -336,15 +355,15 @@ func (s *CleanupSession) RetryPending(mainRoot string) (int, error) {
 	}
 	plans := make([]*cleanupPlan, 0, len(pending))
 	for _, record := range pending {
-		target, err := s.resolver.Resolve(record.Host, record.Port, record.Container)
+		target, err := s.resolver.ResolveID(record.ContainerID)
 		if err != nil {
-			return 0, fmt.Errorf("finding postgres container for pending database %q: %w", record.Database, err)
+			return 0, fmt.Errorf("finding recorded postgres container for pending database %q: %w", record.Database, err)
 		}
 		plans = append(plans, &cleanupPlan{
-			store:      store,
-			worktreeID: record.WorktreeID,
-			record:     record,
-			target:     target,
+			store:       store,
+			worktreeID:  record.WorktreeID,
+			record:      record,
+			containerID: target.ID,
 		})
 	}
 	if err := executeCleanupBatch(plans); err != nil {

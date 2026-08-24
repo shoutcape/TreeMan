@@ -9,10 +9,30 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/database"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type recordingCleanupSession struct {
+	events *[]string
+}
+
+func (s *recordingCleanupSession) Prepare(string) (*database.CleanupTicket, error) {
+	*s.events = append(*s.events, "prepare")
+	return nil, nil
+}
+
+func (s *recordingCleanupSession) MarkDeleted(*database.CleanupTicket) error {
+	*s.events = append(*s.events, "mark")
+	return nil
+}
+
+func (s *recordingCleanupSession) Flush() error {
+	*s.events = append(*s.events, "flush")
+	return nil
+}
 
 func TestRunDeleteDirect_RejectsDirtyWorktreeWithoutForce(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/dirty")
@@ -150,6 +170,43 @@ func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), `Recovery: inspect branch "feature/branch-failure"`)
 	assert.NoDirExists(t, worktree)
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/branch-failure")
+}
+
+func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
+	t.Run("branch failure does not flush", func(t *testing.T) {
+		repo, worktree := createTestWorktree(t, "feature/cleanup-failure")
+		chdirForTest(t, repo)
+		events := []string{}
+		restoreSession := newCleanupSession
+		newCleanupSession = func() databaseCleanupSession { return &recordingCleanupSession{events: &events} }
+		t.Cleanup(func() { newCleanupSession = restoreSession })
+		restoreDelete := deleteBranchAtSHA
+		deleteBranchAtSHA = func(string, string, string) error { events = append(events, "branch"); return assert.AnError }
+		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
+
+		err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-failure", repo, true, true, "")
+
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, []string{"prepare", "branch"}, events)
+	})
+
+	t.Run("successful branch deletion flushes", func(t *testing.T) {
+		repo, worktree := createTestWorktree(t, "feature/cleanup-success")
+		chdirForTest(t, repo)
+		events := []string{}
+		restoreSession := newCleanupSession
+		newCleanupSession = func() databaseCleanupSession { return &recordingCleanupSession{events: &events} }
+		t.Cleanup(func() { newCleanupSession = restoreSession })
+		restoreDelete := deleteBranchAtSHA
+		deleteBranchAtSHA = func(dir, branch, sha string) error {
+			events = append(events, "branch")
+			return restoreDelete(dir, branch, sha)
+		}
+		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
+
+		require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-success", repo, true, true, ""))
+		assert.Equal(t, []string{"prepare", "branch", "flush"}, events)
+	})
 }
 
 func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testing.T) {

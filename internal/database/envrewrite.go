@@ -36,14 +36,11 @@ func ReadEnvValue(dir, key string) (string, error) {
 			continue
 		}
 
-		k, value, ok := strings.Cut(trimmed, "=")
-		if !ok {
+		assignment, ok := parseEnvAssignment(line)
+		if !ok || assignment.key != key {
 			continue
 		}
-
-		if strings.TrimSpace(strings.TrimPrefix(k, "export ")) == key {
-			return stripQuotes(value), nil
-		}
+		return stripQuotes(strings.TrimSpace(assignment.value)), nil
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -84,16 +81,18 @@ func RewriteEnvValue(dir, key, newValue string) error {
 			continue
 		}
 
-		k, _, ok := strings.Cut(trimmed, "=")
-		if !ok {
+		assignment, ok := parseEnvAssignment(line)
+		if !ok || assignment.key != key {
 			continue
 		}
-
-		if strings.TrimSpace(strings.TrimPrefix(k, "export ")) == key {
-			lines[i] = key + "=" + newValue
-			found = true
-			break
+		value := newValue
+		trimmedValue := strings.TrimSpace(assignment.value)
+		if len(trimmedValue) >= 2 && ((trimmedValue[0] == '"' && trimmedValue[len(trimmedValue)-1] == '"') || (trimmedValue[0] == '\'' && trimmedValue[len(trimmedValue)-1] == '\'')) {
+			value = string(trimmedValue[0]) + newValue + string(trimmedValue[0])
 		}
+		lines[i] = assignment.prefix + value + assignment.suffix
+		found = true
+		break
 	}
 
 	if !found {
@@ -106,6 +105,40 @@ func RewriteEnvValue(dir, key, newValue string) error {
 	}
 
 	return nil
+}
+
+type envAssignment struct {
+	key    string
+	prefix string
+	value  string
+	suffix string
+}
+
+// parseEnvAssignment retains the spelling around an assignment while exposing
+// its key. It accepts the common optional export prefix used by shell dotenvs.
+func parseEnvAssignment(line string) (envAssignment, bool) {
+	equals := strings.IndexByte(line, '=')
+	if equals < 0 {
+		return envAssignment{}, false
+	}
+	left := line[:equals]
+	keyPart := strings.TrimSpace(left)
+	if strings.HasPrefix(keyPart, "export ") {
+		keyPart = strings.TrimSpace(strings.TrimPrefix(keyPart, "export "))
+	}
+	if keyPart == "" {
+		return envAssignment{}, false
+	}
+	valueStart := equals + 1
+	for valueStart < len(line) && (line[valueStart] == ' ' || line[valueStart] == '\t') {
+		valueStart++
+	}
+	value := line[valueStart:]
+	trailing := len(value)
+	for trailing > 0 && (value[trailing-1] == ' ' || value[trailing-1] == '\t') {
+		trailing--
+	}
+	return envAssignment{key: keyPart, prefix: line[:valueStart], value: value[:trailing], suffix: value[trailing:]}, true
 }
 
 // ReadDatabaseURI is a convenience wrapper for backward compatibility.

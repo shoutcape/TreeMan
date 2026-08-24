@@ -127,6 +127,20 @@ func BranchExists(branch string) bool {
 	return err == nil
 }
 
+// BranchMissing reports whether the exact local branch ref is absent. Unlike
+// BranchExists, operational failures are returned so callers can fail closed.
+func BranchMissing(dir, branch string) (bool, error) {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("could not check branch %q: %w", branch, err)
+	}
+	return false, nil
+}
+
 // BranchSHA returns the commit SHA at the tip of the given local branch.
 func BranchSHA(branch string) (string, error) {
 	sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
