@@ -126,7 +126,8 @@ func CreateDatabase(container, user, dbName string) error {
 }
 
 // DropDatabases terminates active connections and drops a set of owned
-// databases in one psql invocation.
+// databases. Each -c is a separate request: PostgreSQL cannot run DROP
+// DATABASE inside the transaction used for a multi-statement request.
 func DropDatabases(container, user string, dbNames []string) error {
 	if len(dbNames) == 0 {
 		return nil
@@ -154,21 +155,23 @@ func buildPsqlArgs(container, user, dbName string) []string {
 	}
 }
 
-// buildDropArgs constructs one psql command for a batch of owned databases.
+// buildDropArgs constructs separate psql requests for connection termination
+// and database removal.
 func buildDropArgs(container, user string, dbNames ...string) []string {
-	commands := make([]string, 0, len(dbNames)*2)
-	for _, dbName := range dbNames {
-		commands = append(commands,
-			fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", quoteLiteral(dbName)),
-			fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdentifier(dbName)),
-		)
-	}
-	return []string{
+	args := []string{
 		"exec", container,
 		"psql", "-U", user, "-d", "postgres",
 		"-v", "ON_ERROR_STOP=1",
-		"-c", strings.Join(commands, "; "),
 	}
+	for _, dbName := range dbNames {
+		args = append(args,
+			"-c",
+			fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()", quoteLiteral(dbName)),
+			"-c",
+			fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdentifier(dbName)),
+		)
+	}
+	return args
 }
 
 func quoteIdentifier(name string) string {

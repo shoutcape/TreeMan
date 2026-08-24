@@ -23,8 +23,10 @@ func TestBranchDBNameForRepositoryIsUniqueAndWithinPostgresLimit(t *testing.T) {
 	first := BranchDBNameForRepository("myapp", "feature/a-b", "repository-one")
 	second := BranchDBNameForRepository("myapp", "feature/a_b", "repository-one")
 	otherRepository := BranchDBNameForRepository("myapp", "feature/a-b", "repository-two")
+	otherSource := BranchDBNameForRepository("otherapp", "feature/a-b", "repository-one")
 	assert.NotEqual(t, first, second)
 	assert.NotEqual(t, first, otherRepository)
+	assert.NotEqual(t, first, otherSource)
 	assert.LessOrEqual(t, len(first), 63)
 	assert.Contains(t, first, "__")
 }

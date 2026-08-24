@@ -18,7 +18,7 @@ This document describes current behavior. It is not a product roadmap.
 
 - A failed database drop remains pending until a later `treeman clean` can reach its configured container.
 - Legacy branch databases created before ownership records are not removed automatically.
-- Docker container identity is not durable across external container replacement. TreeMan resolves the configured container or URI port again before cleanup.
+- Docker container identity is not durable across external container replacement. Cleanup requires the exact recorded container ID, so the database remains pending until that container is available again or is handled manually.
 
 ## User Interface
 

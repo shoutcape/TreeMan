@@ -108,7 +108,7 @@ func BranchDBName(originalDB, branch string) string {
 
 // BranchDBNameForRepository derives a collision-resistant PostgreSQL
 // identifier. The readable prefixes are capped safely and the suffix is a
-// stable hash of the repository and full branch name.
+// stable hash of the repository, source database, and full branch name.
 func BranchDBNameForRepository(originalDB, branch, repositoryID string) string {
 	const maxIdentifierBytes = 63
 	const hashLength = 12
@@ -121,7 +121,7 @@ func BranchDBNameForRepository(originalDB, branch, repositoryID string) string {
 	if slug == "" {
 		slug = "branch"
 	}
-	sum := sha256.Sum256([]byte(repositoryID + "\x00" + branch))
+	sum := sha256.Sum256([]byte(repositoryID + "\x00" + originalDB + "\x00" + branch))
 	hash := hex.EncodeToString(sum[:])[:hashLength]
 
 	// Reserve separators and hash, then split the remaining readable budget.

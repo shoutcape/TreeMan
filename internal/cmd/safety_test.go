@@ -19,6 +19,25 @@ type recordingCleanupSession struct {
 	events *[]string
 }
 
+type transitionCleanupSession struct {
+	events *[]string
+}
+
+func (s *transitionCleanupSession) Prepare(string) (*database.CleanupTicket, error) {
+	*s.events = append(*s.events, "active")
+	return &database.CleanupTicket{}, nil
+}
+
+func (s *transitionCleanupSession) MarkDeleted(*database.CleanupTicket) error {
+	*s.events = append(*s.events, "pending_cleanup")
+	return nil
+}
+
+func (s *transitionCleanupSession) Flush() error {
+	*s.events = append(*s.events, "removed")
+	return nil
+}
+
 func (s *recordingCleanupSession) Prepare(string) (*database.CleanupTicket, error) {
 	*s.events = append(*s.events, "prepare")
 	return nil, nil
@@ -207,6 +226,18 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-success", repo, true, true, ""))
 		assert.Equal(t, []string{"prepare", "branch", "flush"}, events)
 	})
+}
+
+func TestDeleteWorktreeAtSHAAdvancesDatabaseCleanupLifecycle(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/database-lifecycle")
+	chdirForTest(t, repo)
+	events := []string{}
+	restoreSession := newCleanupSession
+	newCleanupSession = func() databaseCleanupSession { return &transitionCleanupSession{events: &events} }
+	t.Cleanup(func() { newCleanupSession = restoreSession })
+
+	require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/database-lifecycle", repo, true, true, ""))
+	assert.Equal(t, []string{"active", "pending_cleanup", "removed"}, events)
 }
 
 func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testing.T) {

@@ -39,6 +39,9 @@ func TestBuildPsqlArgsUsesMaintenanceDatabaseAndEscapesSQL(t *testing.T) {
 
 	drop := buildDropArgs("postgres", "app", `branch'; DROP DATABASE postgres; --`)
 	assert.Equal(t, "postgres", drop[6])
-	assert.Contains(t, drop[10], "'branch''; DROP DATABASE postgres; --'")
-	assert.Contains(t, drop[10], `DROP DATABASE IF EXISTS "branch'; DROP DATABASE postgres; --"`)
+	assert.Equal(t, []string{
+		"exec", "postgres", "psql", "-U", "app", "-d", "postgres", "-v", "ON_ERROR_STOP=1",
+		"-c", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'branch''; DROP DATABASE postgres; --' AND pid <> pg_backend_pid()",
+		"-c", `DROP DATABASE IF EXISTS "branch'; DROP DATABASE postgres; --"`,
+	}, drop)
 }

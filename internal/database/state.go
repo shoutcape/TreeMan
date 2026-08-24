@@ -149,7 +149,7 @@ func (s *databaseStore) remove(worktreeID string) error {
 	if err := os.Remove(s.recordPath(worktreeID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing database ownership record: %w", err)
 	}
-	return nil
+	return syncDirectory(s.stateDir())
 }
 
 func (s *databaseStore) list() ([]DatabaseRecord, error) {
@@ -178,6 +178,159 @@ func (s *databaseStore) list() ([]DatabaseRecord, error) {
 	return records, nil
 }
 
+func (s *databaseStore) records() ([]DatabaseRecord, error) {
+	var records []DatabaseRecord
+	err := s.withLock(func() error {
+		var err error
+		records, err = s.list()
+		return err
+	})
+	return records, err
+}
+
+// setupRecord returns the only retryable setup record for a worktree.
+func (s *databaseStore) setupRecord(worktreeID, branch string) (*DatabaseRecord, error) {
+	var result *DatabaseRecord
+	err := s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		if err != nil || record == nil {
+			result = record
+			return err
+		}
+		if record.Branch != branch || record.Status != databaseStatusSetupPending {
+			return fmt.Errorf("database ownership record already exists for worktree %q", record.WorktreePath)
+		}
+		result = record
+		return nil
+	})
+	return result, err
+}
+
+// beginSetup records a newly chosen database target. A physical database is
+// owned by at most one record, even when callers race under different worktree
+// IDs. Repeating the same pending setup returns its existing record.
+func (s *databaseStore) beginSetup(candidate *DatabaseRecord) (*DatabaseRecord, error) {
+	var result *DatabaseRecord
+	err := s.withLock(func() error {
+		existing, err := s.load(candidate.WorktreeID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			if existing.Branch != candidate.Branch || existing.Status != databaseStatusSetupPending || !sameSetupTarget(existing, candidate) {
+				return fmt.Errorf("database ownership record already exists for worktree %q", candidate.WorktreePath)
+			}
+			result = existing
+			return nil
+		}
+		records, err := s.list()
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			if sameDatabaseResource(&record, candidate) {
+				return fmt.Errorf("database %q is already owned by worktree %q", candidate.Database, record.WorktreePath)
+			}
+		}
+		if err := s.save(candidate); err != nil {
+			return err
+		}
+		result = candidate
+		return nil
+	})
+	return result, err
+}
+
+func (s *databaseStore) activateSetup(worktreeID string, expected DatabaseRecord) error {
+	return s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		if err != nil {
+			return err
+		}
+		if record == nil || record.Status != databaseStatusSetupPending || !sameDatabaseResource(record, &expected) {
+			return fmt.Errorf("database ownership record changed during setup")
+		}
+		record.Status = databaseStatusActive
+		return s.save(record)
+	})
+}
+
+// cleanupRecord returns an authorized record before worktree deletion.
+func (s *databaseStore) cleanupRecord(worktreeID string) (*DatabaseRecord, error) {
+	var result *DatabaseRecord
+	err := s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		if err != nil || record == nil {
+			result = record
+			return err
+		}
+		if record.Status != databaseStatusActive && record.Status != databaseStatusSetupPending {
+			return nil
+		}
+		result = record
+		return nil
+	})
+	return result, err
+}
+
+// markPendingCleanup advances an owned record to the durable cleanup state.
+func (s *databaseStore) markPendingCleanup(worktreeID string, expected DatabaseRecord) (*DatabaseRecord, error) {
+	var result *DatabaseRecord
+	err := s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		if err != nil {
+			return err
+		}
+		if record == nil || !sameDatabaseResource(record, &expected) || (record.Status != databaseStatusActive && record.Status != databaseStatusSetupPending) {
+			return fmt.Errorf("database ownership record changed before cleanup")
+		}
+		record.Status = databaseStatusPendingCleanup
+		if err := s.save(record); err != nil {
+			return err
+		}
+		result = record
+		return nil
+	})
+	return result, err
+}
+
+func (s *databaseStore) pendingCleanupRecord(worktreeID string, expected DatabaseRecord) (*DatabaseRecord, error) {
+	var result *DatabaseRecord
+	err := s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		if err != nil {
+			return err
+		}
+		if record == nil || record.Status != databaseStatusPendingCleanup || !sameDatabaseResource(record, &expected) {
+			return fmt.Errorf("database ownership record changed before cleanup")
+		}
+		result = record
+		return nil
+	})
+	return result, err
+}
+
+func (s *databaseStore) removePendingCleanup(worktreeID string, expected DatabaseRecord) error {
+	return s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		if err != nil {
+			return err
+		}
+		if record == nil || record.Status != databaseStatusPendingCleanup || !sameDatabaseResource(record, &expected) {
+			return fmt.Errorf("database ownership record changed during cleanup")
+		}
+		return s.remove(worktreeID)
+	})
+}
+
+func sameDatabaseResource(a, b *DatabaseRecord) bool {
+	return a.Database == b.Database && a.ContainerID == b.ContainerID
+}
+
+func sameSetupTarget(a, b *DatabaseRecord) bool {
+	return sameDatabaseResource(a, b) && a.Host == b.Host && a.Port == b.Port && a.User == b.User && a.Container == b.Container
+}
+
 func writePrivateFile(path string, data []byte, mode os.FileMode) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".tmp-")
 	if err != nil {
@@ -193,8 +346,24 @@ func writePrivateFile(path string, data []byte, mode os.FileMode) error {
 		temporary.Close()
 		return err
 	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporaryPath, path)
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }

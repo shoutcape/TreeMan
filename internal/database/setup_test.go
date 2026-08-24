@@ -17,6 +17,20 @@ type testResolver struct {
 	calls  int
 }
 
+type multiResolver map[string]ContainerTarget
+
+func (r multiResolver) Resolve(string, string, string) (ContainerTarget, error) {
+	return ContainerTarget{}, os.ErrNotExist
+}
+
+func (r multiResolver) ResolveID(id string) (ContainerTarget, error) {
+	target, ok := r[id]
+	if !ok {
+		return ContainerTarget{}, os.ErrNotExist
+	}
+	return target, nil
+}
+
 func (r *testResolver) Resolve(string, string, string) (ContainerTarget, error) {
 	r.calls++
 	return r.target, r.err
@@ -295,9 +309,93 @@ func TestCleanupNeverDropsUnmarkedRecord(t *testing.T) {
 	ticket, err := session.Prepare(worktree)
 	require.NoError(t, err)
 	require.NotNil(t, ticket)
-	err = executeCleanupBatch([]*cleanupPlan{ticket.plan})
+	_, err = executeCleanupBatch([]*cleanupPlan{ticket.plan})
 	require.ErrorContains(t, err, "changed before cleanup")
 	assert.Zero(t, drops)
+}
+
+func TestCleanupRetainsFailedDropForRetry(t *testing.T) {
+	repo, worktree := newDatabaseWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+	failDrop := true
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error {
+		if failDrop {
+			return assert.AnError
+		}
+		return nil
+	})
+	require.NoError(t, func() error { _, err := SetupBranchDB(worktree, "feature/test", "DATABASE_URL", ""); return err }())
+
+	session := NewCleanupSession()
+	session.resolver = resolver
+	ticket, err := session.Prepare(worktree)
+	require.NoError(t, err)
+	require.NoError(t, session.MarkDeleted(ticket))
+	require.ErrorIs(t, session.Flush(), assert.AnError)
+	store, worktreeID, err := databaseStoreForWorktree(worktree)
+	require.NoError(t, err)
+	record, err := store.load(worktreeID)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.Equal(t, databaseStatusPendingCleanup, record.Status)
+
+	failDrop = false
+	retry := NewCleanupSession()
+	retry.resolver = resolver
+	retried, err := retry.RetryPending(repo)
+	require.NoError(t, err)
+	assert.Equal(t, 1, retried)
+	record, err = store.load(worktreeID)
+	require.NoError(t, err)
+	assert.Nil(t, record)
+}
+
+func TestRetryPendingCleansHealthyContainersWhenOneIsUnavailable(t *testing.T) {
+	repo, worktree := newDatabaseWorktree(t)
+	store, _, err := databaseStoreForWorktree(worktree)
+	require.NoError(t, err)
+	for _, record := range []*DatabaseRecord{
+		{WorktreeID: "healthy", WorktreePath: filepath.Join(repo, "gone-healthy"), Branch: "healthy", Database: "database_healthy", ContainerID: "healthy-id", User: "app", Status: databaseStatusSetupPending},
+		{WorktreeID: "unavailable", WorktreePath: filepath.Join(repo, "gone-unavailable"), Branch: "unavailable", Database: "database_unavailable", ContainerID: "unavailable-id", User: "app", Status: databaseStatusSetupPending},
+	} {
+		stored, err := store.beginSetup(record)
+		require.NoError(t, err)
+		_, err = store.markPendingCleanup(stored.WorktreeID, *stored)
+		require.NoError(t, err)
+	}
+	resolver := multiResolver{"healthy-id": {ID: "healthy-id", Name: "healthy-db"}}
+	var dropped []string
+	installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(_ string, _ string, names []string) error {
+		dropped = append(dropped, names...)
+		return nil
+	})
+	session := NewCleanupSession()
+	session.resolver = resolver
+	retried, err := session.RetryPending(repo)
+	require.ErrorContains(t, err, "unavailable")
+	assert.Equal(t, 1, retried)
+	assert.Equal(t, []string{"database_healthy"}, dropped)
+
+	healthy, err := store.load("healthy")
+	require.NoError(t, err)
+	assert.Nil(t, healthy)
+	unavailable, err := store.load("unavailable")
+	require.NoError(t, err)
+	require.NotNil(t, unavailable)
+	assert.Equal(t, databaseStatusPendingCleanup, unavailable.Status)
+}
+
+func TestStoreRejectsDuplicateDatabaseOwnership(t *testing.T) {
+	_, worktree := newDatabaseWorktree(t)
+	store, _, err := databaseStoreForWorktree(worktree)
+	require.NoError(t, err)
+	first := &DatabaseRecord{WorktreeID: "first", WorktreePath: "first", Branch: "first", Database: "shared", ContainerID: "container", Status: databaseStatusSetupPending}
+	_, err = store.beginSetup(first)
+	require.NoError(t, err)
+	second := &DatabaseRecord{WorktreeID: "second", WorktreePath: "second", Branch: "second", Database: "shared", ContainerID: "container", Status: databaseStatusSetupPending}
+	_, err = store.beginSetup(second)
+	require.ErrorContains(t, err, `database "shared" is already owned`)
 }
 
 func TestWorktreeMissingFailsClosed(t *testing.T) {
