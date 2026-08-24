@@ -30,7 +30,7 @@ type Palette struct {
 }
 
 var themes = map[string]Palette{
-	"forest":           {"", "#D8D5C4", "#6FB8D2", "#B2B644", "#C4915E", "#F2EA72", "#7BD88F", "#F2A65A", "#F05E5E", "#6FB8D2", "#777D74"},
+	"forest":           {"", "#D8D5C4", "#6FB8D2", "#B2B644", "#C4915E", "#F2EA72", "#7BD88F", "#F2A65A", "#F05E5E", "#6FB8D2", "#FFFFFF"},
 	"dracula":          {"#282A36", "#F8F8F2", "#8BE9FD", "#50FA7B", "#BD93F9", "#F1FA8C", "#50FA7B", "#FFB86C", "#FF5555", "#8BE9FD", "#6272A4"},
 	"catppuccin-mocha": {"#1E1E2E", "#CDD6F4", "#89DCEB", "#A6E3A1", "#CBA6F7", "#F9E2AF", "#A6E3A1", "#FAB387", "#F38BA8", "#89B4FA", "#6C7086"},
 	"nord":             {"#2E3440", "#D8DEE9", "#88C0D0", "#A3BE8C", "#81A1C1", "#EBCB8B", "#A3BE8C", "#D08770", "#BF616A", "#88C0D0", "#4C566A"},
@@ -135,8 +135,8 @@ func SetTheme(name string) bool {
 func newThemeStylesFor(r *lipgloss.Renderer, p Palette) themeStyles {
 	return themeStyles{
 		title:   r.NewStyle().Bold(true).Foreground(lipgloss.Color(p.Title)),
-		header:  r.NewStyle().Bold(true).Faint(true).Foreground(lipgloss.Color(p.Foreground)),
-		muted:   r.NewStyle().Faint(true).Foreground(lipgloss.Color(p.Muted)),
+		header:  r.NewStyle().Bold(true).Foreground(lipgloss.Color(p.Foreground)),
+		muted:   r.NewStyle().Foreground(lipgloss.Color(p.Muted)),
 		branch:  r.NewStyle().Foreground(lipgloss.Color(p.Branch)),
 		path:    r.NewStyle().Foreground(lipgloss.Color(p.Path)),
 		link:    r.NewStyle().Foreground(lipgloss.Color(p.Title)).Underline(true),
