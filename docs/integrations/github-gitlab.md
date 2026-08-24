@@ -45,9 +45,9 @@ TreeMan excludes the detected default branch and existing local branches. It get
 
 For squash and rebase cleanup, TreeMan verifies the source branch name and exact head SHA.
 
-GitHub first reads only the default and candidate refs in a fresh GraphQL snapshot. After TreeMan refreshes the default branch and checks local ancestry, it requests pull-request evidence only for remote-gone non-ancestor branches. The second request revalidates the default SHA and branch absence. Normal literal merges therefore use one request; deleted squash or rebase merges use two. Larger sets use bounded batches.
+GitHub reads the default ref, candidate branch presence, and pull-request evidence in one fresh GraphQL snapshot per bounded batch. TreeMan then refreshes the default branch and checks local ancestry. Normal literal merges and deleted squash or rebase merges therefore use one GraphQL request per classification for ordinary worktree counts. If a complete snapshot cannot be read, TreeMan records a warning, refreshes state with Git, and uses exact-SHA REST verification only for stable remote-gone non-ancestors.
 
-GitHub candidates requiring more data, including fork PRs, use per-branch verification. GitLab batches remote-gone candidates in a paginated GraphQL merge-request query, matching source branch, target branch, and diff-head SHA exactly. If that query is unavailable, GitLab and other configurations use at most four requests at once.
+GitHub snapshot candidates requiring more data, including fork PRs, use exact-SHA per-branch REST verification. GitLab batches remote-gone candidates in a paginated GraphQL merge-request query, matching source branch, target branch, and diff-head SHA exactly. If that query is unavailable, GitLab and other configurations use at most four requests at once.
 
 ## Authentication Errors
 

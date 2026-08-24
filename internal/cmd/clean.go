@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"sync"
-	"sync/atomic"
 
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
@@ -40,8 +38,6 @@ type cleanSelection struct {
 	candidates  []cleanCandidate
 	diagnostics []merge.Diagnostic
 }
-
-const dirtyCheckWorkers = 4
 
 func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
 	render := commandRenderer(cmd)
@@ -151,14 +147,13 @@ func selectCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, mainR
 		return cleanSelection{}, nil
 	}
 
-	dirtyResult := worktreeDirtyStates(eligible)
-	dirty := <-dirtyResult
-	if dirty.err != nil {
-		return cleanSelection{}, dirty.err
+	dirty, err := worktreeDirtyStates(eligible)
+	if err != nil {
+		return cleanSelection{}, err
 	}
 	cleanEntries := make([]git.WorktreeEntry, 0, len(eligible))
 	for index, entry := range eligible {
-		if !dirty.states[index] {
+		if !dirty[index] {
 			cleanEntries = append(cleanEntries, entry)
 		}
 	}
@@ -235,50 +230,16 @@ func mainWorktreeRoot(entries []git.WorktreeEntry) (string, error) {
 	return entries[0].Path, nil
 }
 
-func worktreeDirtyStates(entries []git.WorktreeEntry) <-chan struct {
-	states []bool
-	err    error
-} {
-	result := make(chan struct {
-		states []bool
-		err    error
-	}, 1)
-	go func() {
-		states := make([]bool, len(entries))
-		workers := min(dirtyCheckWorkers, len(entries))
-		var next atomic.Int64
-		var firstErr error
-		var errMu sync.Mutex
-		var wait sync.WaitGroup
-		for range workers {
-			wait.Add(1)
-			go func() {
-				defer wait.Done()
-				for {
-					index := int(next.Add(1) - 1)
-					if index >= len(entries) {
-						return
-					}
-					dirty, err := git.WorktreeDirty(entries[index].Path)
-					if err != nil {
-						errMu.Lock()
-						if firstErr == nil {
-							firstErr = err
-						}
-						errMu.Unlock()
-						continue
-					}
-					states[index] = dirty
-				}
-			}()
+func worktreeDirtyStates(entries []git.WorktreeEntry) ([]bool, error) {
+	states := make([]bool, len(entries))
+	for index, entry := range entries {
+		dirty, err := git.WorktreeDirty(entry.Path)
+		if err != nil {
+			return nil, err
 		}
-		wait.Wait()
-		result <- struct {
-			states []bool
-			err    error
-		}{states: states, err: firstErr}
-	}()
-	return result
+		states[index] = dirty
+	}
+	return states, nil
 }
 
 func cleanCandidateEntries(candidates []cleanCandidate) []git.WorktreeEntry {

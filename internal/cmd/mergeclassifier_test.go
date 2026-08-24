@@ -26,7 +26,7 @@ func stubForgeVerifier(t *testing.T, headSHAs []string, verifyErr error) merge.C
 		}
 		result := merge.Result{Cleanable: cleanable}
 		if verifyErr != nil {
-			result.Diagnostics = []merge.Diagnostic{{Kind: merge.DiagnosticQueryFailed, Operation: "merge verification failed", Err: verifyErr}}
+			result.Diagnostics = []merge.Diagnostic{{Operation: "merge verification failed", Err: verifyErr}}
 		}
 		return result, nil
 	})

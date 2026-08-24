@@ -62,44 +62,8 @@ type Snapshot struct {
 	Candidates []Evidence
 }
 
-// Verdict is the conservative cleanup decision for a candidate.
-type Verdict uint8
-
-const (
-	VerdictRetain Verdict = iota
-	VerdictCleanable
-	VerdictUnknown
-)
-
-// Reason records the evidence behind a verdict.
-type Reason uint8
-
-const (
-	ReasonNone Reason = iota
-	ReasonAncestorOfDefault
-	ReasonRemoteExists
-	ReasonRemoteGoneUnverified
-	ReasonTipChanged
-)
-
-// Decision is the classification outcome for one immutable candidate.
-type Decision struct {
-	Candidate Candidate
-	Verdict   Verdict
-	Reason    Reason
-}
-
-// DiagnosticKind identifies a non-fatal acquisition gap.
-type DiagnosticKind uint8
-
-const (
-	DiagnosticUnavailable DiagnosticKind = iota
-	DiagnosticQueryFailed
-)
-
 // Diagnostic describes a conservative gap in optional forge verification.
 type Diagnostic struct {
-	Kind      DiagnosticKind
 	Operation string
 	Err       error
 }

@@ -50,7 +50,10 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	if err != nil {
 		return err
 	}
-	dirtyResult := worktreeDirtyStates(entries)
+	dirty, err := worktreeDirtyStates(entries)
+	if err != nil {
+		return err
+	}
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return err
@@ -66,7 +69,7 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 		}
 		classification, classifyErr := classifier(defaultBranch, branchNames)
 		if classifyErr != nil {
-			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), []merge.Diagnostic{{Kind: merge.DiagnosticUnavailable, Operation: "merge status unavailable", Err: classifyErr}})
+			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), []merge.Diagnostic{{Operation: "merge status unavailable", Err: classifyErr}})
 			defaultBranch = ""
 		} else {
 			for _, candidate := range classification.Cleanable {
@@ -76,10 +79,6 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			}
 			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), classification.Diagnostics)
 		}
-	}
-	dirty := <-dirtyResult
-	if dirty.err != nil {
-		return dirty.err
 	}
 	result := make([]listEntry, 0, len(entries))
 	for index, entry := range entries {
@@ -95,7 +94,7 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			Branch:   entry.Branch,
 			Main:     samePath(entry.Path, mainRoot),
 			Current:  samePath(entry.Path, currentRoot),
-			Dirty:    dirty.states[index],
+			Dirty:    dirty[index],
 			Detached: entry.Branch == "",
 			Merged:   isMerged,
 		})

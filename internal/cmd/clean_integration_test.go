@@ -383,7 +383,7 @@ func TestCleanRemovesGitHubSnapshotVerifiedSquashMergedWorktree(t *testing.T) {
 	require.NoError(t, runClean(&cobra.Command{}, false, true))
 
 	assert.NoDirExists(t, worktree)
-	assert.Equal(t, 4, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 2, countGitHubCommands(githubCommands(), "api graphql"))
 	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
 	assert.Zero(t, countGitCommands(gitCommands(), "ls-remote"))
 }
@@ -523,7 +523,7 @@ func TestCleanSurfacesForgeParserWarning(t *testing.T) {
 	require.NoError(t, runClean(cmd, true, true))
 
 	cleanOutput := ui.StripANSI(stderr.String())
-	assert.Contains(t, cleanOutput, "GitHub merge verification failed: gh: parsing GitHub snapshot")
+	assert.Contains(t, cleanOutput, "GitHub snapshot failed: gh: parsing GitHub snapshot")
 }
 
 func createSquashMergedCleanWorktree(t *testing.T) (string, string) {

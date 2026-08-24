@@ -233,7 +233,7 @@ func TestRunListUsesGitHubSnapshotForDeletedSquashMerge(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
 	require.Len(t, entries, 2)
 	assert.True(t, entries[1].Merged)
-	assert.Equal(t, 2, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
 	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
 	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
 }
@@ -258,7 +258,7 @@ func TestRunListFallsBackToRESTForIncompleteGitHubSnapshot(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
 	require.Len(t, entries, 2)
 	assert.True(t, entries[1].Merged, "fork PR verification must retain the REST fallback")
-	assert.Equal(t, 2, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
 	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api repos/owner/repo/commits/"))
 	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
 }

@@ -144,24 +144,20 @@ func TestAcquireRejectsChangedDefaultBranchAfterFetch(t *testing.T) {
 	assert.True(t, fetched)
 }
 
-func TestAcquireUsesGitHubEvidenceOnlyForRemoteGoneNonAncestors(t *testing.T) {
+func TestAcquireUsesOneCompleteGitHubSnapshotForDeletedSquashMerge(t *testing.T) {
 	a := testAcquirer()
 	a.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
 	a.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
 	a.lookPath = func(string) (string, error) { return "/bin/gh", nil }
-	a.githubRefs = func(repo, defaultBranch string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+	calls := 0
+	a.githubSnapshot = func(repo, defaultBranch string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+		calls++
 		assert.Equal(t, "org/repo", repo)
 		assert.Equal(t, "main", defaultBranch)
 		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{
 			Candidate:    candidates[0],
 			RemoteExists: false,
-		}}}, nil
-	}
-	a.githubEvidence = func(repo, defaultBranch, defaultSHA string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-		assert.Equal(t, "default", defaultSHA)
-		assert.Equal(t, []forge.SnapshotCandidate{{Branch: "feature", SHA: "feature-sha"}}, candidates)
-		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{
-			Candidate: candidates[0], Verification: forge.SnapshotMerged,
+			Verification: forge.SnapshotMerged,
 		}}}, nil
 	}
 	a.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
@@ -172,25 +168,22 @@ func TestAcquireUsesGitHubEvidenceOnlyForRemoteGoneNonAncestors(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
+	assert.Equal(t, 1, calls)
 	assert.Equal(t, RemoteAbsent, snapshot.Candidates[0].Remote)
 	assert.Equal(t, MergeYes, snapshot.Candidates[0].Merge)
-	assert.Equal(t, VerdictCleanable, Evaluate(snapshot)[0].Verdict)
+	assert.Equal(t, []Candidate{{Branch: "feature", SHA: "feature-sha"}}, Cleanable(snapshot))
 }
 
-func TestAcquireSkipsGitHubEvidenceForRemotePresentAndAncestorBranches(t *testing.T) {
+func TestAcquireUsesCompleteGitHubSnapshotForRemotePresentAndAncestorBranches(t *testing.T) {
 	a := testAcquirer()
 	a.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
 	a.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
 	a.lookPath = func(string) (string, error) { return "/bin/gh", nil }
-	a.githubRefs = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+	a.githubSnapshot = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
 		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{
-			{Candidate: candidates[0], RemoteExists: true},
-			{Candidate: candidates[1]},
+			{Candidate: candidates[0], RemoteExists: true, Verification: forge.SnapshotNotMerged},
+			{Candidate: candidates[1], Verification: forge.SnapshotNotMerged},
 		}}, nil
-	}
-	a.githubEvidence = func(string, string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-		t.Fatal("GitHub merge evidence must not run for remote-present or ancestor branches")
-		return forge.GitHubSnapshot{}, nil
 	}
 	a.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
 	a.mergedBranches = func(string) (map[string]string, error) { return map[string]string{"ancestor": "ancestor-sha"}, nil }
@@ -203,36 +196,54 @@ func TestAcquireSkipsGitHubEvidenceForRemotePresentAndAncestorBranches(t *testin
 	assert.Equal(t, AncestorYes, snapshot.Candidates[1].Ancestor)
 }
 
-func TestAcquireRejectsChangedDefaultBranchDuringGitHubEvidence(t *testing.T) {
+func TestAcquireRejectsChangedDefaultBranchAfterGitHubSnapshot(t *testing.T) {
 	a := testAcquirer()
 	a.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
 	a.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
 	a.lookPath = func(string) (string, error) { return "/bin/gh", nil }
-	a.githubRefs = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{Candidate: candidates[0]}}}, nil
+	a.githubSnapshot = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{Candidate: candidates[0], Verification: forge.SnapshotNotMerged}}}, nil
 	}
-	a.githubEvidence = func(string, string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+	trackingCalls := 0
+	a.remoteTrackingSHA = func(string) (string, bool, error) {
+		trackingCalls++
+		if trackingCalls == 1 {
+			return "stale", true, nil
+		}
+		return "changed", true, nil
+	}
+	a.fetch = func(string) error { return nil }
+
+	_, _, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "feature-sha"}})
+
+	require.EqualError(t, err, "origin/main changed while refreshing merge state")
+}
+
+func TestAcquireRejectsGitHubSnapshotDefaultSHAMismatch(t *testing.T) {
+	a := testAcquirer()
+	a.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
+	a.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
+	a.lookPath = func(string) (string, error) { return "/bin/gh", nil }
+	a.githubSnapshot = func(string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
 		return forge.GitHubSnapshot{}, forge.ErrGitHubDefaultBranchChanged
 	}
-	a.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
-	a.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
-	a.branchSHAs = func([]string) (map[string]string, error) { return map[string]string{"feature": "feature-sha"}, nil }
 
 	_, _, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "feature-sha"}})
 
 	require.ErrorIs(t, err, forge.ErrGitHubDefaultBranchChanged)
 }
 
-func TestAcquireRetainsCandidatesAfterGitHubEvidenceFailure(t *testing.T) {
+func TestAcquireFallsBackToGitAndRESTAfterGitHubSnapshotFailure(t *testing.T) {
 	a := testAcquirer()
 	a.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
 	a.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
 	a.lookPath = func(string) (string, error) { return "/bin/gh", nil }
-	a.githubRefs = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{Candidate: candidates[0]}}}, nil
-	}
-	a.githubEvidence = func(string, string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+	a.githubSnapshot = func(string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
 		return forge.GitHubSnapshot{}, assert.AnError
+	}
+	a.remoteHeads = func(branches []string) (map[string]string, error) {
+		assert.Equal(t, []string{"main", "feature"}, branches)
+		return map[string]string{"main": "default"}, nil
 	}
 	a.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
 	a.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
@@ -252,34 +263,47 @@ func TestAcquireRetainsCandidatesAfterGitHubEvidenceFailure(t *testing.T) {
 	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "feature-sha"}})
 
 	require.NoError(t, err)
-	assert.False(t, called)
-	assert.Equal(t, MergeUnknown, snapshot.Candidates[0].Merge)
-	assert.Equal(t, VerdictRetain, Evaluate(snapshot)[0].Verdict)
+	assert.True(t, called)
+	assert.Equal(t, MergeYes, snapshot.Candidates[0].Merge)
+	assert.Equal(t, []Candidate{{Branch: "feature", SHA: "feature-sha"}}, Cleanable(snapshot))
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0].String(), "GitHub merge verification failed")
+	assert.Contains(t, warnings[0].String(), "GitHub snapshot failed")
 }
 
-func TestAcquireRetainsBranchWhoseRemoteReappearsDuringGitHubEvidence(t *testing.T) {
+func TestAcquireFallsBackToRESTOnlyForIncompleteGitHubSnapshotCandidates(t *testing.T) {
 	a := testAcquirer()
 	a.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
 	a.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
 	a.lookPath = func(string) (string, error) { return "/bin/gh", nil }
-	a.githubRefs = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{Candidate: candidates[0]}}}, nil
-	}
-	a.githubEvidence = func(_ string, _ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{Candidate: candidates[0], RemoteExists: true}}}, nil
+	a.githubSnapshot = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{
+			{Candidate: candidates[0], Verification: forge.SnapshotNotMerged},
+			{Candidate: candidates[1], Verification: forge.SnapshotNeedsFallback},
+		}}, nil
 	}
 	a.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
 	a.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
-	a.branchSHAs = func([]string) (map[string]string, error) { return map[string]string{"feature": "feature-sha"}, nil }
+	a.branchSHAs = func(branches []string) (map[string]string, error) {
+		assert.Equal(t, []string{"complete", "fallback"}, branches)
+		return map[string]string{"complete": "complete-sha", "fallback": "fallback-sha"}, nil
+	}
+	called := false
+	a.mergedPRHead = func(kind forge.Type, _, _, _, branch, sha string) (bool, error) {
+		called = true
+		assert.Equal(t, forge.GitHub, kind)
+		assert.Equal(t, "fallback", branch)
+		assert.Equal(t, "fallback-sha", sha)
+		return true, nil
+	}
 
-	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "feature-sha"}})
+	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "complete", SHA: "complete-sha"}, {Branch: "fallback", SHA: "fallback-sha"}})
 
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
-	assert.Equal(t, RemotePresent, snapshot.Candidates[0].Remote)
-	assert.Equal(t, VerdictRetain, Evaluate(snapshot)[0].Verdict)
+	assert.True(t, called)
+	assert.Equal(t, MergeNo, snapshot.Candidates[0].Merge)
+	assert.Equal(t, MergeYes, snapshot.Candidates[1].Merge)
+	assert.Equal(t, []Candidate{{Branch: "fallback", SHA: "fallback-sha"}}, Cleanable(snapshot))
 }
 
 func TestAcquireNormalizesGitLabBatchEvidence(t *testing.T) {
@@ -306,7 +330,7 @@ func TestAcquireNormalizesGitLabBatchEvidence(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
 	assert.Equal(t, MergeYes, snapshot.Candidates[0].Merge)
-	assert.Equal(t, VerdictCleanable, Evaluate(snapshot)[0].Verdict)
+	assert.Equal(t, []Candidate{{Branch: "feature", SHA: "feature-sha"}}, Cleanable(snapshot))
 }
 
 func TestAcquireRetainsBranchWhoseTipChangesDuringVerification(t *testing.T) {
@@ -321,7 +345,7 @@ func TestAcquireRetainsBranchWhoseTipChangesDuringVerification(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
 	assert.Equal(t, TipChanged, snapshot.Candidates[0].Tip)
-	assert.Equal(t, VerdictUnknown, Evaluate(snapshot)[0].Verdict)
+	assert.Empty(t, Cleanable(snapshot))
 }
 
 func testAcquirer() acquirer {
@@ -334,11 +358,8 @@ func testAcquirer() acquirer {
 		originRemoteURL:   func() (string, error) { return "", errors.New("no forge") },
 		resolveForge:      func(string) (forge.Type, string, string, error) { panic("unexpected ResolveFromRemote call") },
 		lookPath:          func(string) (string, error) { panic("unexpected LookPath call") },
-		githubRefs: func(string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-			panic("unexpected GitHub refs call")
-		},
-		githubEvidence: func(string, string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
-			panic("unexpected GitHub merge evidence call")
+		githubSnapshot: func(string, string, []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+			panic("unexpected GitHub snapshot call")
 		},
 		gitlabMergedHeads: func(string, string, string, []forge.SnapshotCandidate) (map[string]bool, error) {
 			panic("unexpected GitLab batch call")

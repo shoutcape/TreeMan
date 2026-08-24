@@ -1,28 +1,13 @@
 package merge
 
-// Evaluate applies the deletion policy to normalized evidence without reading
-// Git or querying a forge. It preserves snapshot candidate order.
-func Evaluate(snapshot Snapshot) []Decision {
-	decisions := make([]Decision, len(snapshot.Candidates))
-	for index, candidate := range snapshot.Candidates {
-		decision := Decision{
-			Candidate: candidate.Candidate,
-			Verdict:   VerdictRetain,
-			Reason:    ReasonRemoteGoneUnverified,
+// Cleanable applies the deletion policy without reading Git or querying a
+// forge. It preserves snapshot candidate order.
+func Cleanable(snapshot Snapshot) []Candidate {
+	cleanable := make([]Candidate, 0, len(snapshot.Candidates))
+	for _, evidence := range snapshot.Candidates {
+		if evidence.Tip == TipStable && (evidence.Ancestor == AncestorYes || (evidence.Remote == RemoteAbsent && evidence.Merge == MergeYes)) {
+			cleanable = append(cleanable, evidence.Candidate)
 		}
-		switch {
-		case candidate.Tip == TipChanged:
-			decision.Verdict = VerdictUnknown
-			decision.Reason = ReasonTipChanged
-		case candidate.Ancestor == AncestorYes:
-			decision.Verdict = VerdictCleanable
-			decision.Reason = ReasonAncestorOfDefault
-		case candidate.Remote == RemotePresent:
-			decision.Reason = ReasonRemoteExists
-		case candidate.Remote == RemoteAbsent && candidate.Merge == MergeYes:
-			decision.Verdict = VerdictCleanable
-		}
-		decisions[index] = decision
 	}
-	return decisions
+	return cleanable
 }
