@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -62,6 +64,21 @@ func TestBenchmarkReportsRunnerFailure(t *testing.T) {
 	})
 
 	require.EqualError(t, err, "warmup run 1 failed: failed")
+}
+
+func TestSilentCommandPreservesContextAndInput(t *testing.T) {
+	type contextKey struct{}
+	input := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.WithValue(context.Background(), contextKey{}, "value"))
+	cmd.SetIn(input)
+
+	silenced := silentCommand(cmd)
+
+	assert.Equal(t, "value", silenced.Context().Value(contextKey{}))
+	assert.Same(t, input, silenced.InOrStdin())
+	assert.Equal(t, io.Discard, silenced.OutOrStdout())
+	assert.Equal(t, io.Discard, silenced.ErrOrStderr())
 }
 
 func TestCalculateBenchmarkStats(t *testing.T) {

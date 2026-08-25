@@ -122,7 +122,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 		}
 	}
 	if len(candidates) > 0 {
-		revalidated, err := selectCleanCandidates(classifier, defaultBranch, mainRoot, cleanCandidateEntries(candidates))
+		revalidated, err := revalidateCleanCandidates(classifier, defaultBranch, mainRoot, candidates)
 		if err != nil {
 			return err
 		}
@@ -134,7 +134,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteWorktreeAtSHA(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA); err != nil {
+		if err := deleteVerifiedWorktree(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, candidate.verifiedSHA); err != nil {
 			return err
 		}
 		removed++
@@ -143,12 +143,77 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	return nil
 }
 
-func selectCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, mainRoot string, entries []git.WorktreeEntry) (cleanSelection, error) {
-	cleanEntries, err := cleanLinkedWorktreeEntries(mainRoot, entries)
+// revalidateCleanCandidates returns only unchanged preview candidates. A fresh
+// classification can remove authorization, but must never add a candidate or
+// replace the SHA shown to the user.
+func revalidateCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, mainRoot string, preview []cleanCandidate) (cleanSelection, error) {
+	entries, err := git.WorktreeList()
 	if err != nil {
 		return cleanSelection{}, err
 	}
-	return classifyCleanCandidates(classifier, defaultBranch, cleanEntries)
+	selection := cleanSelection{}
+	eligible := make([]cleanCandidate, 0, len(preview))
+	for _, candidate := range preview {
+		entry, found := linkedWorktreeEntry(entries, candidate.entry.Path, candidate.entry.Branch, mainRoot, defaultBranch)
+		if !found {
+			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "no longer eligible"))
+			continue
+		}
+		dirty, err := git.WorktreeDirty(entry.Path)
+		if err != nil {
+			return cleanSelection{}, err
+		}
+		if dirty {
+			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "dirty"))
+			continue
+		}
+		sha, err := git.BranchSHA(entry.Branch)
+		if err != nil {
+			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "no longer eligible"))
+			continue
+		}
+		if sha != candidate.verifiedSHA {
+			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "tip changed"))
+			continue
+		}
+		candidate.entry = entry
+		eligible = append(eligible, candidate)
+	}
+	if len(eligible) == 0 {
+		return selection, nil
+	}
+
+	classified, err := classifyCleanCandidates(classifier, defaultBranch, cleanCandidateEntries(eligible))
+	if err != nil {
+		return cleanSelection{}, err
+	}
+	selection.diagnostics = append(selection.diagnostics, classified.diagnostics...)
+	cleanable := make(map[merge.Candidate]struct{}, len(classified.candidates))
+	for _, candidate := range classified.candidates {
+		cleanable[merge.Candidate{Branch: candidate.entry.Branch, SHA: candidate.verifiedSHA}] = struct{}{}
+	}
+	for _, candidate := range eligible {
+		key := merge.Candidate{Branch: candidate.entry.Branch, SHA: candidate.verifiedSHA}
+		if _, ok := cleanable[key]; ok {
+			selection.candidates = append(selection.candidates, candidate)
+			continue
+		}
+		selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "no longer eligible"))
+	}
+	return selection, nil
+}
+
+func linkedWorktreeEntry(entries []git.WorktreeEntry, path, branch, mainRoot, defaultBranch string) (git.WorktreeEntry, bool) {
+	for _, entry := range entries {
+		if samePath(entry.Path, path) && entry.Branch == branch && entry.Branch != "" && entry.Branch != defaultBranch && !samePath(entry.Path, mainRoot) {
+			return entry, true
+		}
+	}
+	return git.WorktreeEntry{}, false
+}
+
+func cleanOmittedDiagnostic(candidate cleanCandidate, reason string) merge.Diagnostic {
+	return merge.Diagnostic{Operation: fmt.Sprintf("skipping %q: %s", candidate.entry.Branch, reason)}
 }
 
 func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([]git.WorktreeEntry, error) {

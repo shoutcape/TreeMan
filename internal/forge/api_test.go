@@ -30,7 +30,7 @@ func TestForgeAPIArgs(t *testing.T) {
 		ghGraphQLArgs("query", map[string]string{"owner": "owner", "name": "repo"}))
 }
 
-func TestGitHubCompleteSnapshot(t *testing.T) {
+func apiGitHubCompleteSnapshot(t *testing.T) {
 	previous := githubGraphQLCall
 	githubGraphQLCall = func(query string, variables map[string]string) ([]byte, error) {
 		assert.Contains(t, query, "ref0: ref(qualifiedName: $ref0)")
@@ -56,7 +56,7 @@ func TestGitHubCompleteSnapshot(t *testing.T) {
 	}}, snapshot.Branches)
 }
 
-func TestParseGitHubEvidenceExactMatching(t *testing.T) {
+func apiParseGitHubEvidenceExactMatching(t *testing.T) {
 	candidates := []SnapshotCandidate{
 		{Branch: "feature", SHA: "merged111"},
 		{Branch: "reused", SHA: "new222"},
@@ -72,7 +72,7 @@ func TestParseGitHubEvidenceExactMatching(t *testing.T) {
 	}, snapshot.Branches)
 }
 
-func TestParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {
+func apiParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {
 	candidates := []SnapshotCandidate{
 		{Branch: "missing", SHA: "aaa111"},
 		{Branch: "paginated", SHA: "bbb222"},
@@ -92,7 +92,7 @@ func TestParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {
 	}, snapshot.Branches)
 }
 
-func TestParseGitHubEvidenceRejectsInvalidRemoteState(t *testing.T) {
+func apiParseGitHubEvidenceRejectsInvalidRemoteState(t *testing.T) {
 	candidates := []SnapshotCandidate{{Branch: "feature", SHA: "aaa111"}}
 	plan := newGitHubCompleteSnapshotPlan(candidates)
 	for _, payload := range [][]byte{
@@ -106,7 +106,7 @@ func TestParseGitHubEvidenceRejectsInvalidRemoteState(t *testing.T) {
 	}
 }
 
-func TestGitHubSnapshotQueriesUseOnlyGeneratedAliases(t *testing.T) {
+func apiGitHubSnapshotQueriesUseOnlyGeneratedAliases(t *testing.T) {
 	query := newGitHubCompleteSnapshotPlan([]SnapshotCandidate{{Branch: "one", SHA: "one"}, {Branch: "two", SHA: "two"}}).query()
 	assert.Contains(t, query, "ref0")
 	assert.Contains(t, query, "ref1")
@@ -117,12 +117,12 @@ func TestGitHubSnapshotQueriesUseOnlyGeneratedAliases(t *testing.T) {
 	assert.False(t, strings.Contains(query, "feature/unsafe"))
 }
 
-func TestGitHubCompleteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
+func apiGitHubCompleteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
 	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
 		calls++
-		return githubSnapshotPayload(t, githubSnapshotBatchSize), nil
+		return apiGitHubSnapshotPayload(t, githubSnapshotBatchSize), nil
 	}
 	t.Cleanup(func() { githubGraphQLCall = previous })
 
@@ -138,13 +138,13 @@ func TestGitHubCompleteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
 	assert.Equal(t, candidates[githubSnapshotBatchSize], snapshot.Branches[githubSnapshotBatchSize].Candidate)
 }
 
-func TestGitHubCompleteSnapshotRejectsChangedDefaultBranchAcrossBatches(t *testing.T) {
+func apiGitHubCompleteSnapshotRejectsChangedDefaultBranchAcrossBatches(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
 	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
 		calls++
 		if calls == 1 {
-			return githubSnapshotPayload(t, githubSnapshotBatchSize), nil
+			return apiGitHubSnapshotPayload(t, githubSnapshotBatchSize), nil
 		}
 		return []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"changed"}},"ref1":null,"commit0":{"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}`), nil
 	}
@@ -160,13 +160,13 @@ func TestGitHubCompleteSnapshotRejectsChangedDefaultBranchAcrossBatches(t *testi
 	assert.Equal(t, 2, calls)
 }
 
-func TestGitHubCompleteSnapshotDiscardsPartialBatchesOnFailure(t *testing.T) {
+func apiGitHubCompleteSnapshotDiscardsPartialBatchesOnFailure(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
 	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
 		calls++
 		if calls == 1 {
-			return githubSnapshotPayload(t, githubSnapshotBatchSize), nil
+			return apiGitHubSnapshotPayload(t, githubSnapshotBatchSize), nil
 		}
 		return nil, assert.AnError
 	}
@@ -183,7 +183,7 @@ func TestGitHubCompleteSnapshotDiscardsPartialBatchesOnFailure(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-func TestGitHubCompleteSnapshotRejectsInvalidCandidates(t *testing.T) {
+func apiGitHubCompleteSnapshotRejectsInvalidCandidates(t *testing.T) {
 	for _, candidates := range [][]SnapshotCandidate{
 		{{Branch: "", SHA: "aaa111"}},
 		{{Branch: "feature", SHA: ""}},
@@ -194,7 +194,7 @@ func TestGitHubCompleteSnapshotRejectsInvalidCandidates(t *testing.T) {
 	}
 }
 
-func githubSnapshotPayload(t *testing.T, candidateCount int) []byte {
+func apiGitHubSnapshotPayload(t *testing.T, candidateCount int) []byte {
 	t.Helper()
 	repository := map[string]any{
 		"ref0": map[string]any{"target": map[string]string{"oid": "main111"}},
@@ -390,7 +390,7 @@ func TestMergedPRHeadGitLab(t *testing.T) {
 	assert.True(t, merged)
 }
 
-func TestGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
+func apiGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
 	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
@@ -419,7 +419,7 @@ func TestGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-func TestGitLabMergedHeadsBatchesCandidateInputAndMatchesAcrossBatches(t *testing.T) {
+func apiGitLabMergedHeadsBatchesCandidateInputAndMatchesAcrossBatches(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
 	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
@@ -452,7 +452,7 @@ func TestGitLabMergedHeadsBatchesCandidateInputAndMatchesAcrossBatches(t *testin
 	}, matched)
 }
 
-func TestGitLabMergedHeadsRejectsOutOfBatchMatches(t *testing.T) {
+func apiGitLabMergedHeadsRejectsOutOfBatchMatches(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
 	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
@@ -478,7 +478,7 @@ func TestGitLabMergedHeadsRejectsOutOfBatchMatches(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-func TestGitLabMergedHeadsDiscardsPartialMatchesWhenABatchFails(t *testing.T) {
+func apiGitLabMergedHeadsDiscardsPartialMatchesWhenABatchFails(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
 	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
@@ -501,7 +501,7 @@ func TestGitLabMergedHeadsDiscardsPartialMatchesWhenABatchFails(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-func TestGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
+func apiGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
 	previous := gitlabGraphQLCall
 	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
 		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":true}}}}}`), nil
@@ -512,7 +512,7 @@ func TestGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestGitLabMergedHeadsRejectsUnchangedCursor(t *testing.T) {
+func apiGitLabMergedHeadsRejectsUnchangedCursor(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
 	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {

@@ -4,17 +4,11 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
-
-var benchmarkTargets = map[string]func(*cobra.Command) error{
-	"list": func(cmd *cobra.Command) error { return runList(cmd, false) },
-}
 
 func newBenchmarkCmd() *cobra.Command {
 	var runs int
@@ -23,7 +17,7 @@ func newBenchmarkCmd() *cobra.Command {
 		Use:       "benchmark [command]",
 		Short:     "Measure execution time of a treeman command",
 		Args:      cobra.MaximumNArgs(1),
-		ValidArgs: validBenchmarkTargets(),
+		ValidArgs: []string{"list"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := "list"
 			if len(args) == 1 {
@@ -37,21 +31,11 @@ func newBenchmarkCmd() *cobra.Command {
 	return cmd
 }
 
-func validBenchmarkTargets() []string {
-	targets := make([]string, 0, len(benchmarkTargets))
-	for target := range benchmarkTargets {
-		targets = append(targets, target)
-	}
-	slices.Sort(targets)
-	return targets
-}
-
 func runBenchmark(cmd *cobra.Command, target string, warmup, runs int) error {
-	runner, ok := benchmarkTargets[target]
-	if !ok {
-		return fmt.Errorf("unknown benchmark target %q (available: %s)", target, strings.Join(validBenchmarkTargets(), ", "))
+	if target != "list" {
+		return fmt.Errorf("unknown benchmark target %q (available: list)", target)
 	}
-	return runBenchmarkWithRunner(cmd, target, warmup, runs, runner)
+	return runBenchmarkWithRunner(cmd, target, warmup, runs, func(cmd *cobra.Command) error { return runList(cmd, false) })
 }
 
 func runBenchmarkWithRunner(cmd *cobra.Command, target string, warmup, runs int, runner func(*cobra.Command) error) error {
@@ -99,10 +83,12 @@ func runBenchmarkWithRunner(cmd *cobra.Command, target string, warmup, runs int,
 }
 
 func silentCommand(cmd *cobra.Command) *cobra.Command {
-	copy := *cmd
-	copy.SetOut(io.Discard)
-	copy.SetErr(io.Discard)
-	return &copy
+	silenced := &cobra.Command{}
+	silenced.SetContext(cmd.Context())
+	silenced.SetIn(cmd.InOrStdin())
+	silenced.SetOut(io.Discard)
+	silenced.SetErr(io.Discard)
+	return silenced
 }
 
 func calcStats(durations []time.Duration) (mean, stddev, minDuration, maxDuration time.Duration) {
