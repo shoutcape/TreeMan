@@ -7,12 +7,22 @@ TreeMan reads optional TOML configuration. Invalid project configuration produce
 Put `.treeman.toml` in the main project directory. TreeMan searches from the main worktree upward to the file system root. It uses the first file that it finds.
 
 ```toml
+update_gitignore = true
+
 [database]
 env_key = "DATABASE_URI"
 
 [hooks]
 post_create = ["pnpm generate", "git status --short"]
 ```
+
+## `update_gitignore`
+
+```toml
+update_gitignore = true
+```
+
+When `true`, TreeMan appends `.worktrees/` to the root `.gitignore` the first time a worktree is created (idempotent - no duplicate entries). Defaults to `false`. Set this to `true` if you want TreeMan to manage the `.gitignore` entry automatically.
 
 ## `[database]`
 
