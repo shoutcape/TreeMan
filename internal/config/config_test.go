@@ -223,6 +223,40 @@ func TestPostCreateHooks_NilHooks(t *testing.T) {
 	assert.Nil(t, cfg.PostCreateHooks())
 }
 
+func TestShouldUpdateGitignore_DefaultFalse(t *testing.T) {
+	cfg := Config{}
+	assert.False(t, cfg.ShouldUpdateGitignore())
+}
+
+func TestShouldUpdateGitignore_Enabled(t *testing.T) {
+	cfg := Config{UpdateGitignore: true}
+	assert.True(t, cfg.ShouldUpdateGitignore())
+}
+
+func TestLoad_UpdateGitignoreTrue(t *testing.T) {
+	dir := t.TempDir()
+	content := "update_gitignore = true\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Equal(t, "", result.Warning)
+	assert.True(t, result.Config.UpdateGitignore)
+	assert.True(t, result.Config.ShouldUpdateGitignore())
+}
+
+func TestLoad_UpdateGitignoreAbsent(t *testing.T) {
+	dir := t.TempDir()
+	content := "[database]\nenv_key = \"DATABASE_URI\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Equal(t, "", result.Warning)
+	assert.False(t, result.Config.UpdateGitignore)
+	assert.False(t, result.Config.ShouldUpdateGitignore())
+}
+
 func readConfig(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

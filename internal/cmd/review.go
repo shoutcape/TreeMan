@@ -144,9 +144,17 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", info.Branch, err)))
 	}
 
-	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
-	if err := worktree.EnsureIgnored(mainRoot); err != nil {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+	// Load project config (needed for gitignore, database, and hooks).
+	cfgResult := config.Load(mainRoot)
+	if cfgResult.Warning != "" {
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
+	}
+
+	// Ensure .worktrees/ is gitignored if opted in (best-effort, non-fatal).
+	if cfgResult.Config.ShouldUpdateGitignore() {
+		if err := worktree.EnsureIgnored(mainRoot); err != nil {
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+		}
 	}
 
 	// Copy .env* files.
@@ -159,15 +167,6 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 				fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
 			}
 			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(envResult.Copied))))
-		}
-	}
-
-	// Load project config for database management.
-	var cfgResult config.LoadResult
-	if !setupOptions.skipDatabase || !setupOptions.skipHooks {
-		cfgResult = config.Load(mainRoot)
-		if cfgResult.Warning != "" {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
 		}
 	}
 

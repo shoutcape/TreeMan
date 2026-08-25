@@ -26,6 +26,11 @@ type Config struct {
 	// Hooks configures lifecycle hooks (commands to run at various stages).
 	// Nil when the [hooks] section is absent (no custom hooks).
 	Hooks *HooksConfig `toml:"hooks"`
+
+	// UpdateGitignore controls whether TreeMan appends ".worktrees/" to the
+	// root .gitignore when creating a worktree. Defaults to false so that
+	// projects managing their own .gitignore are not modified without consent.
+	UpdateGitignore bool `toml:"update_gitignore"`
 }
 
 // HooksConfig configures lifecycle hook commands.
@@ -59,6 +64,12 @@ func (c Config) PostCreateHooks() []string {
 		return nil
 	}
 	return c.Hooks.PostCreate
+}
+
+// ShouldUpdateGitignore reports whether TreeMan should append ".worktrees/"
+// to the root .gitignore when creating a worktree.
+func (c Config) ShouldUpdateGitignore() bool {
+	return c.UpdateGitignore
 }
 
 // LoadResult holds the outcome of loading a config file.

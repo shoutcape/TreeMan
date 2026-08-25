@@ -94,9 +94,17 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		return err
 	}
 
-	// Ensure .worktrees/ is gitignored (best-effort, non-fatal).
-	if err := worktree.EnsureIgnored(mainRoot); err != nil {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+	// Load project config (needed for gitignore, database, and hooks).
+	cfgResult := config.Load(mainRoot)
+	if cfgResult.Warning != "" {
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
+	}
+
+	// Ensure .worktrees/ is gitignored if opted in (best-effort, non-fatal).
+	if cfgResult.Config.ShouldUpdateGitignore() {
+		if err := worktree.EnsureIgnored(mainRoot); err != nil {
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+		}
 	}
 
 	// Copy .env* files (best-effort, non-fatal).
@@ -113,15 +121,6 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 			}
 			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
 			environmentStatus = fmt.Sprintf("completed: copied %d file(s)", len(result.Copied))
-		}
-	}
-
-	// Load project config for database management.
-	var cfgResult config.LoadResult
-	if !setupOptions.skipDatabase || !setupOptions.skipHooks {
-		cfgResult = config.Load(mainRoot)
-		if cfgResult.Warning != "" {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
 		}
 	}
 
