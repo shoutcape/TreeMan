@@ -3,8 +3,11 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/ui"
@@ -95,11 +98,13 @@ func TestRunListRefreshesDefaultBranchBeforeCheckingMergedState(t *testing.T) {
 	runGitInDir(t, updater, "config", "user.name", "Test User")
 	runGitInDir(t, updater, "merge", "--ff-only", "origin/feature")
 	runGitInDir(t, updater, "push", "origin", "main")
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
 	previousDir, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(repo))
 	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+	commands := traceGitCommands(t, false)
 
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
@@ -110,6 +115,172 @@ func TestRunListRefreshesDefaultBranchBeforeCheckingMergedState(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
 	require.Len(t, entries, 2)
 	assert.True(t, entries[1].Merged)
+	assert.Equal(t, 1, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
+	assert.Equal(t, 1, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestRunListSkipsFetchWhenDefaultBranchIsCurrent(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Merged)
+	assert.Equal(t, 1, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
+	assert.Zero(t, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestRunListContinuesWithoutMergeMarkersWhenRemoteStateFails(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	traceGitCommands(t, true)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.False(t, entries[1].Merged)
+}
+
+func TestRunListUsesCompleteGitHubSnapshotWithoutGitOrRESTFallback(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	mainSHA := gitRevParse(t, repo, "refs/remotes/origin/main")
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+	commit := fmt.Sprintf(`{"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}`)
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, commit, true), `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Merged, "literal merge must use the refreshed local tracking ref")
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
+	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
+	assert.Zero(t, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestRunListFetchesChangedDefaultBranchFromGitHubSnapshot(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	originURL, err := exec.Command("git", "-C", repo, "remote", "get-url", "origin").Output()
+	require.NoError(t, err)
+	updater := filepath.Join(t.TempDir(), "updater")
+	runGit(t, "clone", strings.TrimSpace(string(originURL)), updater)
+	runGitInDir(t, updater, "config", "user.email", "test@example.com")
+	runGitInDir(t, updater, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(updater, "next"), []byte("next\n"), 0o644))
+	runGitInDir(t, updater, "add", "next")
+	runGitInDir(t, updater, "commit", "-m", "advance main")
+	runGitInDir(t, updater, "push", "origin", "main")
+
+	mainSHA := originBranchSHA(t, repo, "main")
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, `{"associatedPullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}`, true), `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Merged)
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 1, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
+}
+
+func TestRunListUsesGitHubSnapshotForDeletedSquashMerge(t *testing.T) {
+	repo, _ := createSquashMergedCleanWorktree(t)
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	mainSHA := originBranchSHA(t, repo, "main")
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+	commit := fmt.Sprintf(`{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":%q,"headRefOid":%q}],"pageInfo":{"hasNextPage":false}}}`, "feature", featureSHA)
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, commit, false), `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Merged)
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
+	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
+}
+
+func TestRunListFallsBackToRESTForIncompleteGitHubSnapshot(t *testing.T) {
+	repo, _ := createSquashMergedCleanWorktree(t)
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	mainSHA := originBranchSHA(t, repo, "main")
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+	rest := fmt.Sprintf(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature","sha":%q,"repo":{"owner":{"login":"contributor"}}}}]`, featureSHA)
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, `null`, false), rest)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Merged, "fork PR verification must retain the REST fallback")
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api repos/owner/repo/commits/"))
+	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
+}
+
+func TestRunListFallsBackToGitRemoteStateWhenGitHubSnapshotFails(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	githubCommands := traceGitHubAPI(t, `not-json`, `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	require.NoError(t, runList(cmd, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Merged)
+	assert.Equal(t, 1, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Equal(t, 1, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
 }
 
 func TestRunListDetectsSquashMergedBranch(t *testing.T) {
@@ -121,14 +292,14 @@ func TestRunListDetectsSquashMergedBranch(t *testing.T) {
 	// won't catch it. treeman should still mark it merged once the forge
 	// confirms a merged PR/MR whose head SHA equals the local branch tip.
 	repo, _ := createSquashMergedCleanWorktree(t)
-	stubForgeVerifier(t, []string{gitRevParse(t, repo, "refs/heads/feature")}, nil)
+	classifier := stubForgeVerifier(t, []string{gitRevParse(t, repo, "refs/heads/feature")}, nil)
 
 	changeToDir(t, repo)
 
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
-	require.NoError(t, runList(cmd, true))
+	require.NoError(t, runListWithClassifier(cmd, classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
@@ -141,14 +312,14 @@ func TestRunListRemoteGoneWithoutConfirmedMergeNotMarked(t *testing.T) {
 	// merged head SHA matching the local tip the branch must stay unmarked
 	// (and clean will retain it).
 	repo, _ := createSquashMergedCleanWorktree(t)
-	stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
+	classifier := stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
 
 	changeToDir(t, repo)
 
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
-	require.NoError(t, runList(cmd, true))
+	require.NoError(t, runListWithClassifier(cmd, classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))

@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,8 +54,10 @@ func PRList(forge Type, repoSlug, host string) ([]PRInfo, error) {
 
 // Indirection vars so tests can stub CLI invocations.
 var (
-	githubAPICall = ghAPI
-	glabAPICall   = glabAPI
+	githubAPICall     = ghAPI
+	githubGraphQLCall = ghGraphQL
+	glabAPICall       = glabAPI
+	gitlabGraphQLCall = glabGraphQL
 )
 
 // MergedPRHead reports whether branch at sha was merged into defaultBranch.
@@ -111,10 +113,6 @@ func CLITool(forge Type) string {
 		return ""
 	}
 }
-
-// ---------------------------------------------------------------------------
-// GitHub
-// ---------------------------------------------------------------------------
 
 func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", repoSlug, prNumber)
@@ -202,22 +200,28 @@ func parseGithubMergedHead(data []byte, defaultBranch, branch, sha string) (bool
 }
 
 func ghAPI(endpoint string) ([]byte, error) {
-	return runGHAPI(endpoint, ghAPIArgs(endpoint))
-}
-
-func runGHAPI(endpoint string, args []string) ([]byte, error) {
-	cmd := exec.Command("gh", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gh api %s: %s", endpoint, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.Bytes(), nil
+	return runForgeCLI("gh", ghAPIArgs(endpoint), nil, "gh api "+endpoint)
 }
 
 func ghAPIArgs(endpoint string) []string {
 	return []string{"api", endpoint, "--paginate"}
+}
+
+func ghGraphQL(query string, variables map[string]string) ([]byte, error) {
+	return runForgeCLI("gh", ghGraphQLArgs(query, variables), nil, "gh api graphql")
+}
+
+func ghGraphQLArgs(query string, variables map[string]string) []string {
+	keys := make([]string, 0, len(variables))
+	for key := range variables {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	args := []string{"api", "graphql", "-f", "query=" + query}
+	for _, key := range keys {
+		args = append(args, "-f", key+"="+variables[key])
+	}
+	return args
 }
 
 func githubBranchList(repoSlug string) ([]BranchInfo, error) {
@@ -307,34 +311,6 @@ func gitlabMRList(repoSlug, host string) ([]PRInfo, error) {
 	return mrs, nil
 }
 
-func gitlabMergedHead(repoSlug, host, defaultBranch, branch, sha string) (bool, error) {
-	encoded := remote.URLEncode(repoSlug)
-	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=merged&source_branch=%s&target_branch=%s&per_page=100", encoded, url.QueryEscape(branch), url.QueryEscape(defaultBranch))
-	out, err := glabAPICall(host, endpoint)
-	if err != nil {
-		return false, err
-	}
-	return parseGitlabMergedHead(out, defaultBranch, branch, sha)
-}
-
-func parseGitlabMergedHead(data []byte, defaultBranch, branch, sha string) (bool, error) {
-	mrs, err := decodePaginated[struct {
-		State        string `json:"state"`
-		Branch       string `json:"source_branch"`
-		TargetBranch string `json:"target_branch"`
-		SHA          string `json:"sha"`
-	}](data)
-	if err != nil {
-		return false, fmt.Errorf("glab: parsing merged MR list: %w", err)
-	}
-	for _, mr := range mrs {
-		if mr.State == "merged" && mr.TargetBranch == defaultBranch && mr.Branch == branch && mr.SHA == sha {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 // decodePaginated reads the consecutive JSON arrays emitted by gh and glab
 // when --paginate is used.
 func decodePaginated[T any](data []byte) ([]T, error) {
@@ -369,18 +345,15 @@ func decodePaginated[T any](data []byte) ([]T, error) {
 }
 
 func glabAPI(host, endpoint string) ([]byte, error) {
-	return runGlabAPI(host, endpoint, glabAPIArgs(host, endpoint))
+	return runForgeCLI("glab", glabAPIArgs(host, endpoint), nil, "glab api "+endpoint)
 }
 
-func runGlabAPI(host, endpoint string, args []string) ([]byte, error) {
-	cmd := exec.Command("glab", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("glab api %s: %s", endpoint, strings.TrimSpace(stderr.String()))
+func glabGraphQL(host, query string, variables map[string]any) ([]byte, error) {
+	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		return nil, fmt.Errorf("glab: encoding GraphQL request: %w", err)
 	}
-	return stdout.Bytes(), nil
+	return runForgeCLI("glab", []string{"api", "graphql", "--hostname", host, "--input", "-"}, body, "glab api graphql")
 }
 
 func glabAPIArgs(host, endpoint string) []string {

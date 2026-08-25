@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -37,14 +38,19 @@ func newListCmd() *cobra.Command {
 }
 
 func runList(cmd *cobra.Command, jsonOutput bool) error {
-	if !git.IsInsideRepo() {
-		return fmt.Errorf("not inside a git repository")
-	}
+	return runListWithClassifier(cmd, merge.NewClassifier(), jsonOutput)
+}
+
+func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, jsonOutput bool) error {
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return err
 	}
-	mainRoot, err := git.MainWorktreeRoot()
+	mainRoot, err := mainWorktreeRoot(entries)
+	if err != nil {
+		return err
+	}
+	dirty, err := worktreeDirtyStates(entries)
 	if err != nil {
 		return err
 	}
@@ -55,31 +61,27 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 	defaultBranch := ""
 	verified := map[string]string{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
-		if err = git.Fetch("refs/heads/" + defaultBranch + ":refs/remotes/origin/" + defaultBranch); err != nil {
+		var branchNames []string
+		for _, entry := range entries {
+			if entry.Branch != "" && entry.Branch != defaultBranch {
+				branchNames = append(branchNames, entry.Branch)
+			}
+		}
+		classification, classifyErr := classifier(defaultBranch, branchNames)
+		if classifyErr != nil {
+			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), []merge.Diagnostic{{Operation: "merge status unavailable", Err: classifyErr}})
 			defaultBranch = ""
 		} else {
-			var branchNames []string
-			for _, entry := range entries {
-				if entry.Branch != "" && entry.Branch != defaultBranch {
-					branchNames = append(branchNames, entry.Branch)
+			for _, candidate := range classification.Cleanable {
+				if candidate.SHA != "" {
+					verified[candidate.Branch] = candidate.SHA
 				}
 			}
-			var warning string
-			verified, warning, err = classifyCleanable("origin/"+defaultBranch, defaultBranch, branchNames)
-			if err != nil {
-				verified = map[string]string{}
-			} else if warning != "" {
-				fmt.Fprintln(cmd.ErrOrStderr(), outputRenderer(cmd).Status(ui.ToneWarning, "!", warning))
-			}
+			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), classification.Diagnostics)
 		}
 	}
-
 	result := make([]listEntry, 0, len(entries))
-	for _, entry := range entries {
-		dirty, err := git.WorktreeDirty(entry.Path)
-		if err != nil {
-			return err
-		}
+	for index, entry := range entries {
 		// MERGED reports merge eligibility: its tip is an ancestor of
 		// origin/<default>, or its remote counterpart is gone and the forge
 		// confirms a merged PR/MR (squash/rebase merge).
@@ -92,7 +94,7 @@ func runList(cmd *cobra.Command, jsonOutput bool) error {
 			Branch:   entry.Branch,
 			Main:     samePath(entry.Path, mainRoot),
 			Current:  samePath(entry.Path, currentRoot),
-			Dirty:    dirty,
+			Dirty:    dirty[index],
 			Detached: entry.Branch == "",
 			Merged:   isMerged,
 		})

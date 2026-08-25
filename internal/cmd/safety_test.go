@@ -216,14 +216,14 @@ func TestRunDeleteDirect_DropsDatabaseOnlyAfterBranchDeletion(t *testing.T) {
 	assert.True(t, executed)
 }
 
-func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testing.T) {
+func TestDeleteVerifiedWorktreeRetainsWorktreeWhenBranchMovedBeforeRemoval(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/verified")
 	expectedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")
 	advanceMainForTest(t, repo)
 	gitTest(t, repo, "update-ref", "refs/heads/feature/verified", "refs/heads/main")
 	chdirForTest(t, repo)
 
-	err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/verified", repo, true, true, expectedSHA)
+	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, true, expectedSHA)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "moved after merge verification")
@@ -231,7 +231,18 @@ func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testi
 	assert.Equal(t, gitRevParse(t, repo, "refs/heads/main"), gitRevParse(t, repo, "refs/heads/feature/verified"))
 }
 
-func TestDeleteWorktreeAtSHAPreservesBranchOnCompareAndDeleteMismatch(t *testing.T) {
+func TestDeleteVerifiedWorktreeRequiresExpectedSHA(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/verified")
+	chdirForTest(t, repo)
+
+	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, true, "")
+
+	require.EqualError(t, err, "cannot skip merge check for branch \"feature/verified\" without an expected SHA")
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature/verified")
+}
+
+func TestDeleteVerifiedWorktreePreservesBranchOnCompareAndDeleteMismatch(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/verified")
 	expectedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")
 	movedSHA := advanceMainForTest(t, repo)
@@ -262,7 +273,7 @@ func TestDeleteWorktreeAtSHAPreservesBranchOnCompareAndDeleteMismatch(t *testing
 		executeBranchDBCleanup = originalExecute
 	})
 
-	err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/verified", repo, false, true, expectedSHA)
+	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, false, expectedSHA)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Completed: removed worktree")
@@ -396,7 +407,8 @@ func TestRunList_OutsideRepository(t *testing.T) {
 
 	err := runList(&cobra.Command{}, true)
 
-	require.EqualError(t, err, "not inside a git repository")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not list worktrees")
 }
 
 func createTestWorktree(t *testing.T, branch string) (string, string) {

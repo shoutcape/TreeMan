@@ -73,7 +73,7 @@ func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force
 			return nil
 		}
 	}
-	return deleteWorktree(cmd, path, branch, mainRoot, force, false)
+	return deleteWorktree(cmd, path, branch, mainRoot, force)
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error {
@@ -150,17 +150,26 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 			return nil
 		}
 	}
-	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force, false)
+	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force)
 }
 
-func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool) error {
-	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, skipMergeCheck, "")
+func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
+	return deleteWorktreeCore(cmd, dest, branch, mainRoot, force, false, "")
 }
 
-// deleteWorktreeAtSHA removes a worktree and its branch. An expected SHA makes
-// cleanup conditional on the exact commit whose merge was verified. Every
-// deletion snapshots its branch SHA and compare-and-deletes that exact ref.
-func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
+// deleteVerifiedWorktree removes a worktree and its exact verified branch tip.
+// It skips the ordinary merge check because the caller already classified that
+// specific SHA, while retaining all other deletion safety checks.
+func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string) error {
+	if expectedSHA == "" {
+		return fmt.Errorf("cannot skip merge check for branch %q without an expected SHA", branch)
+	}
+	return deleteWorktreeCore(cmd, dest, branch, mainRoot, force, true, expectedSHA)
+}
+
+// deleteWorktreeCore removes a worktree and its branch. Every deletion
+// snapshots its branch SHA and compare-and-deletes that exact ref.
+func deleteWorktreeCore(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err

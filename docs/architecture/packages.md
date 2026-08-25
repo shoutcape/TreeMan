@@ -16,6 +16,8 @@
 | `internal/cmd/review.go` | PR and MR review worktrees |
 | `internal/cmd/switch.go` | Worktree path selection |
 | `internal/cmd/delete.go` | Interactive and direct worktree deletion |
+| `internal/cmd/list.go` | Worktree listing and merge-state rendering |
+| `internal/cmd/clean.go` | Merge-aware worktree cleanup |
 | `internal/cmd/init.go` | Bash, Zsh, and Fish wrapper text |
 | `internal/cmd/version.go` | Version output |
 
@@ -30,7 +32,8 @@
 | `internal/deps` | Lockfile detection and dependency commands |
 | `internal/hooks` | Post-create shell commands |
 | `internal/database` | PostgreSQL URI, environment rewrite, Docker, and cleanup |
-| `internal/forge` | GitHub and GitLab detection and API calls |
+| `internal/forge` | GitHub and GitLab detection, CLI calls, REST calls, and GraphQL snapshots |
+| `internal/merge` | Fresh evidence acquisition and pure merge cleanup policy |
 | `internal/remote` | Git remote parsing |
 | `internal/ui` | ANSI color and picker rows |
 | `internal/validate` | Branch and review input checks |
@@ -45,5 +48,8 @@
 | `database.SetupResult` | Database creation result |
 | `forge.PRInfo` | PR or MR data for selection and review |
 | `forge.BranchInfo` | Remote branch data |
+| `forge.GitHubSnapshot` | Fresh GitHub refs or targeted PR merge evidence |
+| `merge.Candidate` | Exact local branch tip eligible for cleanup |
+| `merge.Snapshot` | Normalized fresh merge evidence before policy evaluation |
 
-Each package has unit tests except `internal/ui`.
+Core packages, including `internal/merge`, have focused unit tests for their safety-critical behavior.

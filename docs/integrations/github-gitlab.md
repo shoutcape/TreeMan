@@ -43,7 +43,11 @@ TreeMan requests at most 100 remote branches. It also requests at most 100 open 
 
 TreeMan excludes the detected default branch and existing local branches. It gets protected-branch data but does not use it to filter branches.
 
-For squash- and rebase-merge cleanup, TreeMan verifies each remote-gone local branch by both source branch name and exact head SHA. It runs at most four bounded forge requests at once, so verification scales with current worktrees rather than historical PR or MR volume. GitHub fork PRs are included.
+For squash and rebase cleanup, TreeMan verifies the source branch name and exact head SHA.
+
+GitHub reads the default ref, candidate branch presence, and pull-request evidence in one fresh GraphQL snapshot per bounded batch. TreeMan then refreshes the default branch and checks local ancestry. Ordinary worktree counts use one GraphQL request per classification. This applies to literal merges and deleted squash or rebase merges. If TreeMan cannot read a complete snapshot, it records a warning and refreshes state with Git. It uses exact-SHA REST verification only for stable remote-gone non-ancestors.
+
+GitHub snapshot candidates that require more data use exact-SHA per-branch REST verification. These candidates include fork PRs. GitLab batches remote-gone candidates in a paginated GraphQL merge-request query. It matches the source branch, target branch, and diff-head SHA exactly. If that query is unavailable, GitLab and other configurations use at most four requests at once.
 
 ## Authentication Errors
 

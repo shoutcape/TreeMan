@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
@@ -48,6 +50,49 @@ func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	_, err := os.Stat(worktree)
 	require.NoError(t, err)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanSkipsDirtyMergedWorktreeBeforeClassification(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "dirty"), []byte("keep\n"), 0o644))
+	changeToDir(t, repo)
+
+	classifier := merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+		t.Fatal("dirty worktree must not be classified")
+		return merge.Result{}, nil
+	})
+
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanClassifiesOnlyCleanWorktrees(t *testing.T) {
+	repo, dirtyWorktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "checkout", "-b", "clean")
+	runGitInDir(t, repo, "push", "-u", "origin", "clean")
+	runGitInDir(t, repo, "checkout", "main")
+	cleanWorktree := filepath.Join(t.TempDir(), "clean-worktree")
+	runGitInDir(t, repo, "worktree", "add", cleanWorktree, "clean")
+	require.NoError(t, os.WriteFile(filepath.Join(dirtyWorktree, "dirty"), []byte("keep\n"), 0o644))
+	changeToDir(t, repo)
+
+	calls := 0
+	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+		calls++
+		assert.Equal(t, []string{"clean"}, branches)
+		sha := gitRevParse(t, repo, "refs/heads/clean")
+		return merge.Result{Cleanable: []merge.Candidate{{Branch: "clean", SHA: sha}}}, nil
+	})
+
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	assert.Equal(t, 2, calls)
+	assert.DirExists(t, dirtyWorktree)
+	assert.NoDirExists(t, cleanWorktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/clean")
+	command.Dir = repo
+	require.Error(t, command.Run())
 }
 
 func TestCleanRemovesCurrentMergedWorktreeAndPrintsMainRoot(t *testing.T) {
@@ -107,6 +152,134 @@ func TestCleanYesRemovesCandidates(t *testing.T) {
 	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
 	command.Dir = repo
 	require.Error(t, command.Run())
+}
+
+func TestCleanDeletesOnlyRevalidatedCandidates(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+
+	calls := 0
+	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+		calls++
+		sha := gitRevParse(t, repo, "refs/heads/feature")
+		if calls == 2 {
+			return merge.Result{}, nil
+		}
+		return merge.Result{Cleanable: []merge.Candidate{{Branch: branches[0], SHA: sha}}}, nil
+	})
+
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	assert.Equal(t, 2, calls)
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanRejectsCleanableBranchWithoutSHA(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+		return merge.Result{Cleanable: []merge.Candidate{{Branch: branches[0]}}}, nil
+	})
+
+	err := runCleanWithClassifier(&cobra.Command{}, classifier, false, true)
+
+	require.EqualError(t, err, "classifier returned cleanable branch \"feature\" without a SHA")
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanRejectsUnknownCleanableBranch(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	classifier := merge.ClassifierFunc(func(_ string, _ []string) (merge.Result, error) {
+		return merge.Result{Cleanable: []merge.Candidate{{Branch: "other", SHA: "abc123"}}}, nil
+	})
+
+	err := runCleanWithClassifier(&cobra.Command{}, classifier, false, true)
+
+	require.EqualError(t, err, "classifier returned unknown cleanable branch \"other\"")
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanSkipsFetchWhenDefaultBranchIsCurrent(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "fetch", "origin", "refs/heads/main:refs/remotes/origin/main")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, true, true))
+
+	assert.DirExists(t, worktree)
+	assert.Equal(t, 1, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
+	assert.Zero(t, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestCleanSkipsRemoteClassificationWithoutLinkedWorktrees(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "worktree", "remove", worktree)
+	runGitInDir(t, repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	assert.Zero(t, countGitCommands(commands(), "ls-remote"))
+}
+
+func TestCleanFetchesChangedDefaultBranchBeforeDeleting(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	updater := filepath.Join(t.TempDir(), "updater")
+	originURL := exec.Command("git", "-C", repo, "remote", "get-url", "origin")
+	originOutput, err := originURL.Output()
+	require.NoError(t, err)
+	runGit(t, "clone", strings.TrimSpace(string(originOutput)), updater)
+	runGitInDir(t, updater, "config", "user.email", "test@example.com")
+	runGitInDir(t, updater, "config", "user.name", "Test User")
+	require.NoError(t, os.WriteFile(filepath.Join(updater, "next"), []byte("next\n"), 0o644))
+	runGitInDir(t, updater, "add", "next")
+	runGitInDir(t, updater, "commit", "-m", "advance main")
+	runGitInDir(t, updater, "push", "origin", "main")
+
+	changeToDir(t, repo)
+	commands := traceGitCommands(t, false)
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.NoError(t, runClean(cmd, false, true))
+
+	assert.NoDirExists(t, worktree)
+	assert.Equal(t, 2, countGitCommands(commands(), "ls-remote --heads origin refs/heads/main refs/heads/feature"))
+	assert.Equal(t, 1, countGitCommands(commands(), "fetch origin refs/heads/main:refs/remotes/origin/main"))
+}
+
+func TestCleanRefusesDeletionWhenRemoteStateFails(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	traceGitCommands(t, true)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.Error(t, runClean(cmd, false, true))
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanRefusesDeletionWhenGitHubSnapshotAndGitFallbackFail(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	traceGitHubAPI(t, `not-json`, `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	traceGitCommands(t, true)
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(&bytes.Buffer{})
+	require.Error(t, runClean(cmd, false, true))
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
 func TestCleanRemovesEmptyBranchCreatedFromNewerOriginMain(t *testing.T) {
@@ -183,18 +356,37 @@ func TestCleanRetainsRemoteDeletedUnmergedWorktree(t *testing.T) {
 func TestCleanRemovesForgeVerifiedSquashMergedWorktree(t *testing.T) {
 	repo, worktree := createSquashMergedCleanWorktree(t)
 	mergedHeadSHA := gitRevParse(t, repo, "refs/heads/feature")
-	stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
+	classifier := stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
 	changeToDir(t, repo)
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runClean(cmd, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.True(t, os.IsNotExist(err), "forge-verified squash-merged worktree should have been removed")
 	command := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/feature")
 	command.Dir = repo
 	require.Error(t, command.Run(), "local branch should have been deleted")
+}
+
+func TestCleanRemovesGitHubSnapshotVerifiedSquashMergedWorktree(t *testing.T) {
+	repo, worktree := createSquashMergedCleanWorktree(t)
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	mainSHA := originBranchSHA(t, repo, "main")
+	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
+	commit := fmt.Sprintf(`{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":%q}],"pageInfo":{"hasNextPage":false}}}`, featureSHA)
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, commit, false), `[]`)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
+	changeToDir(t, repo)
+	gitCommands := traceGitCommands(t, false)
+
+	require.NoError(t, runClean(&cobra.Command{}, false, true))
+
+	assert.NoDirExists(t, worktree)
+	assert.Equal(t, 2, countGitHubCommands(githubCommands(), "api graphql"))
+	assert.Zero(t, countGitHubCommands(githubCommands(), "api repos/"))
+	assert.Zero(t, countGitCommands(gitCommands(), "ls-remote"))
 }
 
 func TestCleanVerifiesEachRemoteGoneBranch(t *testing.T) {
@@ -212,34 +404,37 @@ func TestCleanVerifiesEachRemoteGoneBranch(t *testing.T) {
 	runGitInDir(t, repo, "push", "origin", "--delete", "feature-two")
 	secondSHA := gitRevParse(t, repo, "refs/heads/feature-two")
 
-	previousLookup := forgeMergedLookup
 	var lookupCalls atomic.Int32
-	forgeMergedLookup = func(defaultBranch string) (forgeMergeVerifier, error) {
+	classifier := merge.ClassifierFunc(func(defaultBranch string, branches []string) (merge.Result, error) {
 		assert.Equal(t, "main", defaultBranch)
-		return func(branch, sha string) (bool, error) {
+		cleanable := make([]merge.Candidate, 0, len(branches))
+		for _, branch := range branches {
+			sha := gitRevParse(t, repo, "refs/heads/"+branch)
 			lookupCalls.Add(1)
-			return (branch == "feature" && sha == featureSHA) || (branch == "feature-two" && sha == secondSHA), nil
-		}, nil
-	}
-	t.Cleanup(func() { forgeMergedLookup = previousLookup })
+			if (branch == "feature" && sha == featureSHA) || (branch == "feature-two" && sha == secondSHA) {
+				cleanable = append(cleanable, merge.Candidate{Branch: branch, SHA: sha})
+			}
+		}
+		return merge.Result{Cleanable: cleanable}, nil
+	})
 	changeToDir(t, repo)
 
-	require.NoError(t, runClean(&cobra.Command{}, false, true))
-	assert.Equal(t, int32(2), lookupCalls.Load())
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	assert.Equal(t, int32(4), lookupCalls.Load())
 	assert.NoDirExists(t, featureWorktree)
 	assert.NoDirExists(t, secondWorktree)
 }
 
 func TestCleanRetainsRemoteGoneWhenForgeReportsUnmerged(t *testing.T) {
 	repo, worktree := createSquashMergedCleanWorktree(t)
-	stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
+	classifier := stubForgeVerifier(t, []string{"not-the-local-tip"}, nil)
 	changeToDir(t, repo)
 
 	stderr := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(stderr)
-	require.NoError(t, runClean(cmd, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "remote-gone branch without confirmed merge should be retained")
@@ -258,12 +453,12 @@ func TestCleanRetainsSquashMergedBranchWithPostMergeCommits(t *testing.T) {
 	runGitInDir(t, worktree, "add", "post-merge")
 	runGitInDir(t, worktree, "commit", "-m", "post-merge work")
 
-	stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
+	classifier := stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
 	changeToDir(t, repo)
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runClean(cmd, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "branch with post-merge commits must be retained")
@@ -285,12 +480,12 @@ func TestCleanRetainsReusedBranchName(t *testing.T) {
 	runGitInDir(t, worktree, "add", "unrelated")
 	runGitInDir(t, worktree, "commit", "-m", "unrelated new work")
 
-	stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
+	classifier := stubForgeVerifier(t, []string{mergedHeadSHA}, nil)
 	changeToDir(t, repo)
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runClean(cmd, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "reused branch name must be retained")
@@ -299,14 +494,14 @@ func TestCleanRetainsReusedBranchName(t *testing.T) {
 
 func TestCleanSurfacesVerificationWarningOnce(t *testing.T) {
 	repo, _ := createSquashMergedCleanWorktree(t)
-	stubForgeVerifier(t, nil, assert.AnError)
+	classifier := stubForgeVerifier(t, nil, assert.AnError)
 	changeToDir(t, repo)
 
 	stderr := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(stderr)
-	require.NoError(t, runClean(cmd, true, true))
+	require.NoError(t, runCleanWithClassifier(cmd, classifier, true, true))
 
 	cleanOutput := ui.StripANSI(stderr.String())
 	assert.Contains(t, cleanOutput, "merge verification failed")
@@ -329,7 +524,7 @@ func TestCleanSurfacesForgeParserWarning(t *testing.T) {
 	require.NoError(t, runClean(cmd, true, true))
 
 	cleanOutput := ui.StripANSI(stderr.String())
-	assert.Contains(t, cleanOutput, "merge verification for \"feature\" failed: gh: parsing associated PR list")
+	assert.Contains(t, cleanOutput, "GitHub snapshot failed: gh: parsing GitHub snapshot")
 }
 
 func createSquashMergedCleanWorktree(t *testing.T) (string, string) {
@@ -410,6 +605,7 @@ func createMergedCleanWorktree(t *testing.T) (string, string) {
 	runGitInDir(t, repo, "checkout", "main")
 	runGitInDir(t, repo, "merge", "--ff-only", "feature")
 	runGitInDir(t, repo, "push", "origin", "main")
+	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	worktree := filepath.Join(t.TempDir(), "feature-worktree")
 	runGitInDir(t, repo, "worktree", "add", worktree, "feature")
 	return repo, worktree
@@ -444,4 +640,80 @@ func gitRevParse(t *testing.T, dir, ref string) string {
 	output, err := command.CombinedOutput()
 	require.NoErrorf(t, err, "git rev-parse %s failed: %s", ref, output)
 	return strings.TrimSpace(string(output))
+}
+
+func traceGitCommands(t *testing.T, failLSRemote bool) func() []string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "git.log")
+	gitPath := filepath.Join(binDir, "git")
+	script := "#!/bin/sh\nif [ \"$TREEMAN_GIT_WRAPPED\" = \"1\" ]; then\n  exec \"$TREEMAN_REAL_GIT\" \"$@\"\nfi\nprintf '%s\\n' \"$*\" >> \"$TREEMAN_GIT_LOG\"\nif [ \"$TREEMAN_FAIL_LS_REMOTE\" = \"1\" ] && [ \"$1\" = \"ls-remote\" ]; then\n  exit 1\nfi\nexec env TREEMAN_GIT_WRAPPED=1 \"$TREEMAN_REAL_GIT\" \"$@\"\n"
+	require.NoError(t, os.WriteFile(gitPath, []byte(script), 0o755))
+	t.Setenv("TREEMAN_REAL_GIT", realGit)
+	t.Setenv("TREEMAN_GIT_LOG", logPath)
+	if failLSRemote {
+		t.Setenv("TREEMAN_FAIL_LS_REMOTE", "1")
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		contents, err := os.ReadFile(logPath)
+		require.NoError(t, err)
+		return strings.FieldsFunc(strings.TrimSpace(string(contents)), func(r rune) bool { return r == '\n' })
+	}
+}
+
+func countGitCommands(commands []string, prefix string) int {
+	count := 0
+	for _, command := range commands {
+		if strings.HasPrefix(command, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func traceGitHubAPI(t *testing.T, snapshotResponse, restResponse string) func() []string {
+	t.Helper()
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "gh.log")
+	ghPath := filepath.Join(binDir, "gh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TREEMAN_GH_LOG\"\nif [ \"$1\" = \"api\" ] && [ \"$2\" = \"graphql\" ]; then\n  printf '%s\\n' \"$TREEMAN_GH_SNAPSHOT\"\n  exit 0\nfi\nprintf '%s\\n' \"$TREEMAN_GH_REST\"\n"
+	require.NoError(t, os.WriteFile(ghPath, []byte(script), 0o755))
+	t.Setenv("TREEMAN_GH_LOG", logPath)
+	t.Setenv("TREEMAN_GH_SNAPSHOT", snapshotResponse)
+	t.Setenv("TREEMAN_GH_REST", restResponse)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		contents, err := os.ReadFile(logPath)
+		require.NoError(t, err)
+		return strings.FieldsFunc(strings.TrimSpace(string(contents)), func(r rune) bool { return r == '\n' })
+	}
+}
+
+func countGitHubCommands(commands []string, prefix string) int {
+	count := 0
+	for _, command := range commands {
+		if strings.HasPrefix(command, prefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func githubSnapshotResponse(defaultSHA, branchSHA, commit string, branchPresent bool) string {
+	branchRef := "null"
+	if branchPresent {
+		branchRef = fmt.Sprintf(`{"target":{"oid":%q}}`, branchSHA)
+	}
+	return fmt.Sprintf(`{"data":{"repository":{"ref0":{"target":{"oid":%q}},"ref1":%s,"commit0":%s}}}`, defaultSHA, branchRef, commit)
+}
+
+func originBranchSHA(t *testing.T, repo, branch string) string {
+	t.Helper()
+	command := exec.Command("git", "-C", repo, "remote", "get-url", "origin")
+	output, err := command.Output()
+	require.NoError(t, err)
+	return gitRevParse(t, strings.TrimSpace(string(output)), "refs/heads/"+branch)
 }

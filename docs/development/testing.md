@@ -10,6 +10,22 @@ go test ./...
 
 Tests cover command helpers, configuration, database logic, dependency detection, environment files, forge APIs, Git calls, hooks, remote parsing, validation, and worktree rules.
 
+## List Benchmark
+
+Use the public command for a quick directional measurement.
+
+```bash
+treeman benchmark list --warmup 3 --runs 10
+```
+
+Install [hyperfine](https://github.com/sharkdp/hyperfine) to run the repeatable development benchmark.
+
+```bash
+make benchmark-list
+```
+
+The target builds `./bin/treeman` and runs `hyperfine --warmup 3 --runs 10 './bin/treeman list'`.
+
 ## Static Checks
 
 Run Go static checks.

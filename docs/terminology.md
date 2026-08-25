@@ -17,6 +17,7 @@ Use these terms with the specified meaning.
 | project configuration | `.treeman.toml` found at or above the main worktree |
 | remote branch | Branch returned by the GitHub or GitLab API |
 | shell integration | Managed Bash, Zsh, or Fish functions from `treeman shell install` |
+| snapshot | Remote and forge state read for one merge classification |
 | tap | Homebrew repository that provides formulas |
 | worktree | Git checkout with its own directory and branch state |
 
