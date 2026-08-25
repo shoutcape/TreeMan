@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -131,14 +132,27 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 
 	removed := 0
+	cleanupBatch := database.NewCleanupBatch()
+	if retried, err := cleanupBatch.RetryPending(mainRoot); err != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("pending database cleanup failed: %v", err)))
+	} else if retried > 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Retried %d pending database cleanup(s).", retried)))
+	}
+	flushDatabaseCleanup := func() {
+		if err := cleanupBatch.Flush(); err != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", err)))
+		}
+	}
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteVerifiedWorktree(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, candidate.verifiedSHA); err != nil {
+		if err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch); err != nil {
+			flushDatabaseCleanup()
 			return err
 		}
 		removed++
 	}
+	flushDatabaseCleanup()
 	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", removed)))
 	return nil
 }

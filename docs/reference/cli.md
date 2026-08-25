@@ -80,7 +80,7 @@ treeman delete --path <path> --branch <branch> [--yes] [--force]
 
 `--path` and `--branch` use direct mode. Direct mode requires both flags. `--yes` and `-y` skip confirmation.
 
-TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion prepares branch database cleanup, removes the worktree and branch, then drops the prepared database before the command returns.
+TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion loads the worktree's durable database ownership record, removes the worktree and branch, marks the owned database pending, then drops it before the command returns. It never derives deletion authority from `.env`.
 
 TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files. `--yes` skips the confirmation prompt but does not bypass safety checks.
 
@@ -110,7 +110,7 @@ Measure execution time for a supported command. The default and currently suppor
 treeman clean [--dry-run] [--yes]
 ```
 
-`clean` checks the detected default branch against the current remote tip. It fetches that branch only when the local tracking ref is missing or different. A removable linked worktree must not be main, must have no changes, and must be merged into the refreshed `origin/<default-branch>`. Squash or rebase merged branches can also qualify after their remote branch is deleted. `gh` or `glab` must report a merged PR or MR that targets the default branch. Its source branch and head commit must equal the local branch and tip. This rule includes GitHub fork PRs. Without confirmation, TreeMan retains the branch. After confirmation, it revalidates only the displayed branch-tip pairs and reports candidates omitted because they became dirty, changed tip, or are no longer eligible. If TreeMan cannot establish fresh remote state, `clean` stops without deleting anything. It does not remove detached worktrees or the default branch. TreeMan removes the worktree and branch before it drops a prepared branch database. If it removes the current worktree, it prints the main worktree path. Shell integration uses this path to return safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the fetched `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. It does not remove detached worktrees or the default branch. TreeMan removes worktrees and branches before batching drops of their recorded owned databases, and retries pending drops from earlier deletion runs. If it removes the current worktree, it prints the main worktree path so shell integration returns there safely. Use `--dry-run` to print candidate paths without deleting them. Use `--yes` or `-y` to skip confirmation.
 
 ## `shell`
 

@@ -47,6 +47,20 @@ env_key = "DATABASE_URL"
 	assert.Equal(t, "DATABASE_URL", result.Config.Database.EnvKey)
 }
 
+func TestLoad_DatabaseContainer(t *testing.T) {
+	dir := t.TempDir()
+	content := `[database]
+env_key = "DATABASE_URL"
+container = "project-postgres-1"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	require.Empty(t, result.Warning)
+	assert.Equal(t, "project-postgres-1", result.Config.DatabaseContainer())
+}
+
 func TestLoad_NoDatabaseSection(t *testing.T) {
 	dir := t.TempDir()
 	// Config file exists but has no [database] section.

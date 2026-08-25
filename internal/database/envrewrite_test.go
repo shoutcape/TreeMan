@@ -106,27 +106,13 @@ DATABASE_URI=postgres://host:5432/db
 	assert.Equal(t, "postgres://host:5432/db", uri)
 }
 
-// --- ReadDatabaseURI convenience wrapper tests ---
-
-func TestReadDatabaseURI_EmptyKey(t *testing.T) {
-	dir := t.TempDir()
-	content := `DATABASE_URI=postgres://host:5432/db
-`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0600))
-
-	// Empty envKey means database management not configured -- should return "".
-	uri, err := ReadDatabaseURI(dir, "")
-	require.NoError(t, err)
-	assert.Equal(t, "", uri)
-}
-
-func TestReadDatabaseURI_WithKey(t *testing.T) {
+func TestReadEnvValue_WithDatabaseKey(t *testing.T) {
 	dir := t.TempDir()
 	content := `DATABASE_URI=postgres://postgres:postgres@127.0.0.1:5432/myapp
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(content), 0600))
 
-	uri, err := ReadDatabaseURI(dir, "DATABASE_URI")
+	uri, err := ReadEnvValue(dir, "DATABASE_URI")
 	require.NoError(t, err)
 	assert.Equal(t, "postgres://postgres:postgres@127.0.0.1:5432/myapp", uri)
 }
@@ -226,6 +212,18 @@ func TestRewriteEnvValue_ReplacesQuotedValue(t *testing.T) {
 	got, err := os.ReadFile(envPath)
 	require.NoError(t, err)
 
-	expected := "DATABASE_URI=postgres://new@host:5432/newdb\nOTHER=value\n"
+	expected := "DATABASE_URI=\"postgres://new@host:5432/newdb\"\nOTHER=value\n"
 	assert.Equal(t, expected, string(got))
+}
+
+func TestRewriteEnvValue_PreservesExportWhitespaceAndQuotes(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(" export  DATABASE_URI = 'postgres://old@host/old'  \n"), 0o600))
+
+	require.NoError(t, RewriteEnvValue(dir, "DATABASE_URI", "postgres://new@host/new"))
+
+	got, err := os.ReadFile(envPath)
+	require.NoError(t, err)
+	assert.Equal(t, " export  DATABASE_URI = 'postgres://new@host/new'  \n", string(got))
 }

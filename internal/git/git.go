@@ -127,6 +127,20 @@ func BranchExists(branch string) bool {
 	return err == nil
 }
 
+// BranchMissing reports whether the exact local branch ref is absent. Unlike
+// BranchExists, operational failures are returned so callers can fail closed.
+func BranchMissing(dir, branch string) (bool, error) {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("could not check branch %q: %w", branch, err)
+	}
+	return false, nil
+}
+
 // BranchSHA returns the commit SHA at the tip of the given local branch.
 func BranchSHA(branch string) (string, error) {
 	sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
@@ -385,19 +399,9 @@ func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
 // checkout between the checked-out-branch check and that transaction. Direct
 // Git worktree mutations do not participate in this advisory lock.
 func withWorktreeMutationLock(dir string, operation func() error) error {
-	commonDir, err := runInDir(dir, "rev-parse", "--git-common-dir")
+	commonDir, err := CommonDir(dir)
 	if err != nil {
 		return err
-	}
-	if !filepath.IsAbs(commonDir) {
-		base := dir
-		if base == "" {
-			base, err = os.Getwd()
-			if err != nil {
-				return fmt.Errorf("could not determine current directory: %w", err)
-			}
-		}
-		commonDir = filepath.Join(base, commonDir)
 	}
 
 	lock, err := os.OpenFile(filepath.Join(commonDir, "treeman-worktree.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -410,6 +414,60 @@ func withWorktreeMutationLock(dir string, operation func() error) error {
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	return operation()
+}
+
+// CommonDir returns the absolute Git common directory shared by all worktrees.
+func CommonDir(dir string) (string, error) {
+	commonDir, err := runInDir(dir, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", fmt.Errorf("could not determine Git common directory: %w", err)
+	}
+	if filepath.IsAbs(commonDir) {
+		return filepath.Clean(commonDir), nil
+	}
+	base := dir
+	if base == "" {
+		base, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("could not determine current directory: %w", err)
+		}
+	}
+	absolute, err := filepath.Abs(filepath.Join(base, commonDir))
+	if err != nil {
+		return "", fmt.Errorf("could not normalize Git common directory: %w", err)
+	}
+	return filepath.Clean(absolute), nil
+}
+
+// WorktreeID returns the linked-worktree administration directory name.
+// It is stable for the lifetime of that linked worktree and remains available
+// before Git removes the worktree administration directory.
+func WorktreeID(dir string) (string, error) {
+	gitDir, err := runInDir(dir, "rev-parse", "--git-dir")
+	if err != nil {
+		return "", fmt.Errorf("could not determine Git directory: %w", err)
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	gitDir, err = filepath.Abs(gitDir)
+	if err != nil {
+		return "", fmt.Errorf("could not normalize Git directory: %w", err)
+	}
+	gitDir = filepath.Clean(gitDir)
+	commonDir, err := CommonDir(dir)
+	if err != nil {
+		return "", err
+	}
+	worktreesDir := filepath.Join(commonDir, "worktrees")
+	if filepath.Clean(filepath.Dir(gitDir)) != filepath.Clean(worktreesDir) {
+		return "", fmt.Errorf("%q is not a linked worktree", dir)
+	}
+	id := filepath.Base(gitDir)
+	if id == "." || id == string(filepath.Separator) || id == "" {
+		return "", fmt.Errorf("invalid linked worktree ID for %q", dir)
+	}
+	return id, nil
 }
 
 // OriginRemoteURL returns the URL of the origin remote.

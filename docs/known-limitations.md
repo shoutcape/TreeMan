@@ -16,9 +16,9 @@ This document describes current behavior. It is not a product roadmap.
 
 ## Database Actions
 
-- Long branch names can collide after 63-character database name truncation.
-- A database can remain after environment-file rewrite failure.
-- The `__` cleanup check reduces risk but does not prove database ownership.
+- A failed database drop remains pending until a later `treeman clean` can reach its configured container.
+- Legacy branch databases created before ownership records are not removed automatically.
+- Docker container identity is not durable across external container replacement. Cleanup requires the exact recorded container ID, so the database remains pending until that container is available again or is handled manually.
 
 ## User Interface
 
