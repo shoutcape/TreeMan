@@ -135,6 +135,20 @@ func TestDeleteBranchAtSHA(t *testing.T) {
 	})
 }
 
+func TestCommonDirAndWorktreeIDReturnNormalizedPaths(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := filepath.Join(t.TempDir(), "feature")
+	gitTest(t, repo, "worktree", "add", "-b", "feature-normalized", worktree)
+	commonDir, err := CommonDir(filepath.Join(worktree, "."))
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(commonDir))
+	assert.Equal(t, filepath.Clean(commonDir), commonDir)
+	id, err := WorktreeID(filepath.Join(worktree, "."))
+	require.NoError(t, err)
+	assert.NotEmpty(t, id)
+	assert.Equal(t, filepath.Base(id), id)
+}
+
 func TestTreeManWorktreeMutationLockSerializesAddAndDelete(t *testing.T) {
 	t.Run("TreeMan worktree add", func(t *testing.T) {
 		repo := createGitTestRepo(t)

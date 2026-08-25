@@ -1,10 +1,13 @@
 package database
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,7 +97,7 @@ func (s *databaseStore) repositoryID() (string, error) {
 	path := filepath.Join(s.stateDir(), "repository-id")
 	data, err := os.ReadFile(path)
 	if err == nil {
-		if id := string(data); len(id) == 32 {
+		if id := string(data); validRepositoryID(id) {
 			return id, nil
 		}
 		return "", fmt.Errorf("invalid database repository ID in %s", path)
@@ -113,28 +116,87 @@ func (s *databaseStore) repositoryID() (string, error) {
 	return id, nil
 }
 
+func validRepositoryID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
+}
+
 func (s *databaseStore) load(worktreeID string) (*DatabaseRecord, error) {
-	data, err := os.ReadFile(s.recordPath(worktreeID))
+	if !validWorktreeID(worktreeID) {
+		return nil, fmt.Errorf("invalid database ownership record ID %q", worktreeID)
+	}
+	path := s.recordPath(worktreeID)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading database ownership record: %w", err)
 	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("database ownership record is not a regular file: %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading database ownership record: %w", err)
+	}
 	var record DatabaseRecord
-	if err := json.Unmarshal(data, &record); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&record); err != nil {
 		return nil, fmt.Errorf("parsing database ownership record: %w", err)
 	}
-	if record.Version != 1 || record.RepositoryID != s.repoID || record.WorktreeID != worktreeID {
-		return nil, fmt.Errorf("invalid database ownership record for worktree %q", worktreeID)
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("invalid trailing data in database ownership record for worktree %q", worktreeID)
+	}
+	if err := validateRecord(record, s.repoID, worktreeID); err != nil {
+		return nil, fmt.Errorf("invalid database ownership record for worktree %q: %w", worktreeID, err)
 	}
 	return &record, nil
+}
+
+func validWorktreeID(id string) bool {
+	return id != "" && id != "." && id != ".." && filepath.Base(id) == id
+}
+
+func validateRecord(record DatabaseRecord, repositoryID, worktreeID string) error {
+	if record.Version != 1 {
+		return fmt.Errorf("unsupported version")
+	}
+	if record.RepositoryID != repositoryID {
+		return fmt.Errorf("repository ID mismatch")
+	}
+	if record.WorktreeID != worktreeID || !validWorktreeID(worktreeID) {
+		return fmt.Errorf("worktree ID mismatch")
+	}
+	if record.WorktreePath == "" || !filepath.IsAbs(record.WorktreePath) || filepath.Clean(record.WorktreePath) != record.WorktreePath {
+		return fmt.Errorf("invalid worktree path")
+	}
+	if record.Branch == "" || record.Database == "" || record.ContainerID == "" || record.User == "" || record.Port == "" {
+		return fmt.Errorf("required field is empty")
+	}
+	switch record.Status {
+	case databaseStatusSetupPending, databaseStatusActive, databaseStatusPendingCleanup:
+	default:
+		return fmt.Errorf("illegal status %q", record.Status)
+	}
+	if record.UpdatedAt.IsZero() {
+		return fmt.Errorf("missing update timestamp")
+	}
+	return nil
 }
 
 func (s *databaseStore) save(record *DatabaseRecord) error {
 	record.Version = 1
 	record.RepositoryID = s.repoID
 	record.UpdatedAt = time.Now().UTC()
+	if err := validateRecord(*record, s.repoID, record.WorktreeID); err != nil {
+		return fmt.Errorf("refusing to write invalid database ownership record: %w", err)
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("encoding database ownership record: %w", err)

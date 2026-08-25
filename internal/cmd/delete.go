@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -17,12 +16,11 @@ import (
 var (
 	removeWorktree    = git.WorktreeRemove
 	deleteBranchAtSHA = git.DeleteBranchAtSHA
-	newCleanupSession = func() databaseCleanupSession { return database.NewCleanupSession() }
+	newCleanupBatch   = func() databaseCleanupBatch { return database.NewCleanupBatch() }
 )
 
-type databaseCleanupSession interface {
-	Prepare(string) (*database.CleanupTicket, error)
-	MarkDeleted(*database.CleanupTicket) error
+type databaseCleanupBatch interface {
+	Prepare(string) (func() error, error)
 	Flush() error
 }
 
@@ -175,19 +173,19 @@ func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot string, f
 // cleanup conditional on the exact commit whose merge was verified. Every
 // deletion snapshots its branch SHA and compare-and-deletes that exact ref.
 func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
-	session := newCleanupSession()
-	if err := deleteWorktreeAtSHAWithDatabase(cmd, dest, branch, mainRoot, force, skipMergeCheck, expectedSHA, session); err != nil {
+	batch := newCleanupBatch()
+	if err := deleteWorktreeAtSHAWithDatabase(cmd, dest, branch, mainRoot, force, skipMergeCheck, expectedSHA, batch); err != nil {
 		return err
 	}
-	if err := session.Flush(); err != nil {
+	if err := batch.Flush(); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 	}
 	return nil
 }
 
-// deleteWorktreeAtSHAWithDatabase lets clean share one cleanup session across
+// deleteWorktreeAtSHAWithDatabase lets clean share one cleanup batch across
 // worktrees while keeping ownership transitions inside the database package.
-func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string, session databaseCleanupSession) error {
+func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string, batch databaseCleanupBatch) error {
 	entry, err := findWorktree(dest)
 	if err != nil {
 		return err
@@ -235,23 +233,12 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 
 	// Snapshot the database target while the worktree environment still exists.
 	// Cleanup itself runs only after Git deletion succeeds.
-	var dbTicket *database.CleanupTicket
-	cfgResult := config.Load(mainRoot)
-	if cfgResult.Warning != "" {
-		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", cfgResult.Warning))
+	var commitDatabaseCleanup func() error
+	if batch == nil {
+		batch = newCleanupBatch()
 	}
-	if session == nil {
-		session = newCleanupSession()
-	}
-	if dbTicket, err = session.Prepare(entry.Path); err != nil {
+	if commitDatabaseCleanup, err = batch.Prepare(entry.Path); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
-	}
-	if dbTicket == nil {
-		if legacyName, legacyErr := database.LegacyBranchDatabase(entry.Path, cfgResult.Config.DatabaseEnvKey()); legacyErr != nil {
-			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("could not inspect legacy database cleanup: %v", legacyErr)))
-		} else if legacyName != "" {
-			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("preserved legacy database %q because it has no TreeMan ownership record", legacyName)))
-		}
 	}
 	if err := removeWorktree(entry.Path, force); err != nil {
 		return deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
@@ -264,8 +251,8 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", branch, mainRoot, branch),
 		)
 	}
-	if dbTicket != nil {
-		if err := session.MarkDeleted(dbTicket); err != nil {
+	if commitDatabaseCleanup != nil {
+		if err := commitDatabaseCleanup(); err != nil {
 			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup could not be recorded for retry: %v", err)))
 		}
 	}

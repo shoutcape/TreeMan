@@ -33,6 +33,30 @@ func TestContainerResolverUsesConfiguredContainerExactly(t *testing.T) {
 	require.ErrorContains(t, err, "not running")
 }
 
+func TestParseDockerSnapshot(t *testing.T) {
+	containers, err := parseDockerSnapshot("{\"ID\":\"abc123\",\"Names\":\"db\",\"Image\":\"postgres:17\",\"Ports\":\"127.0.0.1:5432->5432/tcp\"}\n")
+	require.NoError(t, err)
+	require.Len(t, containers, 1)
+	assert.Equal(t, "abc123", containers[0].ID)
+	_, err = parseDockerSnapshot("not-json\n")
+	require.ErrorContains(t, err, "row 1")
+	_, err = parseDockerSnapshot("{\"ID\":\"abc\",\"Names\":\"db\"}\n")
+	require.ErrorContains(t, err, "required")
+}
+
+func TestOfficialPostgresImageMatching(t *testing.T) {
+	for _, test := range []struct {
+		image string
+		want  bool
+	}{
+		{"postgres", true}, {"postgres:17-alpine", true}, {"docker.io/library/postgres:16", true},
+		{"registry.example/team/postgres@sha256:abc", true}, {"postgis/postgis:17", false},
+		{"custom-postgres:latest", false}, {"postgresql:17", false}, {"team/postgres-backup", false},
+	} {
+		t.Run(test.image, func(t *testing.T) { assert.Equal(t, test.want, isOfficialPostgresImage(test.image)) })
+	}
+}
+
 func TestBuildPsqlArgsUsesMaintenanceDatabaseAndEscapesSQL(t *testing.T) {
 	create := buildPsqlArgs("postgres", "app", `branch"db`)
 	assert.Equal(t, []string{"exec", "postgres", "psql", "-U", "app", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", `CREATE DATABASE "branch""db"`}, create)

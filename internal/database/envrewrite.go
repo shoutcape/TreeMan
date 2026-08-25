@@ -141,22 +141,6 @@ func parseEnvAssignment(line string) (envAssignment, bool) {
 	return envAssignment{key: keyPart, prefix: line[:valueStart], value: value[:trailing], suffix: value[trailing:]}, true
 }
 
-// ReadDatabaseURI is a convenience wrapper for backward compatibility.
-// It reads the value of the given envKey from the .env file.
-// If envKey is empty, it returns "" (database management not configured).
-func ReadDatabaseURI(dir, envKey string) (string, error) {
-	if envKey == "" {
-		return "", nil
-	}
-	return ReadEnvValue(dir, envKey)
-}
-
-// RewriteDatabaseURI is a convenience wrapper for backward compatibility.
-// It rewrites the value of the given envKey in the .env file.
-func RewriteDatabaseURI(dir, envKey, newURI string) error {
-	return RewriteEnvValue(dir, envKey, newURI)
-}
-
 // stripQuotes removes surrounding double or single quotes from a value.
 func stripQuotes(s string) string {
 	if len(s) >= 2 {

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -21,10 +22,10 @@ type ContainerResolver interface {
 }
 
 type dockerContainer struct {
-	ID    string
-	Name  string
-	Image string
-	Ports string
+	ID    string `json:"ID"`
+	Name  string `json:"Names"`
+	Image string `json:"Image"`
+	Ports string `json:"Ports"`
 }
 
 type containerResolver struct {
@@ -34,27 +35,37 @@ type containerResolver struct {
 // NewContainerResolver loads running Docker containers once. Reusing the
 // resolver lets bulk cleanup avoid repeated docker ps calls.
 func NewContainerResolver() (ContainerResolver, error) {
-	out, err := exec.Command("docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}").CombinedOutput()
+	out, err := exec.Command("docker", "ps", "--no-trunc", "--format", "{{json .}}").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps failed: %w", err)
 	}
-	containers := make([]dockerContainer, 0)
-	for _, line := range strings.Split(string(out), "\n") {
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) != 4 {
-			continue
-		}
-		container := dockerContainer{
-			ID:    strings.TrimSpace(parts[0]),
-			Name:  strings.TrimSpace(parts[1]),
-			Image: strings.TrimSpace(parts[2]),
-			Ports: strings.TrimSpace(parts[3]),
-		}
-		if container.ID != "" && container.Name != "" {
-			containers = append(containers, container)
-		}
+	containers, err := parseDockerSnapshot(string(out))
+	if err != nil {
+		return nil, err
 	}
 	return containerResolver{containers: containers}, nil
+}
+
+func parseDockerSnapshot(output string) ([]dockerContainer, error) {
+	var containers []dockerContainer
+	for lineNumber, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var container dockerContainer
+		if err := json.Unmarshal([]byte(line), &container); err != nil {
+			return nil, fmt.Errorf("parsing docker ps row %d: %w", lineNumber+1, err)
+		}
+		container.ID = strings.TrimSpace(container.ID)
+		container.Name = strings.TrimSpace(container.Name)
+		container.Image = strings.TrimSpace(container.Image)
+		container.Ports = strings.TrimSpace(container.Ports)
+		if container.ID == "" || container.Name == "" || container.Image == "" {
+			return nil, fmt.Errorf("invalid docker ps row %d: ID, name, and image are required", lineNumber+1)
+		}
+		containers = append(containers, container)
+	}
+	return containers, nil
 }
 
 func (r containerResolver) Resolve(host, port, configuredName string) (ContainerTarget, error) {
@@ -71,7 +82,7 @@ func (r containerResolver) Resolve(host, port, configuredName string) (Container
 	}
 	var matches []dockerContainer
 	for _, container := range r.containers {
-		if strings.Contains(strings.ToLower(container.Image), "postgres") && publishesPort(container.Ports, port) {
+		if isOfficialPostgresImage(container.Image) && publishesPort(container.Ports, port) {
 			matches = append(matches, container)
 		}
 	}
@@ -87,6 +98,23 @@ func (r containerResolver) Resolve(host, port, configuredName string) (Container
 		return ContainerTarget{}, fmt.Errorf("multiple PostgreSQL containers publish port %s (%s); set [database].container", port, strings.Join(names, ", "))
 	}
 	return ContainerTarget{ID: matches[0].ID, Name: matches[0].Name}, nil
+}
+
+func isOfficialPostgresImage(image string) bool {
+	name := strings.ToLower(strings.TrimSpace(image))
+	if at := strings.IndexByte(name, '@'); at >= 0 {
+		name = name[:at]
+	}
+	lastSlash := strings.LastIndexByte(name, '/')
+	lastColon := strings.LastIndexByte(name, ':')
+	if lastColon > lastSlash {
+		name = name[:lastColon]
+	}
+	component := name
+	if lastSlash >= 0 {
+		component = name[lastSlash+1:]
+	}
+	return component == "postgres"
 }
 
 // ResolveID confirms that the exact container recorded during setup is still
@@ -138,11 +166,6 @@ func DropDatabases(container, user string, dbNames []string) error {
 		return fmt.Errorf("drop databases failed: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// DropDatabase drops one database. It remains available for focused callers.
-func DropDatabase(container, user, dbName string) error {
-	return DropDatabases(container, user, []string{dbName})
 }
 
 // buildPsqlArgs constructs docker exec arguments for CREATE DATABASE.

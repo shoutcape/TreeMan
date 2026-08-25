@@ -132,21 +132,21 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 
 	removed := 0
-	cleanupSession := database.NewCleanupSession()
-	if retried, err := cleanupSession.RetryPending(mainRoot); err != nil {
+	cleanupBatch := database.NewCleanupBatch()
+	if retried, err := cleanupBatch.RetryPending(mainRoot); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("pending database cleanup failed: %v", err)))
 	} else if retried > 0 {
 		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Retried %d pending database cleanup(s).", retried)))
 	}
 	flushDatabaseCleanup := func() {
-		if err := cleanupSession.Flush(); err != nil {
+		if err := cleanupBatch.Flush(); err != nil {
 			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", err)))
 		}
 	}
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupSession); err != nil {
+		if err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch); err != nil {
 			flushDatabaseCleanup()
 			return err
 		}

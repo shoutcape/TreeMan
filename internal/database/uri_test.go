@@ -48,3 +48,17 @@ func TestReplaceDatabaseEscapesUTF8DatabaseName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "postgres://user@host:5432/mydb__caf%C3%A9_hash", result)
 }
+
+func TestParseURIEdgeCases(t *testing.T) {
+	parsed, err := ParseURI("postgresql://user:p%2Fss@[::1]:6543/app%20db?application_name=a%2Fb")
+	require.NoError(t, err)
+	assert.Equal(t, "app db", parsed.Database)
+	assert.Equal(t, "::1", parsed.Host)
+	assert.Equal(t, "6543", parsed.Port)
+	assert.Equal(t, "postgresql://user:p%2Fss@[::1]:6543", parsed.BaseURI)
+	assert.Equal(t, "application_name=a%2Fb", parsed.Query)
+	for _, uri := range []string{"", "mysql://host/db", "postgres://host", "postgres://host/a/b", "postgres://host/%2F"} {
+		_, err := ParseURI(uri)
+		require.Error(t, err, uri)
+	}
+}

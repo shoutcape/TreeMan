@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
-	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/forge"
@@ -172,16 +171,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 
 	// Set up branch-specific database (best-effort, non-fatal).
 	if !setupOptions.skipDatabase {
-		dbEnvKey := cfgResult.Config.DatabaseEnvKey()
-		dbResult, dbErr := database.SetupBranchDB(worktreePath, info.Branch, dbEnvKey, cfgResult.Config.DatabaseContainer())
-		switch {
-		case dbErr != nil:
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("database setup failed: %v", dbErr)))
-		case dbResult.Skipped:
-			// No config, no env key, or not a postgres URI -- silently skip.
-		default:
-			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Created database "+dbResult.DBName))
-		}
+		setupCreatedDatabase(out, render, cfgResult.Config, worktreePath, info.Branch)
 	}
 
 	// Install dependencies.

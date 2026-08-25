@@ -423,7 +423,7 @@ func CommonDir(dir string) (string, error) {
 		return "", fmt.Errorf("could not determine Git common directory: %w", err)
 	}
 	if filepath.IsAbs(commonDir) {
-		return commonDir, nil
+		return filepath.Clean(commonDir), nil
 	}
 	base := dir
 	if base == "" {
@@ -432,7 +432,11 @@ func CommonDir(dir string) (string, error) {
 			return "", fmt.Errorf("could not determine current directory: %w", err)
 		}
 	}
-	return filepath.Join(base, commonDir), nil
+	absolute, err := filepath.Abs(filepath.Join(base, commonDir))
+	if err != nil {
+		return "", fmt.Errorf("could not normalize Git common directory: %w", err)
+	}
+	return filepath.Clean(absolute), nil
 }
 
 // WorktreeID returns the linked-worktree administration directory name.
@@ -446,12 +450,17 @@ func WorktreeID(dir string) (string, error) {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
+	gitDir, err = filepath.Abs(gitDir)
+	if err != nil {
+		return "", fmt.Errorf("could not normalize Git directory: %w", err)
+	}
+	gitDir = filepath.Clean(gitDir)
 	commonDir, err := CommonDir(dir)
 	if err != nil {
 		return "", err
 	}
 	worktreesDir := filepath.Join(commonDir, "worktrees")
-	if filepath.Dir(gitDir) != worktreesDir {
+	if filepath.Clean(filepath.Dir(gitDir)) != filepath.Clean(worktreesDir) {
 		return "", fmt.Errorf("%q is not a linked worktree", dir)
 	}
 	id := filepath.Base(gitDir)
