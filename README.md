@@ -63,6 +63,8 @@ Shell integration changes the current shell directory to the new worktree. Setup
 
 Dependency setup checks only files in the worktree root. TreeMan does not recursively install dependencies for nested modules and does not run project tests automatically. This avoids unexpected commands in subdirectories. Use a trusted `hooks.post_create` command when a nested module needs installation or tests.
 
+Run `treeman preflight` first to report environment, dependency, database, and hook setup compatibility without creating a worktree.
+
 ### Use Remote Branches
 
 Use `treeman branch` or `wtb` to add a remote branch worktree. With no query, TreeMan uses an interactive `fzf` picker. Give an exact remote branch name to skip the picker.
@@ -101,6 +103,7 @@ Use `treeman list --json` for machine-readable worktree state and `treeman docto
 | `treeman delete [query]`            | `wtd [query]`                    | Delete a linked worktree and branch          |
 | `treeman shell`                     | None                             | Install and manage shell integration         |
 | `treeman doctor`                    | None                             | Check repository readiness and configuration |
+| `treeman preflight`                 | None                             | Report setup compatibility before creation   |
 | `treeman theme`                     | None                             | Select a terminal color theme                |
 | `treeman version`                   | None                             | Print build data                             |
 

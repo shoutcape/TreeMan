@@ -1,0 +1,140 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/database"
+	"github.com/shoutcape/treeman/internal/deps"
+	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/ui"
+	"github.com/spf13/cobra"
+)
+
+type preflightStatus struct {
+	name    string
+	message string
+	tone    ui.Tone
+	symbol  string
+}
+
+var preflightDatabaseTarget = func(host, port, configuredContainer string) error {
+	resolver, err := database.NewContainerResolver()
+	if err != nil {
+		return err
+	}
+	_, err = resolver.Resolve(host, port, configuredContainer)
+	return err
+}
+
+func newPreflightCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "preflight",
+		Short: "Report setup compatibility without creating a worktree",
+		Args:  cobra.NoArgs,
+		RunE:  runPreflight,
+	}
+}
+
+func runPreflight(cmd *cobra.Command, _ []string) error {
+	if !git.IsInsideRepo() {
+		return fmt.Errorf("not inside a git repository")
+	}
+
+	mainRoot, err := git.MainWorktreeRoot()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(mainRoot)
+	if err != nil {
+		return fmt.Errorf("reading repository root: %w", err)
+	}
+
+	files := make([]string, 0, len(entries))
+	envCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		files = append(files, entry.Name())
+		if strings.HasPrefix(entry.Name(), ".env") {
+			envCount++
+		}
+	}
+
+	configResult := config.Load(mainRoot)
+	statuses := []preflightStatus{
+		preflightEnvironmentStatus(envCount),
+		preflightDependenciesStatus(files),
+		preflightDatabaseStatus(mainRoot, configResult),
+		preflightHooksStatus(configResult),
+	}
+	writePreflight(cmd.ErrOrStderr(), commandRenderer(cmd), statuses)
+	return nil
+}
+
+func preflightEnvironmentStatus(count int) preflightStatus {
+	if count == 0 {
+		return preflightStatus{name: "Environment", message: "not configured: no .env* files found", tone: ui.ToneMuted, symbol: "○"}
+	}
+	return preflightStatus{name: "Environment", message: fmt.Sprintf("ready: %d .env file(s) will be copied", count), tone: ui.ToneSuccess, symbol: "✓"}
+}
+
+func preflightDependenciesStatus(files []string) preflightStatus {
+	installer := deps.DetectInstaller(files)
+	if installer == nil {
+		if deps.IsPythonProject(files) {
+			return preflightStatus{name: "Dependencies", message: "manual setup: Python virtualenv activation required", tone: ui.ToneMuted, symbol: "○"}
+		}
+		return preflightStatus{name: "Dependencies", message: "not configured: no known dependency file found", tone: ui.ToneMuted, symbol: "○"}
+	}
+	if _, err := lookPath(installer.Binary); err != nil {
+		return preflightStatus{name: "Dependencies", message: fmt.Sprintf("limited: %s detected but %s is not installed", installer.Lockfile, installer.Binary), tone: ui.ToneWarning, symbol: "!"}
+	}
+	return preflightStatus{name: "Dependencies", message: fmt.Sprintf("ready: %s detected; will run %s %s", installer.Lockfile, installer.Binary, joinArgs(installer.Args)), tone: ui.ToneSuccess, symbol: "✓"}
+}
+
+func preflightDatabaseStatus(mainRoot string, result config.LoadResult) preflightStatus {
+	if result.Warning != "" {
+		return preflightStatus{name: "Database", message: "unavailable: " + result.Warning, tone: ui.ToneFailure, symbol: "✗"}
+	}
+	envKey := result.Config.DatabaseEnvKey()
+	if envKey == "" {
+		return preflightStatus{name: "Database", message: "not configured: add [database] to .treeman.toml", tone: ui.ToneMuted, symbol: "○"}
+	}
+	uri, err := database.ReadEnvValue(mainRoot, envKey)
+	if err != nil {
+		return preflightStatus{name: "Database", message: fmt.Sprintf("unavailable: could not read %s: %v", envKey, err), tone: ui.ToneFailure, symbol: "✗"}
+	}
+	if uri == "" {
+		return preflightStatus{name: "Database", message: fmt.Sprintf("not configured: %s is not set in .env", envKey), tone: ui.ToneMuted, symbol: "○"}
+	}
+	parsed, err := database.ParseURI(uri)
+	if err != nil {
+		return preflightStatus{name: "Database", message: fmt.Sprintf("limited: %s is not a supported PostgreSQL URI", envKey), tone: ui.ToneWarning, symbol: "!"}
+	}
+	if err := preflightDatabaseTarget(parsed.Host, parsed.Port, result.Config.DatabaseContainer()); err != nil {
+		return preflightStatus{name: "Database", message: fmt.Sprintf("limited: no ready PostgreSQL container: %v", err), tone: ui.ToneWarning, symbol: "!"}
+	}
+	return preflightStatus{name: "Database", message: fmt.Sprintf("ready: %s has a PostgreSQL URI", envKey), tone: ui.ToneSuccess, symbol: "✓"}
+}
+
+func preflightHooksStatus(result config.LoadResult) preflightStatus {
+	if result.Warning != "" {
+		return preflightStatus{name: "Hooks", message: "unavailable: " + result.Warning, tone: ui.ToneFailure, symbol: "✗"}
+	}
+	count := len(result.Config.PostCreateHooks())
+	if count == 0 {
+		return preflightStatus{name: "Hooks", message: "not configured: no post-create hooks", tone: ui.ToneMuted, symbol: "○"}
+	}
+	return preflightStatus{name: "Hooks", message: fmt.Sprintf("ready: %d post-create hook(s) will run", count), tone: ui.ToneSuccess, symbol: "✓"}
+}
+
+func writePreflight(out interface{ Write([]byte) (int, error) }, render ui.Renderer, statuses []preflightStatus) {
+	fmt.Fprintf(out, "\n%s\n\n", render.Title("COMPATIBILITY PREFLIGHT"))
+	for _, status := range statuses {
+		fmt.Fprintf(out, "  %s  %-14s %s\n", render.Tone(status.tone, status.symbol), status.name, render.Tone(status.tone, status.message))
+	}
+}
