@@ -3,6 +3,13 @@
 // matching well-known project conventions.
 package deps
 
+import (
+	"fmt"
+	"io/fs"
+	"path/filepath"
+	"sort"
+)
+
 // Installer describes a detected package manager and the command to run.
 type Installer struct {
 	// Lockfile is the filename that triggers this installer.
@@ -11,6 +18,13 @@ type Installer struct {
 	Binary string
 	// Args are the arguments passed to Binary (e.g. ["install"] or ["mod", "download"]).
 	Args []string
+}
+
+// Module describes a supported package module found below the project root.
+// Nested modules are reported but are never installed automatically.
+type Module struct {
+	Path     string
+	Manifest string
 }
 
 // pythonFiles are filenames that indicate a Python project.
@@ -28,6 +42,14 @@ var knownInstallers = []Installer{
 	{Lockfile: "Cargo.toml", Binary: "cargo", Args: []string{"fetch"}},
 }
 
+var ignoredModuleDirs = map[string]struct{}{
+	".git":         {},
+	".venv":        {},
+	".worktrees":   {},
+	"node_modules": {},
+	"vendor":       {},
+}
+
 // DetectInstaller returns the first Installer whose lockfile appears in files,
 // or nil if no known lockfile is present.
 //
@@ -36,13 +58,12 @@ var knownInstallers = []Installer{
 //
 // Priority order: pnpm > yarn > npm > go > cargo
 func DetectInstaller(files []string) *Installer {
-	set := make(map[string]struct{}, len(files))
-	for _, f := range files {
-		set[f] = struct{}{}
-	}
+	return installerFor(fileSet(files))
+}
 
+func installerFor(files map[string]struct{}) *Installer {
 	for i := range knownInstallers {
-		if _, ok := set[knownInstallers[i].Lockfile]; ok {
+		if _, ok := files[knownInstallers[i].Lockfile]; ok {
 			result := knownInstallers[i] // copy
 			return &result
 		}
@@ -53,14 +74,96 @@ func DetectInstaller(files []string) *Installer {
 // IsPythonProject reports whether any of files indicates a Python project.
 // This is checked only when DetectInstaller returns nil.
 func IsPythonProject(files []string) bool {
+	return pythonManifestFor(fileSet(files)) != ""
+}
+
+func fileSet(files []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(files))
-	for _, f := range files {
-		set[f] = struct{}{}
+	for _, file := range files {
+		set[file] = struct{}{}
 	}
+	return set
+}
+
+func pythonManifestFor(files map[string]struct{}) string {
 	for _, pyFile := range pythonFiles {
-		if _, ok := set[pyFile]; ok {
+		if _, ok := files[pyFile]; ok {
+			return pyFile
+		}
+	}
+	return ""
+}
+
+func supportedManifestFor(files map[string]struct{}) string {
+	if installer := installerFor(files); installer != nil {
+		return installer.Lockfile
+	}
+	return pythonManifestFor(files)
+}
+
+func isSupportedManifest(name string) bool {
+	for _, installer := range knownInstallers {
+		if name == installer.Lockfile {
+			return true
+		}
+	}
+	for _, manifest := range pythonFiles {
+		if name == manifest {
 			return true
 		}
 	}
 	return false
+}
+
+// DiscoverNestedModules finds supported package modules below dir. Paths are
+// relative to dir so callers can report locations without exposing the full
+// worktree path.
+func DiscoverNestedModules(dir string) ([]Module, error) {
+	manifestsByDir := make(map[string]map[string]struct{})
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path != dir {
+				if _, ignored := ignoredModuleDirs[entry.Name()]; ignored {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+
+		parent := filepath.Dir(path)
+		if parent == dir || !isSupportedManifest(entry.Name()) {
+			return nil
+		}
+		if manifestsByDir[parent] == nil {
+			manifestsByDir[parent] = make(map[string]struct{})
+		}
+		manifestsByDir[parent][entry.Name()] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("deps: discovering nested modules in %q: %w", dir, err)
+	}
+
+	paths := make([]string, 0, len(manifestsByDir))
+	for path := range manifestsByDir {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	modules := make([]Module, 0)
+	for _, path := range paths {
+		manifest := supportedManifestFor(manifestsByDir[path])
+		if manifest == "" {
+			continue
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil, fmt.Errorf("deps: resolving nested module path %q: %w", path, err)
+		}
+		modules = append(modules, Module{Path: filepath.ToSlash(rel), Manifest: manifest})
+	}
+	return modules, nil
 }

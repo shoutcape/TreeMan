@@ -133,6 +133,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	if !setupOptions.skipDeps {
 		dependenciesStatus = setupDependencies(out, render, worktreePath)
 	}
+	reportNestedModules(out, render, worktreePath)
 
 	// Run post-create hooks (best-effort, non-fatal).
 	hooksStatus := "skipped (requested)"

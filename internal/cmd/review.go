@@ -177,6 +177,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	if !setupOptions.skipDeps {
 		setupDependencies(out, render, worktreePath)
 	}
+	reportNestedModules(out, render, worktreePath)
 
 	// Run post-create hooks (best-effort, non-fatal).
 	if !setupOptions.skipHooks {

@@ -87,3 +87,14 @@ func setupDependencies(out io.Writer, render ui.Renderer, worktreePath string) s
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Completed "+command+"."))
 	return fmt.Sprintf("completed: installed with %s", installer.Binary)
 }
+
+func reportNestedModules(w io.Writer, render ui.Renderer, dir string) {
+	modules, err := deps.DiscoverNestedModules(dir)
+	if err != nil {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not discover nested modules: %v", err)))
+		return
+	}
+	for _, module := range modules {
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", fmt.Sprintf("Nested module %s (%s): skipped; not installed automatically.", module.Path, module.Manifest)))
+	}
+}

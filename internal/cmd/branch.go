@@ -186,6 +186,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	if !setupOptions.skipDeps {
 		setupDependencies(out, render, worktreePath)
 	}
+	reportNestedModules(out, render, worktreePath)
 
 	// Run post-create hooks (best-effort, non-fatal).
 	if !setupOptions.skipHooks {
