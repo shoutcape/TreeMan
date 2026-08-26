@@ -353,7 +353,11 @@ func glabGraphQL(host, query string, variables map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("glab: encoding GraphQL request: %w", err)
 	}
-	return runForgeCLI("glab", []string{"api", "graphql", "--hostname", host, "--input", "-"}, body, "glab api graphql")
+	return runForgeCLI("glab", glabGraphQLArgs(host), body, "glab api graphql")
+}
+
+func glabGraphQLArgs(host string) []string {
+	return []string{"api", "graphql", "--hostname", host, "-H", "Content-Type: application/json", "--input", "-"}
 }
 
 func glabAPIArgs(host, endpoint string) []string {
