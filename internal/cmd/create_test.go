@@ -62,6 +62,7 @@ func TestPrintSetupSummary_DatabaseSkippedIncludesConfigurationLink(t *testing.T
 
 func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {
 	repo, _ := createMergedCleanWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".envrc"), []byte("use nix\n"), 0o644))
 	module := filepath.Join(repo, "apps", "web", "package-lock.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(module), 0o755))
 	require.NoError(t, os.WriteFile(module, []byte("{}\n"), 0o644))
@@ -80,6 +81,8 @@ func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {
 	assert.Equal(t, repo+"/.worktrees/captured-output\n", stdout.String())
 	assert.NotContains(t, stdout.String(), "\x1b")
 	assert.NotContains(t, stderr.String(), "\x1b")
+	assert.Contains(t, stderr.String(), "direnv")
+	assert.Contains(t, stderr.String(), "Nix")
 	assert.Contains(t, stderr.String(), "Worktree ready:")
 	assert.Contains(t, stderr.String(), "Nested module apps/web (package-lock.json): skipped; not installed automatically.")
 	assert.NotContains(t, stderr.String(), "npm is not installed")

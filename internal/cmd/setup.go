@@ -5,7 +5,11 @@ import (
 	"io"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/deps"
+	"github.com/shoutcape/treeman/internal/envfile"
+	"github.com/shoutcape/treeman/internal/envrc"
+	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +45,124 @@ func (o creationSetupOptions) printSkipped(w io.Writer, render ui.Renderer) {
 	}
 }
 
+type worktreeSetup struct {
+	mainRoot      string
+	worktreePath  string
+	branch        string
+	projectConfig config.Config
+	options       creationSetupOptions
+}
+
+type setupSummary struct {
+	environment      string
+	environmentTools []envrc.ToolStatus
+	dependencies     string
+	database         string
+	hooks            string
+	databaseDocs     bool
+}
+
+// runWorktreeSetup performs the common best-effort setup actions for every
+// newly created worktree and captures their results for a consistent summary.
+func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setupSummary {
+	// Probe the source before copying so --skip-env and copy failures do not
+	// hide an .envrc that would otherwise be supplied to the worktree.
+	environmentTools := envrc.Detect(setup.mainRoot)
+	if len(environmentTools) == 0 {
+		environmentTools = envrc.Detect(setup.worktreePath)
+	}
+
+	environmentStatus := "skipped (requested)"
+	if !setup.options.skipEnv {
+		result, err := envfile.Copy(setup.mainRoot, setup.worktreePath)
+		environmentStatus = "skipped (no environment files found)"
+		if err != nil {
+			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
+			environmentStatus = fmt.Sprintf("failed: %v", err)
+		} else if len(result.Copied) > 0 {
+			for _, f := range result.Copied {
+				fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
+			}
+			fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
+			environmentStatus = fmt.Sprintf("completed: copied %d file(s)", len(result.Copied))
+		}
+	}
+
+	databaseStatus := "skipped (requested)"
+	if !setup.options.skipDatabase {
+		databaseStatus = setupCreatedDatabase(w, render, setup.projectConfig, setup.worktreePath, setup.branch)
+	}
+
+	dependenciesStatus := "skipped (requested)"
+	if !setup.options.skipDeps {
+		dependenciesStatus = setupDependencies(w, render, setup.worktreePath)
+	}
+	reportNestedModules(w, render, setup.worktreePath)
+
+	hooksStatus := "skipped (requested)"
+	if !setup.options.skipHooks {
+		if postCreateCmds := setup.projectConfig.PostCreateHooks(); len(postCreateCmds) > 0 {
+			fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
+			hookResults := hooks.RunPostCreate(setup.worktreePath, postCreateCmds, w)
+			for _, r := range hookResults {
+				if r.Err != nil {
+					fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
+				} else {
+					fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
+				}
+			}
+			hooksStatus = summarizeHooks(hookResults)
+		} else {
+			hooksStatus = "skipped (no post-create hooks configured)"
+		}
+	}
+
+	return setupSummary{
+		environment:      environmentStatus,
+		environmentTools: environmentTools,
+		dependencies:     dependenciesStatus,
+		database:         databaseStatus,
+		hooks:            hooksStatus,
+		databaseDocs:     strings.HasPrefix(databaseStatus, "skipped"),
+	}
+}
+
+func printSetupSummary(w io.Writer, render ui.Renderer, summary setupSummary) {
+	fmt.Fprintln(w, render.Title("SETUP"))
+	writeSetupStatus(w, render, "Environment", summary.environment)
+	for _, tool := range summary.environmentTools {
+		writeSetupStatus(w, render, tool.Name, tool.Status)
+	}
+	writeSetupStatus(w, render, "Dependencies", summary.dependencies)
+	if summary.databaseDocs {
+		fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(ui.ToneMuted, "○"), "Database", render.Link(render.Fit("Not configured. Configure database", 20), databaseDocsURL))
+	} else {
+		writeSetupStatus(w, render, "Database", summary.database)
+	}
+	writeSetupStatus(w, render, "Hooks", summary.hooks)
+}
+
+func summarizeHooks(results []hooks.RunResult) string {
+	succeeded := 0
+	var failures []string
+	for _, result := range results {
+		if result.Err != nil {
+			failures = append(failures, fmt.Sprintf("%q: %v", result.Command, result.Err))
+			continue
+		}
+		succeeded++
+	}
+
+	if len(failures) == 0 {
+		return fmt.Sprintf("completed: %d succeeded", succeeded)
+	}
+	return fmt.Sprintf("completed: %d succeeded, %d failed: %s", succeeded, len(failures), strings.Join(failures, "; "))
+}
+
+func joinArgs(args []string) string {
+	return strings.Join(args, " ")
+}
+
 func writeSetupStatus(w io.Writer, render ui.Renderer, name, status string) {
 	tone, symbol := setupStatusAppearance(status)
 	fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(tone, symbol), name, render.Tone(tone, render.Fit(status, 20)))
@@ -50,7 +172,7 @@ func setupStatusAppearance(status string) (ui.Tone, string) {
 	switch {
 	case strings.Contains(status, "failed"):
 		return ui.ToneFailure, "✗"
-	case strings.HasPrefix(status, "completed"):
+	case strings.HasPrefix(status, "completed"), status == envrc.Available, status == envrc.Active, status == envrc.ActiveInCurrentShell:
 		return ui.ToneSuccess, "✓"
 	default:
 		return ui.ToneMuted, "○"

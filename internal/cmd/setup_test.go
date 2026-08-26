@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/envrc"
 	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
@@ -70,12 +72,58 @@ func TestSetupStatusAppearance(t *testing.T) {
 		want   ui.Tone
 	}{
 		{status: "completed: copied 1 file", want: ui.ToneSuccess},
+		{status: "available", want: ui.ToneSuccess},
+		{status: "active", want: ui.ToneSuccess},
+		{status: envrc.ActiveInCurrentShell, want: ui.ToneSuccess},
+		{status: "unavailable", want: ui.ToneMuted},
 		{status: "skipped", want: ui.ToneMuted},
 		{status: "completed: 1 failed", want: ui.ToneFailure},
 	} {
 		tone, _ := setupStatusAppearance(test.status)
 		assert.Equal(t, test.want, tone)
 	}
+}
+
+func TestPrintSetupSummary_ReportsEnvrcToolStatus(t *testing.T) {
+	var output bytes.Buffer
+	printSetupSummary(&output, ui.NewRenderer(&output, terminal.Capabilities{}), setupSummary{
+		environment: "completed: copied 1 file(s)",
+		environmentTools: []envrc.ToolStatus{
+			{Name: "direnv", Status: envrc.Available},
+			{Name: "Nix", Status: envrc.ActiveInCurrentShell},
+		},
+		dependencies: "skipped",
+		database:     "completed",
+		hooks:        "skipped",
+	})
+
+	text := ui.StripANSI(output.String())
+	assert.Contains(t, text, "direnv")
+	assert.Contains(t, text, "available")
+	assert.Contains(t, text, "Nix")
+	assert.Contains(t, text, envrc.ActiveInCurrentShell)
+}
+
+func TestRunWorktreeSetup_ReportsSourceEnvrcWhenCopySkipped(t *testing.T) {
+	mainRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mainRoot, ".envrc"), []byte("use nix\n"), 0o644))
+
+	var output bytes.Buffer
+	summary := runWorktreeSetup(&output, ui.NewRenderer(&output, terminal.Capabilities{}), worktreeSetup{
+		mainRoot:      mainRoot,
+		worktreePath:  worktreePath,
+		projectConfig: config.Config{},
+		options: creationSetupOptions{
+			skipEnv: true, skipDatabase: true, skipDeps: true, skipHooks: true,
+		},
+	})
+
+	assert.Equal(t, "skipped (requested)", summary.environment)
+	assert.Equal(t, []string{"direnv", "Nix"}, []string{
+		summary.environmentTools[0].Name,
+		summary.environmentTools[1].Name,
+	})
 }
 
 func TestCreationSetupOptions_DoesNotPrintUnrequestedSkips(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ func TestRunBranchDirectDoesNotRequireForgeCLI(t *testing.T) {
 	gitTest(t, repo, "push", "-u", "origin", "feature/direct")
 	gitTest(t, repo, "checkout", "main")
 	gitTest(t, repo, "branch", "-D", "feature/direct")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".envrc"), []byte("use nix\n"), 0o644))
 	chdirForTest(t, repo)
 	pathWithOnlyGit(t)
 
@@ -30,6 +32,8 @@ func TestRunBranchDirectDoesNotRequireForgeCLI(t *testing.T) {
 	assert.DirExists(t, worktree)
 	assert.Contains(t, stderr.String(), "Nested module apps/web (package-lock.json): skipped; not installed automatically.")
 	assert.NotContains(t, stderr.String(), "npm is not installed")
+	assert.Contains(t, ui.StripANSI(stderr.String()), "direnv")
+	assert.Contains(t, ui.StripANSI(stderr.String()), "Nix")
 }
 
 func TestRunReviewReportsNestedModules(t *testing.T) {

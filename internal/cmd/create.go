@@ -2,14 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"os"
-	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
-	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
-	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/shoutcape/treeman/internal/worktree"
@@ -105,64 +101,17 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		}
 	}
 
-	// Copy .env* files (best-effort, non-fatal).
-	environmentStatus := "skipped (requested)"
-	if !setupOptions.skipEnv {
-		result, err := envfile.Copy(mainRoot, worktreePath)
-		environmentStatus = "skipped (no environment files found)"
-		if err != nil {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
-			environmentStatus = fmt.Sprintf("failed: %v", err)
-		} else if len(result.Copied) > 0 {
-			for _, f := range result.Copied {
-				fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
-			}
-			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
-			environmentStatus = fmt.Sprintf("completed: copied %d file(s)", len(result.Copied))
-		}
-	}
-
-	// Set up branch-specific database (best-effort, non-fatal).
-	databaseStatus := "skipped (requested)"
-	if !setupOptions.skipDatabase {
-		databaseStatus = setupCreatedDatabase(out, render, cfgResult.Config, worktreePath, branch)
-	}
-
-	// Install dependencies.
-	dependenciesStatus := "skipped (requested)"
-	if !setupOptions.skipDeps {
-		dependenciesStatus = setupDependencies(out, render, worktreePath)
-	}
-	reportNestedModules(out, render, worktreePath)
-
-	// Run post-create hooks (best-effort, non-fatal).
-	hooksStatus := "skipped (requested)"
-	if !setupOptions.skipHooks {
-		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
-			hookResults := hooks.RunPostCreate(worktreePath, postCreateCmds, out)
-			for _, r := range hookResults {
-				if r.Err != nil {
-					fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
-				} else {
-					fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
-				}
-			}
-			hooksStatus = summarizeHooks(hookResults)
-		} else {
-			hooksStatus = "skipped (no post-create hooks configured)"
-		}
-	}
+	summary := runWorktreeSetup(out, render, worktreeSetup{
+		mainRoot:      mainRoot,
+		worktreePath:  worktreePath,
+		branch:        branch,
+		projectConfig: cfgResult.Config,
+		options:       setupOptions,
+	})
 
 	// Print result to stderr for the user.
 	fmt.Fprintln(out, "")
-	printSetupSummary(out, render, setupSummary{
-		environment:  environmentStatus,
-		dependencies: dependenciesStatus,
-		database:     databaseStatus,
-		hooks:        hooksStatus,
-		databaseDocs: strings.HasPrefix(databaseStatus, "skipped"),
-	})
+	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
@@ -172,52 +121,4 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
 
 	return nil
-}
-
-type setupSummary struct {
-	environment  string
-	dependencies string
-	database     string
-	hooks        string
-	databaseDocs bool
-}
-
-func printSetupSummary(w io.Writer, render ui.Renderer, summary setupSummary) {
-	fmt.Fprintln(w, render.Title("SETUP"))
-	writeSetupStatus(w, render, "Environment", summary.environment)
-	writeSetupStatus(w, render, "Dependencies", summary.dependencies)
-	if summary.databaseDocs {
-		fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(ui.ToneMuted, "○"), "Database", render.Link(render.Fit("Not configured. Configure database", 20), databaseDocsURL))
-	} else {
-		writeSetupStatus(w, render, "Database", summary.database)
-	}
-	writeSetupStatus(w, render, "Hooks", summary.hooks)
-}
-
-func summarizeHooks(results []hooks.RunResult) string {
-	succeeded := 0
-	var failures []string
-	for _, result := range results {
-		if result.Err != nil {
-			failures = append(failures, fmt.Sprintf("%q: %v", result.Command, result.Err))
-			continue
-		}
-		succeeded++
-	}
-
-	if len(failures) == 0 {
-		return fmt.Sprintf("completed: %d succeeded", succeeded)
-	}
-	return fmt.Sprintf("completed: %d succeeded, %d failed: %s", succeeded, len(failures), strings.Join(failures, "; "))
-}
-
-func joinArgs(args []string) string {
-	result := ""
-	for i, a := range args {
-		if i > 0 {
-			result += " "
-		}
-		result += a
-	}
-	return result
 }
