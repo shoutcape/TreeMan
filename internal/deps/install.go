@@ -25,6 +25,8 @@ func Detect(dir string) (Detection, error) {
 
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {
+		// Dependency setup is intentionally limited to the worktree root.
+		// Nested modules require an explicit trusted post-create hook.
 		if !e.IsDir() {
 			files = append(files, e.Name())
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +29,37 @@ func TestDetect_PythonProject(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, result.Python)
 	assert.Nil(t, result.Installer)
+}
+
+func TestInstall_OnlyRunsRootInstaller(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell script")
+	}
+
+	dir := t.TempDir()
+	nestedModule := filepath.Join(dir, "tools", "generator")
+	require.NoError(t, os.MkdirAll(nestedModule, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedModule, "pnpm-lock.yaml"), []byte(""), 0644))
+
+	binDir := filepath.Join(dir, "bin")
+	require.NoError(t, os.Mkdir(binDir, 0755))
+	logPath := filepath.Join(dir, "commands.log")
+	command := []byte("#!/bin/sh\nprintf '%s:%s:%s\\n' \"${0##*/}\" \"$PWD\" \"$*\" >> \"$LOG_FILE\"\n")
+	for _, name := range []string{"npm", "pnpm"} {
+		require.NoError(t, os.WriteFile(filepath.Join(binDir, name), command, 0755))
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("LOG_FILE", logPath)
+
+	detection, err := Detect(dir)
+	require.NoError(t, err)
+	require.NotNil(t, detection.Installer)
+	assert.Equal(t, "npm", detection.Installer.Binary)
+	require.NoError(t, Run(dir, detection.Installer, &bytes.Buffer{}))
+	log, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Equal(t, "npm:"+dir+":install\n", string(log))
 }
 
 func TestDetect_PyprojectToml(t *testing.T) {

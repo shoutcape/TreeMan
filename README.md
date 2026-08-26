@@ -59,6 +59,10 @@ After creation, TreeMan performs these steps in order:
 
 Shell integration changes the current shell directory to the new worktree. Setup failures are warnings. The worktree remains available. Use the related `--skip-*` flag to omit an optional setup action.
 
+### Nested Modules and Tests
+
+Dependency setup checks only files in the worktree root. TreeMan does not recursively install dependencies for nested modules and does not run project tests automatically. This avoids unexpected commands in subdirectories. Use a trusted `hooks.post_create` command when a nested module needs installation or tests.
+
 ### Use Remote Branches
 
 Use `treeman branch` or `wtb` to add a remote branch worktree. With no query, TreeMan uses an interactive `fzf` picker. Give an exact remote branch name to skip the picker.
