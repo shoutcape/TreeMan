@@ -116,8 +116,8 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
 	render := outputRenderer(cmd)
 	fmt.Fprintf(out, "\n%s\n\n", render.Title("WORKTREES"))
-	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "MARKERS", "STATUS", "MERGED", "BRANCH", "PATH")))
-	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
+	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-7s %-8s  %-6s  %-27s  %-25s", "MARKERS", "CURRENT", "STATUS", "MERGED", "BRANCH", "PATH")))
+	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-7s %-8s  %-6s  %-27s  %-25s", "───────", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
 	for _, entry := range entries {
 		branch := entry.Branch
 		if entry.Detached {
@@ -131,12 +131,17 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 		if entry.Current {
 			markers += "▶"
 		}
+		current := ""
+		if entry.Current {
+			current = "YES"
+		}
 		merged := ""
 		if entry.Merged {
 			merged = "YES"
 		}
-		fmt.Fprintf(out, "    %s %s  %-6s  %s  %s\n",
+		fmt.Fprintf(out, "    %s %-7s %s  %-6s  %s  %s\n",
 			render.Muted(fmt.Sprintf("%-8s", markers)),
+			current,
 			render.Tone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
 			merged,
 			render.Branch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
