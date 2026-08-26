@@ -242,13 +242,13 @@ func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([
 		return nil, nil
 	}
 
-	dirty, err := worktreeDirtyStates(eligible)
+	dirty, stale, err := worktreeDirtyStates(eligible)
 	if err != nil {
 		return nil, err
 	}
 	cleanEntries := make([]git.WorktreeEntry, 0, len(eligible))
 	for index, entry := range eligible {
-		if !dirty[index] {
+		if !dirty[index] && !stale[index] {
 			cleanEntries = append(cleanEntries, entry)
 		}
 	}
@@ -335,16 +335,21 @@ func mainWorktreeRoot(entries []git.WorktreeEntry) (string, error) {
 	return entries[0].Path, nil
 }
 
-func worktreeDirtyStates(entries []git.WorktreeEntry) ([]bool, error) {
-	states := make([]bool, len(entries))
+func worktreeDirtyStates(entries []git.WorktreeEntry) (dirty []bool, stale []bool, err error) {
+	dirty = make([]bool, len(entries))
+	stale = make([]bool, len(entries))
 	for index, entry := range entries {
-		dirty, err := git.WorktreeDirty(entry.Path)
-		if err != nil {
-			return nil, err
+		if git.WorktreeStale(entry.Path) {
+			stale[index] = true
+			continue
 		}
-		states[index] = dirty
+		d, err := git.WorktreeDirty(entry.Path)
+		if err != nil {
+			return nil, nil, err
+		}
+		dirty[index] = d
 	}
-	return states, nil
+	return dirty, stale, nil
 }
 
 func cleanCandidateEntries(candidates []cleanCandidate) []git.WorktreeEntry {

@@ -93,32 +93,41 @@ func CurrentWorktreeRoot() (string, error) {
 // remote. It prefers the fast path (local origin/HEAD ref) and falls back to
 // querying origin with ls-remote.
 func DetectDefaultBranch() (string, error) {
+	branch, _, err := detectDefaultBranch()
+	return branch, err
+}
+
+// DetectDefaultBranchVerbose is like DetectDefaultBranch but also reports
+// whether the slow path (network round-trip via ls-remote) was used. Callers
+// that care about latency can surface a hint to the user.
+func DetectDefaultBranchVerbose() (branch string, slowPath bool, err error) {
+	return detectDefaultBranch()
+}
+
+func detectDefaultBranch() (branch string, slowPath bool, err error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
 	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	if err == nil {
-		branch := strings.TrimPrefix(originHead, "origin/")
-		if branch == "main" {
-			return "main", nil
-		}
-		if branch == "master" {
-			return "master", nil
+		b := strings.TrimPrefix(originHead, "origin/")
+		if b == "main" || b == "master" {
+			return b, false, nil
 		}
 	}
 
 	// Slow path: ask origin directly.
 	refs, err := run("ls-remote", "--heads", "origin", "main", "master")
 	if err != nil {
-		return "", fmt.Errorf("could not detect default branch: %w", err)
+		return "", true, fmt.Errorf("could not detect default branch: %w", err)
 	}
 
 	if strings.Contains(refs, "refs/heads/main") {
-		return "main", nil
+		return "main", true, nil
 	}
 	if strings.Contains(refs, "refs/heads/master") {
-		return "master", nil
+		return "master", true, nil
 	}
 
-	return "", fmt.Errorf("could not find 'main' or 'master' on origin")
+	return "", true, fmt.Errorf("could not find 'main' or 'master' on origin")
 }
 
 // BranchExists reports whether a local branch with the given name exists.
@@ -325,6 +334,14 @@ func WorktreeDirty(path string) (bool, error) {
 		return false, fmt.Errorf("could not inspect worktree %q: %w", path, err)
 	}
 	return out != "", nil
+}
+
+// WorktreeStale reports whether a linked worktree directory no longer exists
+// on disk. Git retains metadata for removed worktrees until pruned; stale
+// entries should be skipped rather than treated as errors.
+func WorktreeStale(path string) bool {
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
 }
 
 // BranchCanDeleteAtSHA reports whether Git's safe branch deletion would accept
