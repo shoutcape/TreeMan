@@ -3,6 +3,7 @@ package database
 import (
 	"errors"
 	"fmt"
+	"sort"
 )
 
 type cleanupPlan struct {
@@ -22,7 +23,7 @@ func NewCleanupBatch() *CleanupBatch                { return newCleanupBatch(def
 func newCleanupBatch(backend Backend) *CleanupBatch { return &CleanupBatch{backend: backend} }
 
 // Prepare returns an opaque commit function. Call it only after the worktree
-// and its SHA-guarded branch have both been deleted.
+// and its SHA-guarded branch are deleted.
 func (b *CleanupBatch) Prepare(worktreePath string) (func() error, error) {
 	store, id, err := databaseStoreForWorktree(worktreePath)
 	if err != nil {
@@ -60,20 +61,26 @@ func (b *CleanupBatch) Prepare(worktreePath string) (func() error, error) {
 }
 
 func (b *CleanupBatch) Flush() error {
-	plans := b.plans
-	b.plans = nil
-	_, err := executeCleanupBatch(b.backend, plans)
+	_, err := b.FlushWithResult()
 	return err
 }
 
-func executeCleanupBatch(backend Backend, plans []*cleanupPlan) (int, error) {
+// FlushWithResult removes prepared databases and returns those whose cleanup
+// records were removed successfully.
+func (b *CleanupBatch) FlushWithResult() ([]string, error) {
+	plans := b.plans
+	b.plans = nil
+	return executeCleanupBatch(b.backend, plans)
+}
+
+func executeCleanupBatch(backend Backend, plans []*cleanupPlan) ([]string, error) {
 	type group struct {
 		container, user string
 		plans           []*cleanupPlan
 	}
 	groups := map[string]*group{}
 	var errs []error
-	removed := 0
+	var removed []string
 	for _, plan := range plans {
 		if plan == nil {
 			continue
@@ -104,8 +111,9 @@ func executeCleanupBatch(backend Backend, plans []*cleanupPlan) (int, error) {
 				errs = append(errs, err)
 				continue
 			}
-			removed++
+			removed = append(removed, plan.record.Database)
 		}
 	}
+	sort.Strings(removed)
 	return removed, errors.Join(errs...)
 }

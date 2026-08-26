@@ -19,6 +19,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type reportingCleanupSession struct {
+	database     string
+	queued       []string
+	retryRemoved []string
+	retryErr     error
+}
+
+func (s *reportingCleanupSession) Prepare(string) (func() error, error) {
+	if s.database == "" {
+		return nil, nil
+	}
+	return func() error {
+		s.queued = append(s.queued, s.database)
+		return nil
+	}, nil
+}
+
+func (s *reportingCleanupSession) FlushWithResult() ([]string, error) {
+	removed := s.queued
+	s.queued = nil
+	return removed, nil
+}
+
+func (s *reportingCleanupSession) RetryPending(string) ([]string, error) {
+	return s.retryRemoved, s.retryErr
+}
+
 func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	runGit(t, "init", "--bare", "--initial-branch=main", origin)
@@ -50,6 +77,42 @@ func TestCleanRetainsMergedBranchWithUnpushedCommit(t *testing.T) {
 	_, err := os.Stat(worktree)
 	require.NoError(t, err)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanReportsDatabaseCleanupOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		database     string
+		retryRemoved []string
+		retryErr     error
+		expected     []string
+	}{
+		{name: "database present", database: "app_feature", expected: []string{"Removed database app_feature"}},
+		{name: "database absent", expected: []string{"No branch database found for feature."}},
+		{name: "partial retry", database: "app_feature", retryRemoved: []string{"app_retried"}, retryErr: assert.AnError, expected: []string{"Removed database app_retried", "pending database cleanup failed", "Removed database app_feature"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, _ := createMergedCleanWorktree(t)
+			changeToDir(t, repo)
+			session := &reportingCleanupSession{database: test.database, retryRemoved: test.retryRemoved, retryErr: test.retryErr}
+			previousBatch := newCleanCleanupBatch
+			newCleanCleanupBatch = func() cleanDatabaseCleanupBatch { return session }
+			t.Cleanup(func() { newCleanCleanupBatch = previousBatch })
+
+			stderr := &bytes.Buffer{}
+			command := &cobra.Command{}
+			command.SetErr(stderr)
+			classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+				return merge.Result{Cleanable: []merge.Candidate{{Branch: branches[0], SHA: gitRevParse(t, repo, "refs/heads/feature")}}}, nil
+			})
+
+			require.NoError(t, runCleanWithClassifier(command, classifier, false, true))
+			output := ui.StripANSI(stderr.String())
+			for _, expected := range test.expected {
+				assert.Contains(t, output, expected)
+			}
+		})
+	}
 }
 
 func TestCleanSkipsDirtyMergedWorktreeBeforeClassification(t *testing.T) {

@@ -7,14 +7,14 @@ import (
 	"os"
 )
 
-func (b *CleanupBatch) RetryPending(mainRoot string) (int, error) {
+func (b *CleanupBatch) RetryPending(mainRoot string) ([]string, error) {
 	store, err := newDatabaseStore(mainRoot)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	records, err := store.records()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	var pending []DatabaseRecord
 	var errs []error
@@ -47,12 +47,12 @@ func (b *CleanupBatch) RetryPending(mainRoot string) (int, error) {
 		pending = append(pending, *current)
 	}
 	if len(pending) == 0 {
-		return 0, errors.Join(errs...)
+		return nil, errors.Join(errs...)
 	}
 	if b.resolver == nil {
 		b.resolver, err = b.backend.Snapshot()
 		if err != nil {
-			return 0, errors.Join(append(errs, fmt.Errorf("listing PostgreSQL containers: %w", err))...)
+			return nil, errors.Join(append(errs, fmt.Errorf("listing PostgreSQL containers: %w", err))...)
 		}
 	}
 	var plans []*cleanupPlan

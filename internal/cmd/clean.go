@@ -10,6 +10,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type cleanDatabaseCleanupBatch interface {
+	Prepare(string) (func() error, error)
+	RetryPending(string) ([]string, error)
+	FlushWithResult() ([]string, error)
+}
+
+var newCleanCleanupBatch = func() cleanDatabaseCleanupBatch { return database.NewCleanupBatch() }
+
 func newCleanCmd() *cobra.Command {
 	var dryRun bool
 	var skipConfirm bool
@@ -132,29 +140,41 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 
 	removed := 0
-	cleanupBatch := database.NewCleanupBatch()
-	if retried, err := cleanupBatch.RetryPending(mainRoot); err != nil {
+	cleanupBatch := newCleanCleanupBatch()
+	removedDatabases, err := cleanupBatch.RetryPending(mainRoot)
+	reportRemovedDatabases(cmd, render, removedDatabases)
+	if err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("pending database cleanup failed: %v", err)))
-	} else if retried > 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Retried %d pending database cleanup(s).", retried)))
 	}
 	flushDatabaseCleanup := func() {
-		if err := cleanupBatch.Flush(); err != nil {
+		removedDatabases, err := cleanupBatch.FlushWithResult()
+		reportRemovedDatabases(cmd, render, removedDatabases)
+		if err != nil {
 			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", err)))
 		}
 	}
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch); err != nil {
+		cleanupOutcome, err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch)
+		if err != nil {
 			flushDatabaseCleanup()
 			return err
+		}
+		if cleanupOutcome == databaseCleanupAbsent {
+			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneInfo, "→", "No branch database found for "+candidate.entry.Branch+"."))
 		}
 		removed++
 	}
 	flushDatabaseCleanup()
 	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", removed)))
 	return nil
+}
+
+func reportRemovedDatabases(cmd *cobra.Command, render ui.Renderer, databases []string) {
+	for _, databaseName := range databases {
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", "Removed database "+databaseName))
+	}
 }
 
 // revalidateCleanCandidates returns only unchanged preview candidates. A fresh
