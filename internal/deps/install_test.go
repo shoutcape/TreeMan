@@ -30,6 +30,21 @@ func TestDetect_PythonProject(t *testing.T) {
 	assert.Nil(t, result.Installer)
 }
 
+func TestDetect_IgnoresNestedModules(t *testing.T) {
+	dir := t.TempDir()
+	nestedModule := filepath.Join(dir, "tools", "generator")
+	require.NoError(t, os.MkdirAll(nestedModule, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedModule, "pnpm-lock.yaml"), []byte(""), 0644))
+
+	result, err := Detect(dir)
+	require.NoError(t, err)
+	require.NotNil(t, result.Installer)
+	assert.Equal(t, "package-lock.json", result.Installer.Lockfile)
+	assert.Equal(t, "npm", result.Installer.Binary)
+	assert.Equal(t, []string{"install"}, result.Installer.Args)
+}
+
 func TestDetect_PyprojectToml(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.poetry]"), 0644))

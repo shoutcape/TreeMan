@@ -17,6 +17,8 @@ type Detection struct {
 }
 
 // Detect reports the dependency setup supported by the project at dir.
+// Only files directly in dir are considered; nested modules require an
+// explicit trusted post-create hook.
 func Detect(dir string) (Detection, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
