@@ -1,6 +1,8 @@
 package deps_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/deps"
@@ -103,4 +105,32 @@ func TestIsPythonProject(t *testing.T) {
 	assert.True(t, deps.IsPythonProject([]string{"pyproject.toml", "README.md"}))
 	assert.False(t, deps.IsPythonProject([]string{"go.mod", "main.go"}))
 	assert.False(t, deps.IsPythonProject([]string{}))
+}
+
+func TestDiscoverNestedModules(t *testing.T) {
+	dir := t.TempDir()
+	for _, path := range []string{
+		"go.mod",
+		"apps/web/pnpm-lock.yaml",
+		"packages/api/go.mod",
+		"tools/script/pyproject.toml",
+		"node_modules/ignored/package-lock.json",
+		".git/ignored/go.mod",
+		".worktrees/ignored/go.mod",
+		"vendor/ignored/go.mod",
+		".venv/ignored/pyproject.toml",
+	} {
+		fullPath := filepath.Join(dir, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755))
+		require.NoError(t, os.WriteFile(fullPath, []byte(""), 0644))
+	}
+
+	modules, err := deps.DiscoverNestedModules(dir)
+
+	require.NoError(t, err)
+	assert.Equal(t, []deps.Module{
+		{Path: "apps/web", Manifest: "pnpm-lock.yaml"},
+		{Path: "packages/api", Manifest: "go.mod"},
+		{Path: "tools/script", Manifest: "pyproject.toml"},
+	}, modules)
 }

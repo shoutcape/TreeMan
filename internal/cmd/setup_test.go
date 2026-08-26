@@ -84,3 +84,15 @@ func TestCreationSetupOptions_DoesNotPrintUnrequestedSkips(t *testing.T) {
 
 	assert.Empty(t, output.String())
 }
+
+func TestReportNestedModules(t *testing.T) {
+	dir := t.TempDir()
+	module := filepath.Join(dir, "apps", "web", "package-lock.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(module), 0755))
+	require.NoError(t, os.WriteFile(module, []byte(""), 0644))
+
+	var output bytes.Buffer
+	reportNestedModules(&output, ui.NewRenderer(&output, terminal.Capabilities{}), dir)
+
+	assert.Equal(t, "○ Nested module apps/web (package-lock.json): skipped; not installed automatically.\n", ui.StripANSI(output.String()))
+}
