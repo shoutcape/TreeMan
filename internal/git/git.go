@@ -93,41 +93,29 @@ func CurrentWorktreeRoot() (string, error) {
 // remote. It prefers the fast path (local origin/HEAD ref) and falls back to
 // querying origin with ls-remote.
 func DetectDefaultBranch() (string, error) {
-	branch, _, err := detectDefaultBranch()
-	return branch, err
-}
-
-// DetectDefaultBranchVerbose is like DetectDefaultBranch but also reports
-// whether the slow path (network round-trip via ls-remote) was used. Callers
-// that care about latency can surface a hint to the user.
-func DetectDefaultBranchVerbose() (branch string, slowPath bool, err error) {
-	return detectDefaultBranch()
-}
-
-func detectDefaultBranch() (branch string, slowPath bool, err error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
 	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	if err == nil {
 		b := strings.TrimPrefix(originHead, "origin/")
 		if b == "main" || b == "master" {
-			return b, false, nil
+			return b, nil
 		}
 	}
 
 	// Slow path: ask origin directly.
 	refs, err := run("ls-remote", "--heads", "origin", "main", "master")
 	if err != nil {
-		return "", true, fmt.Errorf("could not detect default branch: %w", err)
+		return "", fmt.Errorf("could not detect default branch: %w", err)
 	}
 
 	if strings.Contains(refs, "refs/heads/main") {
-		return "main", true, nil
+		return "main", nil
 	}
 	if strings.Contains(refs, "refs/heads/master") {
-		return "master", true, nil
+		return "master", nil
 	}
 
-	return "", true, fmt.Errorf("could not find 'main' or 'master' on origin")
+	return "", fmt.Errorf("could not find 'main' or 'master' on origin")
 }
 
 // BranchExists reports whether a local branch with the given name exists.
@@ -329,19 +317,68 @@ func SetUpstreamInDir(dir, branch string) error {
 // WorktreeDirty reports whether a worktree has tracked, staged, or untracked
 // changes.
 func WorktreeDirty(path string) (bool, error) {
-	out, err := runInDir(path, "status", "--porcelain", "--untracked-files=all")
+	state, err := InspectWorktree(path)
 	if err != nil {
-		return false, fmt.Errorf("could not inspect worktree %q: %w", path, err)
+		return false, err
 	}
-	return out != "", nil
+	if state == WorktreeStateStale {
+		return false, fmt.Errorf("could not inspect worktree %q: directory is missing or not a directory", path)
+	}
+	return state == WorktreeStateDirty, nil
 }
 
-// WorktreeStale reports whether a linked worktree directory no longer exists
-// on disk. Git retains metadata for removed worktrees until pruned; stale
-// entries should be skipped rather than treated as errors.
-func WorktreeStale(path string) bool {
-	_, err := os.Stat(path)
-	return os.IsNotExist(err)
+type WorktreeState int
+
+const (
+	WorktreeStateClean WorktreeState = iota
+	WorktreeStateDirty
+	WorktreeStateStale
+)
+
+// InspectedWorktree combines a Git worktree record with its filesystem state.
+type InspectedWorktree struct {
+	Entry WorktreeEntry
+	State WorktreeState
+}
+
+// InspectWorktree reports whether a worktree is clean, dirty, or stale.
+// A path that disappears while Git checks its status is classified as stale.
+func InspectWorktree(path string) (WorktreeState, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return WorktreeStateStale, nil
+		}
+		return WorktreeStateClean, fmt.Errorf("could not inspect worktree %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return WorktreeStateStale, nil
+	}
+
+	out, err := runInDir(path, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		if info, statErr := os.Stat(path); (statErr != nil && os.IsNotExist(statErr)) || (statErr == nil && !info.IsDir()) {
+			return WorktreeStateStale, nil
+		}
+		return WorktreeStateClean, fmt.Errorf("could not inspect worktree %q: %w", path, err)
+	}
+	if out != "" {
+		return WorktreeStateDirty, nil
+	}
+	return WorktreeStateClean, nil
+}
+
+// InspectWorktrees reports filesystem state for worktree records in order.
+func InspectWorktrees(entries []WorktreeEntry) ([]InspectedWorktree, error) {
+	inspected := make([]InspectedWorktree, len(entries))
+	for index, entry := range entries {
+		state, err := InspectWorktree(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		inspected[index] = InspectedWorktree{Entry: entry, State: state}
+	}
+	return inspected, nil
 }
 
 // BranchCanDeleteAtSHA reports whether Git's safe branch deletion would accept

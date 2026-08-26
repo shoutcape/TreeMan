@@ -173,11 +173,14 @@ func revalidateCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, m
 			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "no longer eligible"))
 			continue
 		}
-		dirty, err := git.WorktreeDirty(entry.Path)
+		state, err := git.InspectWorktree(entry.Path)
 		if err != nil {
 			return cleanSelection{}, err
 		}
-		if dirty {
+		switch state {
+		case git.WorktreeStateStale:
+			continue
+		case git.WorktreeStateDirty:
 			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "dirty"))
 			continue
 		}
@@ -242,14 +245,14 @@ func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([
 		return nil, nil
 	}
 
-	dirty, stale, err := worktreeDirtyStates(eligible)
+	inspected, err := git.InspectWorktrees(eligible)
 	if err != nil {
 		return nil, err
 	}
 	cleanEntries := make([]git.WorktreeEntry, 0, len(eligible))
-	for index, entry := range eligible {
-		if !dirty[index] && !stale[index] {
-			cleanEntries = append(cleanEntries, entry)
+	for _, worktree := range inspected {
+		if worktree.State == git.WorktreeStateClean {
+			cleanEntries = append(cleanEntries, worktree.Entry)
 		}
 	}
 	return cleanEntries, nil
@@ -333,23 +336,6 @@ func mainWorktreeRoot(entries []git.WorktreeEntry) (string, error) {
 		return "", fmt.Errorf("could not determine main worktree root")
 	}
 	return entries[0].Path, nil
-}
-
-func worktreeDirtyStates(entries []git.WorktreeEntry) (dirty []bool, stale []bool, err error) {
-	dirty = make([]bool, len(entries))
-	stale = make([]bool, len(entries))
-	for index, entry := range entries {
-		if git.WorktreeStale(entry.Path) {
-			stale[index] = true
-			continue
-		}
-		d, err := git.WorktreeDirty(entry.Path)
-		if err != nil {
-			return nil, nil, err
-		}
-		dirty[index] = d
-	}
-	return dirty, stale, nil
 }
 
 func cleanCandidateEntries(candidates []cleanCandidate) []git.WorktreeEntry {

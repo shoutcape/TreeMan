@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,18 @@ func TestWriteListHuman(t *testing.T) {
 
 	assert.NotContains(t, buf.String(), "\x1b")
 	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                       PATH                     \n    ───────  ──────    ──────  ───────────────────────────  ─────────────────────────\n    M▶       CLEAN             main                         /repo\n             DIRTY     YES     feature                      /repo/.worktrees/feature\n             DETACHED          (detached)                   /repo/.worktrees/review\n", ui.StripANSI(buf.String()))
+}
+
+func TestWriteListHumanShowsStaleWorktrees(t *testing.T) {
+	buf := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	writeListHuman(cmd, []listEntry{{Path: "/repo/.worktrees/removed", Branch: "removed", Stale: true}})
+
+	output := ui.StripANSI(buf.String())
+	assert.Contains(t, output, "STALE")
+	assert.Contains(t, output, "1 stale worktree(s) -- directory missing or not a directory. Run: git worktree prune")
 }
 
 func TestWriteListJSON(t *testing.T) {
@@ -54,6 +67,7 @@ func TestListStatusUsesSemanticTones(t *testing.T) {
 		{entry: listEntry{Dirty: true}, wantStatus: "DIRTY", wantTone: ui.ToneWarning},
 		{entry: listEntry{Detached: true}, wantStatus: "DETACHED", wantTone: ui.ToneMuted},
 		{entry: listEntry{Detached: true, Dirty: true}, wantStatus: "DETACHED", wantTone: ui.ToneWarning},
+		{entry: listEntry{Stale: true}, wantStatus: "STALE", wantTone: ui.ToneWarning},
 	}
 
 	for _, test := range tests {
@@ -61,6 +75,26 @@ func TestListStatusUsesSemanticTones(t *testing.T) {
 		assert.Equal(t, test.wantStatus, status)
 		assert.Equal(t, test.wantTone, tone)
 	}
+}
+
+func TestRunListReportsStaleWorktree(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	require.NoError(t, os.RemoveAll(worktree))
+
+	output := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(output)
+	classifier := func(string, []string) (merge.Result, error) {
+		return merge.Result{}, nil
+	}
+	require.NoError(t, runListWithClassifier(cmd, classifier, true))
+
+	var entries []listEntry
+	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
+	require.Len(t, entries, 2)
+	assert.True(t, entries[1].Stale)
+	assert.False(t, entries[1].Dirty)
 }
 
 func TestListCmd_HasWTLAlias(t *testing.T) {

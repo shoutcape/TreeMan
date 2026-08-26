@@ -51,7 +51,7 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	if err != nil {
 		return err
 	}
-	dirty, stale, err := worktreeDirtyStates(entries)
+	inspected, err := git.InspectWorktrees(entries)
 	if err != nil {
 		return err
 	}
@@ -63,8 +63,9 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	verified := map[string]string{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
 		var branchNames []string
-		for index, entry := range entries {
-			if entry.Branch != "" && entry.Branch != defaultBranch && !stale[index] {
+		for _, worktree := range inspected {
+			entry := worktree.Entry
+			if entry.Branch != "" && entry.Branch != defaultBranch && worktree.State != git.WorktreeStateStale {
 				branchNames = append(branchNames, entry.Branch)
 			}
 		}
@@ -82,7 +83,8 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 		}
 	}
 	result := make([]listEntry, 0, len(entries))
-	for index, entry := range entries {
+	for _, worktree := range inspected {
+		entry := worktree.Entry
 		// MERGED reports merge eligibility: its tip is an ancestor of
 		// origin/<default>, or its remote counterpart is gone and the forge
 		// confirms a merged PR/MR (squash/rebase merge).
@@ -95,10 +97,10 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			Branch:   entry.Branch,
 			Main:     samePath(entry.Path, mainRoot),
 			Current:  samePath(entry.Path, currentRoot),
-			Dirty:    dirty[index],
+			Dirty:    worktree.State == git.WorktreeStateDirty,
 			Detached: entry.Branch == "",
 			Merged:   isMerged,
-			Stale:    stale[index],
+			Stale:    worktree.State == git.WorktreeStateStale,
 		})
 	}
 
@@ -150,7 +152,7 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 		}
 	}
 	if staleCount > 0 {
-		fmt.Fprintf(out, "\n%s\n", render.Muted(fmt.Sprintf("  %d stale worktree(s) -- directory missing. Run: git worktree prune", staleCount)))
+		fmt.Fprintf(out, "\n%s\n", render.Muted(fmt.Sprintf("  %d stale worktree(s) -- directory missing or not a directory. Run: git worktree prune", staleCount)))
 	}
 }
 

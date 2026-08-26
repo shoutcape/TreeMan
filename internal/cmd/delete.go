@@ -196,7 +196,7 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	if entry.Branch != branch {
 		return fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
 	}
-	defaultBranch, err := detectDefaultBranchWithWarning(cmd)
+	defaultBranch, err := git.DetectDefaultBranch()
 	if err != nil {
 		return fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
 	}
@@ -261,18 +261,6 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
 	}
 	return nil
-}
-
-func detectDefaultBranchWithWarning(cmd *cobra.Command) (string, error) {
-	branch, slowPath, err := git.DetectDefaultBranchVerbose()
-	if err != nil {
-		return "", err
-	}
-	if slowPath {
-		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!",
-			"origin/HEAD is not set locally -- used a network call to detect the default branch. Run: git remote set-head origin --auto"))
-	}
-	return branch, nil
 }
 
 func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {
