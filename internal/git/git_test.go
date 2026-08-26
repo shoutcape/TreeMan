@@ -59,6 +59,24 @@ func TestParseWorktreePorcelain_Empty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestInspectWorktreeClassifiesFilesystemStates(t *testing.T) {
+	dir := createGitTestRepo(t)
+	file := filepath.Join(t.TempDir(), "worktree")
+	require.NoError(t, os.WriteFile(file, nil, 0o644))
+
+	state, err := InspectWorktree(filepath.Join(dir, "missing"))
+	require.NoError(t, err)
+	assert.Equal(t, WorktreeStateStale, state)
+
+	state, err = InspectWorktree(dir)
+	require.NoError(t, err)
+	assert.Equal(t, WorktreeStateClean, state)
+
+	state, err = InspectWorktree(file)
+	require.NoError(t, err)
+	assert.Equal(t, WorktreeStateStale, state)
+}
+
 func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()

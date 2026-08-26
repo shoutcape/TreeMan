@@ -60,6 +60,35 @@ func TestCleanRevalidationReportsIneligiblePreviewCandidate(t *testing.T) {
 	assert.Equal(t, []merge.Diagnostic{{Operation: `skipping "feature": no longer eligible`}}, selection.diagnostics)
 }
 
+func TestCleanRevalidationSilentlySkipsStalePreviewCandidate(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	candidate := previewCleanCandidate(t, repo, worktree)
+	require.NoError(t, os.RemoveAll(worktree))
+
+	selection, err := revalidateCleanCandidates(merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+		t.Fatal("stale preview candidate must not be classified")
+		return merge.Result{}, nil
+	}), "main", repo, []cleanCandidate{candidate})
+
+	require.NoError(t, err)
+	assert.Empty(t, selection.candidates)
+	assert.Empty(t, selection.diagnostics)
+}
+
+func TestCleanCandidateDiscoveryExcludesStaleWorktree(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	require.NoError(t, os.RemoveAll(worktree))
+
+	entries, err := git.WorktreeList()
+	require.NoError(t, err)
+	cleanEntries, err := cleanLinkedWorktreeEntries(repo, entries)
+
+	require.NoError(t, err)
+	assert.Empty(t, cleanEntries)
+}
+
 func TestCleanRevalidationKeepsOnlyStillEligiblePreviewPairs(t *testing.T) {
 	repo, worktree := createMergedCleanWorktree(t)
 	changeToDir(t, repo)

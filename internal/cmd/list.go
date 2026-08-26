@@ -20,6 +20,7 @@ type listEntry struct {
 	Dirty    bool   `json:"dirty"`
 	Detached bool   `json:"detached"`
 	Merged   bool   `json:"merged"`
+	Stale    bool   `json:"stale"`
 }
 
 func newListCmd() *cobra.Command {
@@ -50,7 +51,7 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	if err != nil {
 		return err
 	}
-	dirty, err := worktreeDirtyStates(entries)
+	inspected, err := git.InspectWorktrees(entries)
 	if err != nil {
 		return err
 	}
@@ -62,8 +63,9 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	verified := map[string]string{}
 	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
 		var branchNames []string
-		for _, entry := range entries {
-			if entry.Branch != "" && entry.Branch != defaultBranch {
+		for _, worktree := range inspected {
+			entry := worktree.Entry
+			if entry.Branch != "" && entry.Branch != defaultBranch && worktree.State != git.WorktreeStateStale {
 				branchNames = append(branchNames, entry.Branch)
 			}
 		}
@@ -81,7 +83,8 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 		}
 	}
 	result := make([]listEntry, 0, len(entries))
-	for index, entry := range entries {
+	for _, worktree := range inspected {
+		entry := worktree.Entry
 		// MERGED reports merge eligibility: its tip is an ancestor of
 		// origin/<default>, or its remote counterpart is gone and the forge
 		// confirms a merged PR/MR (squash/rebase merge).
@@ -94,9 +97,10 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			Branch:   entry.Branch,
 			Main:     samePath(entry.Path, mainRoot),
 			Current:  samePath(entry.Path, currentRoot),
-			Dirty:    dirty[index],
+			Dirty:    worktree.State == git.WorktreeStateDirty,
 			Detached: entry.Branch == "",
 			Merged:   isMerged,
+			Stale:    worktree.State == git.WorktreeStateStale,
 		})
 	}
 
@@ -118,6 +122,7 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	fmt.Fprintf(out, "\n%s\n\n", render.Title("WORKTREES"))
 	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "MARKERS", "STATUS", "MERGED", "BRANCH", "PATH")))
 	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
+	staleCount := 0
 	for _, entry := range entries {
 		branch := entry.Branch
 		if entry.Detached {
@@ -142,10 +147,19 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 			render.Branch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
 			render.Path(displayListPath(entry.Path)),
 		)
+		if entry.Stale {
+			staleCount++
+		}
+	}
+	if staleCount > 0 {
+		fmt.Fprintf(out, "\n%s\n", render.Muted(fmt.Sprintf("  %d stale worktree(s) -- directory missing or not a directory. Run: git worktree prune", staleCount)))
 	}
 }
 
 func listStatus(entry listEntry) (string, ui.Tone) {
+	if entry.Stale {
+		return "STALE", ui.ToneWarning
+	}
 	status := "CLEAN"
 	tone := ui.ToneSuccess
 	if entry.Detached {

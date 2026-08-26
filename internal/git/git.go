@@ -96,12 +96,9 @@ func DetectDefaultBranch() (string, error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
 	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	if err == nil {
-		branch := strings.TrimPrefix(originHead, "origin/")
-		if branch == "main" {
-			return "main", nil
-		}
-		if branch == "master" {
-			return "master", nil
+		b := strings.TrimPrefix(originHead, "origin/")
+		if b == "main" || b == "master" {
+			return b, nil
 		}
 	}
 
@@ -320,11 +317,68 @@ func SetUpstreamInDir(dir, branch string) error {
 // WorktreeDirty reports whether a worktree has tracked, staged, or untracked
 // changes.
 func WorktreeDirty(path string) (bool, error) {
+	state, err := InspectWorktree(path)
+	if err != nil {
+		return false, err
+	}
+	if state == WorktreeStateStale {
+		return false, fmt.Errorf("could not inspect worktree %q: directory is missing or not a directory", path)
+	}
+	return state == WorktreeStateDirty, nil
+}
+
+type WorktreeState int
+
+const (
+	WorktreeStateClean WorktreeState = iota
+	WorktreeStateDirty
+	WorktreeStateStale
+)
+
+// InspectedWorktree combines a Git worktree record with its filesystem state.
+type InspectedWorktree struct {
+	Entry WorktreeEntry
+	State WorktreeState
+}
+
+// InspectWorktree reports whether a worktree is clean, dirty, or stale.
+// A path that disappears while Git checks its status is classified as stale.
+func InspectWorktree(path string) (WorktreeState, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return WorktreeStateStale, nil
+		}
+		return WorktreeStateClean, fmt.Errorf("could not inspect worktree %q: %w", path, err)
+	}
+	if !info.IsDir() {
+		return WorktreeStateStale, nil
+	}
+
 	out, err := runInDir(path, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
-		return false, fmt.Errorf("could not inspect worktree %q: %w", path, err)
+		if info, statErr := os.Stat(path); (statErr != nil && os.IsNotExist(statErr)) || (statErr == nil && !info.IsDir()) {
+			return WorktreeStateStale, nil
+		}
+		return WorktreeStateClean, fmt.Errorf("could not inspect worktree %q: %w", path, err)
 	}
-	return out != "", nil
+	if out != "" {
+		return WorktreeStateDirty, nil
+	}
+	return WorktreeStateClean, nil
+}
+
+// InspectWorktrees reports filesystem state for worktree records in order.
+func InspectWorktrees(entries []WorktreeEntry) ([]InspectedWorktree, error) {
+	inspected := make([]InspectedWorktree, len(entries))
+	for index, entry := range entries {
+		state, err := InspectWorktree(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		inspected[index] = InspectedWorktree{Entry: entry, State: state}
+	}
+	return inspected, nil
 }
 
 // BranchCanDeleteAtSHA reports whether Git's safe branch deletion would accept
