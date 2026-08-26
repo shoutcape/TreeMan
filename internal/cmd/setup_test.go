@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/terminal"
@@ -10,6 +12,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetupDependenciesReportsSilentCargoSuccess(t *testing.T) {
+	project := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(project, "Cargo.toml"), []byte("[package]\nname = \"example\""), 0o644))
+
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "cargo"), []byte("#!/bin/sh\n"), 0o755))
+	t.Setenv("PATH", binDir)
+
+	var output bytes.Buffer
+	status := setupDependencies(&output, ui.NewRenderer(&output, terminal.Capabilities{}), project)
+	plainOutput := ui.StripANSI(output.String())
+
+	assert.Equal(t, "completed: installed with cargo", status)
+	assert.Contains(t, plainOutput, "Detected Cargo.toml, running cargo fetch...")
+	assert.Contains(t, plainOutput, "Completed cargo fetch.")
+}
 
 func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) {
 	for _, newCommand := range []struct {

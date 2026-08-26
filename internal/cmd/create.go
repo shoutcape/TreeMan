@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
-	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
@@ -132,26 +131,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	// Install dependencies.
 	dependenciesStatus := "skipped (requested)"
 	if !setupOptions.skipDeps {
-		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Detecting dependencies..."))
-		installResult, installErr := deps.Install(worktreePath, out)
-		dependenciesStatus = "skipped"
-		switch {
-		case installErr != nil:
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
-			dependenciesStatus = fmt.Sprintf("failed: %v", installErr)
-		case installResult.Python:
-			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
-			dependenciesStatus = "skipped (Python project requires manual venv activation)"
-		case installResult.Skipped:
-			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
-		case installResult.Installer != nil:
-			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
-				installResult.Installer.Lockfile,
-				installResult.Installer.Binary,
-				joinArgs(installResult.Installer.Args),
-			)))
-			dependenciesStatus = fmt.Sprintf("completed: installed with %s", installResult.Installer.Binary)
-		}
+		dependenciesStatus = setupDependencies(out, render, worktreePath)
 	}
 
 	// Run post-create hooks (best-effort, non-fatal).
