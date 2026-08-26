@@ -28,6 +28,8 @@ func TestForgeAPIArgs(t *testing.T) {
 		glabAPIArgs("gitlab.example", "projects/group%2Frepo/merge_requests?per_page=100"))
 	assert.Equal(t, []string{"api", "graphql", "-f", "query=query", "-f", "name=repo", "-f", "owner=owner"},
 		ghGraphQLArgs("query", map[string]string{"owner": "owner", "name": "repo"}))
+	assert.Equal(t, []string{"api", "graphql", "--hostname", "gitlab.example", "-H", "Content-Type: application/json", "--input", "-"},
+		glabGraphQLArgs("gitlab.example"))
 }
 
 func apiGitHubCompleteSnapshot(t *testing.T) {
