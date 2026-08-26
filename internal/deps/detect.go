@@ -25,6 +25,7 @@ var knownInstallers = []Installer{
 	{Lockfile: "yarn.lock", Binary: "yarn", Args: []string{"install"}},
 	{Lockfile: "package-lock.json", Binary: "npm", Args: []string{"install"}},
 	{Lockfile: "go.mod", Binary: "go", Args: []string{"mod", "download"}},
+	{Lockfile: "Cargo.toml", Binary: "cargo", Args: []string{"fetch"}},
 }
 
 // DetectInstaller returns the first Installer whose lockfile appears in files,
@@ -33,7 +34,7 @@ var knownInstallers = []Installer{
 // files should be the list of filenames (basename only) in the worktree root.
 // The caller is responsible for reading the directory.
 //
-// Priority order: pnpm > yarn > npm > go
+// Priority order: pnpm > yarn > npm > go > cargo
 func DetectInstaller(files []string) *Installer {
 	set := make(map[string]struct{}, len(files))
 	for _, f := range files {

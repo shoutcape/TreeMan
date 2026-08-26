@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -54,4 +55,35 @@ func setupStatusAppearance(status string) (ui.Tone, string) {
 	default:
 		return ui.ToneMuted, "○"
 	}
+}
+
+// setupDependencies reports dependency setup consistently for every worktree flow.
+func setupDependencies(out io.Writer, render ui.Renderer, worktreePath string) string {
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Detecting dependencies..."))
+
+	detection, err := deps.Detect(worktreePath)
+	if err != nil {
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", err)))
+		return fmt.Sprintf("failed: %v", err)
+	}
+
+	if detection.Python {
+		fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
+		return "skipped (Python project requires manual venv activation)"
+	}
+	if detection.Installer == nil {
+		fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
+		return "skipped"
+	}
+
+	installer := detection.Installer
+	command := installer.Binary + " " + joinArgs(installer.Args)
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s...", installer.Lockfile, command)))
+	if err := deps.Run(worktreePath, installer, out); err != nil {
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", err)))
+		return fmt.Sprintf("failed: %v", err)
+	}
+
+	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Completed "+command+"."))
+	return fmt.Sprintf("completed: installed with %s", installer.Binary)
 }

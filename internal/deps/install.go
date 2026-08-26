@@ -8,28 +8,19 @@ import (
 	"path/filepath"
 )
 
-// InstallResult describes what happened during dependency installation.
-type InstallResult struct {
-	// Skipped is true when no installer was found and no Python project
-	// was detected.
-	Skipped bool
+// Detection describes the dependency setup supported by a project.
+type Detection struct {
 	// Python is true when a Python project was detected (no auto-install).
 	Python bool
-	// Installer is the Installer that was run (nil if none).
+	// Installer is the Installer to run (nil if none).
 	Installer *Installer
 }
 
-// Install detects the package manager for the project at dir and runs the
-// appropriate install command. It is a non-fatal operation — if the binary is
-// not found it prints a warning and returns with Skipped=true.
-func Install(dir string, outputs ...io.Writer) (InstallResult, error) {
-	output := io.Writer(os.Stderr)
-	if len(outputs) > 0 && outputs[0] != nil {
-		output = outputs[0]
-	}
+// Detect reports the dependency setup supported by the project at dir.
+func Detect(dir string) (Detection, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return InstallResult{}, fmt.Errorf("deps: reading directory %q: %w", dir, err)
+		return Detection{}, fmt.Errorf("deps: reading directory %q: %w", dir, err)
 	}
 
 	files := make([]string, 0, len(entries))
@@ -43,15 +34,21 @@ func Install(dir string, outputs ...io.Writer) (InstallResult, error) {
 
 	if installer == nil {
 		if IsPythonProject(files) {
-			return InstallResult{Python: true}, nil
+			return Detection{Python: true}, nil
 		}
-		return InstallResult{Skipped: true}, nil
+		return Detection{}, nil
 	}
 
+	return Detection{Installer: installer}, nil
+}
+
+// Run executes installer in dir, forwarding output to output. It is a
+// non-fatal operation: callers should report errors without aborting setup.
+func Run(dir string, installer *Installer, output io.Writer) error {
 	// Check that the binary is available.
 	if _, err := exec.LookPath(installer.Binary); err != nil {
 		// Not installed - warn but do not fail.
-		return InstallResult{Skipped: true}, fmt.Errorf(
+		return fmt.Errorf(
 			"%s found but %s is not installed, skipping",
 			installer.Lockfile, installer.Binary,
 		)
@@ -64,10 +61,10 @@ func Install(dir string, outputs ...io.Writer) (InstallResult, error) {
 	cmd.Stderr = output
 
 	if err := cmd.Run(); err != nil {
-		return InstallResult{Installer: installer}, fmt.Errorf(
+		return fmt.Errorf(
 			"%s %s failed: %w", installer.Binary, installer.Args, err,
 		)
 	}
 
-	return InstallResult{Installer: installer}, nil
+	return nil
 }

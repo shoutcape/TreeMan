@@ -45,6 +45,13 @@ func TestDetectInstaller(t *testing.T) {
 			wantArgs:     []string{"mod", "download"},
 		},
 		{
+			name:         "cargo",
+			files:        []string{"Cargo.toml", "src"},
+			wantLockfile: "Cargo.toml",
+			wantBinary:   "cargo",
+			wantArgs:     []string{"fetch"},
+		},
+		{
 			// pnpm takes priority over npm when both are present
 			name:         "pnpm beats npm",
 			files:        []string{"pnpm-lock.yaml", "package-lock.json"},
