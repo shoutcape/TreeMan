@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/terminal"
@@ -47,12 +49,13 @@ func TestCreationSetupOptions_PrintSkipped(t *testing.T) {
 
 func TestSetupStatusAppearance(t *testing.T) {
 	for _, test := range []struct {
-		status string
+		status setupStatus
 		want   ui.Tone
 	}{
-		{status: "completed: copied 1 file", want: ui.ToneSuccess},
-		{status: "skipped", want: ui.ToneMuted},
-		{status: "completed: 1 failed", want: ui.ToneFailure},
+		{status: setupStatus{description: "completed: copied 1 file"}, want: ui.ToneSuccess},
+		{status: setupStatus{description: "skipped"}, want: ui.ToneMuted},
+		{status: setupStatus{description: "not bootstrapped: Cargo.toml", warning: true}, want: ui.ToneWarning},
+		{status: setupStatus{description: "completed: 1 failed"}, want: ui.ToneFailure},
 	} {
 		tone, _ := setupStatusAppearance(test.status)
 		assert.Equal(t, test.want, tone)
@@ -64,4 +67,30 @@ func TestCreationSetupOptions_DoesNotPrintUnrequestedSkips(t *testing.T) {
 	creationSetupOptions{}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
 
 	assert.Empty(t, output.String())
+}
+
+func TestSetupDependencies_ReportsUnsupportedManifestsAfterInstallerFailure(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"example\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{}\n"), 0o644))
+	t.Setenv("PATH", "")
+
+	var output bytes.Buffer
+	result := setupDependencies(&output, ui.NewRenderer(&output, terminal.Capabilities{}), dir, false)
+
+	assert.True(t, result.incomplete)
+	assert.True(t, result.status.warning)
+	assert.Contains(t, result.status.description, "failed: package-lock.json found but npm is not installed, skipping")
+	assert.Contains(t, result.status.description, "not bootstrapped: Cargo.toml")
+	assert.Contains(t, ui.StripANSI(output.String()), "Unsupported dependency manifests were not bootstrapped: Cargo.toml")
+}
+
+func TestPrintWorktreeReadiness(t *testing.T) {
+	var output bytes.Buffer
+	render := ui.NewRenderer(&output, terminal.Capabilities{})
+
+	printWorktreeReadiness(&output, render, true, "Review worktree")
+	printWorktreeReadiness(&output, render, false, "Worktree")
+
+	assert.Equal(t, "! Review worktree setup incomplete:\n✓ Worktree ready:\n", ui.StripANSI(output.String()))
 }

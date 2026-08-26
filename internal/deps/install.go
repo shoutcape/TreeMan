@@ -17,6 +17,9 @@ type InstallResult struct {
 	Python bool
 	// Installer is the Installer that was run (nil if none).
 	Installer *Installer
+	// UnsupportedManifests are detected dependency manifests that TreeMan did
+	// not bootstrap.
+	UnsupportedManifests []string
 }
 
 // Install detects the package manager for the project at dir and runs the
@@ -39,19 +42,21 @@ func Install(dir string, outputs ...io.Writer) (InstallResult, error) {
 		}
 	}
 
-	installer := DetectInstaller(files)
+	filenames := filenameSet(files)
+	installer := detectInstaller(filenames)
+	unsupportedManifests := detectUnsupportedManifests(filenames)
 
 	if installer == nil {
-		if IsPythonProject(files) {
-			return InstallResult{Python: true}, nil
+		if isPythonProject(filenames) {
+			return InstallResult{Python: true, UnsupportedManifests: unsupportedManifests}, nil
 		}
-		return InstallResult{Skipped: true}, nil
+		return InstallResult{Skipped: true, UnsupportedManifests: unsupportedManifests}, nil
 	}
 
 	// Check that the binary is available.
 	if _, err := exec.LookPath(installer.Binary); err != nil {
 		// Not installed - warn but do not fail.
-		return InstallResult{Skipped: true}, fmt.Errorf(
+		return InstallResult{Skipped: true, UnsupportedManifests: unsupportedManifests}, fmt.Errorf(
 			"%s found but %s is not installed, skipping",
 			installer.Lockfile, installer.Binary,
 		)
@@ -64,10 +69,10 @@ func Install(dir string, outputs ...io.Writer) (InstallResult, error) {
 	cmd.Stderr = output
 
 	if err := cmd.Run(); err != nil {
-		return InstallResult{Installer: installer}, fmt.Errorf(
+		return InstallResult{Installer: installer, UnsupportedManifests: unsupportedManifests}, fmt.Errorf(
 			"%s %s failed: %w", installer.Binary, installer.Args, err,
 		)
 	}
 
-	return InstallResult{Installer: installer}, nil
+	return InstallResult{Installer: installer, UnsupportedManifests: unsupportedManifests}, nil
 }

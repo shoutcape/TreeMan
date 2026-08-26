@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -15,6 +16,11 @@ type creationSetupOptions struct {
 	skipDatabase bool
 	skipDeps     bool
 	skipHooks    bool
+}
+
+type setupStatus struct {
+	description string
+	warning     bool
 }
 
 func addCreationSetupFlags(cmd *cobra.Command, options *creationSetupOptions) {
@@ -40,16 +46,73 @@ func (o creationSetupOptions) printSkipped(w io.Writer, render ui.Renderer) {
 	}
 }
 
-func writeSetupStatus(w io.Writer, render ui.Renderer, name, status string) {
-	tone, symbol := setupStatusAppearance(status)
-	fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(tone, symbol), name, render.Tone(tone, render.Fit(status, 20)))
+type dependencySetupResult struct {
+	status     setupStatus
+	incomplete bool
 }
 
-func setupStatusAppearance(status string) (ui.Tone, string) {
+// setupDependencies installs supported dependencies and reports manifests that
+// require manual bootstrapping.
+func setupDependencies(w io.Writer, render ui.Renderer, worktreePath string, skip bool) dependencySetupResult {
+	result := dependencySetupResult{status: setupStatus{description: "skipped (requested)"}}
+	if skip {
+		return result
+	}
+
+	fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", "Detecting dependencies..."))
+	installResult, installErr := deps.Install(worktreePath, w)
+	result.status.description = "skipped"
 	switch {
-	case strings.Contains(status, "failed"):
+	case installErr != nil:
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
+		result.status.description = fmt.Sprintf("failed: %v", installErr)
+	case installResult.Python:
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
+		result.status.description = "skipped (Python project requires manual venv activation)"
+	case installResult.Skipped && len(installResult.UnsupportedManifests) == 0:
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
+	case installResult.Installer != nil:
+		fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
+			installResult.Installer.Lockfile,
+			installResult.Installer.Binary,
+			strings.Join(installResult.Installer.Args, " "),
+		)))
+		result.status.description = fmt.Sprintf("completed: installed with %s", installResult.Installer.Binary)
+	}
+	if len(installResult.UnsupportedManifests) > 0 {
+		manifests := strings.Join(installResult.UnsupportedManifests, ", ")
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", "Unsupported dependency manifests were not bootstrapped: "+manifests))
+		if result.status.description == "skipped" {
+			result.status.description = "not bootstrapped: " + manifests
+		} else {
+			result.status.description += "; not bootstrapped: " + manifests
+		}
+		result.status.warning = true
+		result.incomplete = true
+	}
+	return result
+}
+
+func printWorktreeReadiness(w io.Writer, render ui.Renderer, incomplete bool, subject string) {
+	if incomplete {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", subject+" setup incomplete:"))
+		return
+	}
+	fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", subject+" ready:"))
+}
+
+func writeSetupStatus(w io.Writer, render ui.Renderer, name string, status setupStatus) {
+	tone, symbol := setupStatusAppearance(status)
+	fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(tone, symbol), name, render.Tone(tone, render.Fit(status.description, 20)))
+}
+
+func setupStatusAppearance(status setupStatus) (ui.Tone, string) {
+	switch {
+	case strings.Contains(status.description, "failed"):
 		return ui.ToneFailure, "✗"
-	case strings.HasPrefix(status, "completed"):
+	case status.warning:
+		return ui.ToneWarning, "!"
+	case strings.HasPrefix(status.description, "completed"):
 		return ui.ToneSuccess, "✓"
 	default:
 		return ui.ToneMuted, "○"

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
-	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
@@ -184,24 +183,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	}
 
 	// Install dependencies.
-	if !setupOptions.skipDeps {
-		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", "Detecting dependencies..."))
-		installResult, installErr := deps.Install(worktreePath, out)
-		switch {
-		case installErr != nil:
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", installErr)))
-		case installResult.Python:
-			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Detected Python project, skipping auto-install (activate your venv manually)."))
-		case installResult.Skipped:
-			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "No known dependency file detected, skipping install."))
-		case installResult.Installer != nil:
-			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s %s...",
-				installResult.Installer.Lockfile,
-				installResult.Installer.Binary,
-				joinArgs(installResult.Installer.Args),
-			)))
-		}
-	}
+	dependencySetup := setupDependencies(out, render, worktreePath, setupOptions.skipDeps)
 
 	// Run post-create hooks (best-effort, non-fatal).
 	if !setupOptions.skipHooks {
@@ -219,7 +201,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 
 	// Print summary to stderr.
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
+	printWorktreeReadiness(out, render, dependencySetup.incomplete, "Worktree")
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	if pr, ok := prMap[branch]; ok {
 		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)

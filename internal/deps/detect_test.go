@@ -97,3 +97,10 @@ func TestIsPythonProject(t *testing.T) {
 	assert.False(t, deps.IsPythonProject([]string{"go.mod", "main.go"}))
 	assert.False(t, deps.IsPythonProject([]string{}))
 }
+
+func TestDetectUnsupportedManifests(t *testing.T) {
+	assert.Equal(t, []string{"Cargo.toml", "Cargo.lock"}, deps.DetectUnsupportedManifests([]string{
+		"Cargo.lock", "Cargo.toml", "src",
+	}))
+	assert.Empty(t, deps.DetectUnsupportedManifests([]string{"go.mod"}))
+}

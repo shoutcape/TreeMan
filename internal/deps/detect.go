@@ -27,6 +27,10 @@ var knownInstallers = []Installer{
 	{Lockfile: "go.mod", Binary: "go", Args: []string{"mod", "download"}},
 }
 
+// unsupportedManifests are known dependency manifests TreeMan does not yet
+// bootstrap automatically.
+var unsupportedManifests = []string{"Cargo.toml", "Cargo.lock"}
+
 // DetectInstaller returns the first Installer whose lockfile appears in files,
 // or nil if no known lockfile is present.
 //
@@ -35,13 +39,12 @@ var knownInstallers = []Installer{
 //
 // Priority order: pnpm > yarn > npm > go
 func DetectInstaller(files []string) *Installer {
-	set := make(map[string]struct{}, len(files))
-	for _, f := range files {
-		set[f] = struct{}{}
-	}
+	return detectInstaller(filenameSet(files))
+}
 
+func detectInstaller(files map[string]struct{}) *Installer {
 	for i := range knownInstallers {
-		if _, ok := set[knownInstallers[i].Lockfile]; ok {
+		if _, ok := files[knownInstallers[i].Lockfile]; ok {
 			result := knownInstallers[i] // copy
 			return &result
 		}
@@ -52,14 +55,38 @@ func DetectInstaller(files []string) *Installer {
 // IsPythonProject reports whether any of files indicates a Python project.
 // This is checked only when DetectInstaller returns nil.
 func IsPythonProject(files []string) bool {
-	set := make(map[string]struct{}, len(files))
-	for _, f := range files {
-		set[f] = struct{}{}
-	}
+	return isPythonProject(filenameSet(files))
+}
+
+func isPythonProject(files map[string]struct{}) bool {
 	for _, pyFile := range pythonFiles {
-		if _, ok := set[pyFile]; ok {
+		if _, ok := files[pyFile]; ok {
 			return true
 		}
 	}
 	return false
+}
+
+// DetectUnsupportedManifests returns known dependency manifests that TreeMan
+// does not bootstrap automatically.
+func DetectUnsupportedManifests(files []string) []string {
+	return detectUnsupportedManifests(filenameSet(files))
+}
+
+func detectUnsupportedManifests(files map[string]struct{}) []string {
+	var manifests []string
+	for _, manifest := range unsupportedManifests {
+		if _, ok := files[manifest]; ok {
+			manifests = append(manifests, manifest)
+		}
+	}
+	return manifests
+}
+
+func filenameSet(files []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		set[f] = struct{}{}
+	}
+	return set
 }
