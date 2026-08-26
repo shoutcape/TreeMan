@@ -29,7 +29,7 @@ func TestWriteListHuman(t *testing.T) {
 	})
 
 	assert.NotContains(t, buf.String(), "\x1b")
-	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                     \n    ───────  ──────    ──────  ───────────────────────────\n    M▶       CLEAN             main                       \n             DIRTY     YES     feature                    \n             DETACHED          (detached)                 \n", ui.StripANSI(buf.String()))
+	assert.Equal(t, "\nWORKTREES\n\n    STATUS    MERGED  BRANCH                     \n    ──────    ──────  ───────────────────────────\n    CLEAN             main                       \n    DIRTY     YES     feature                    \n    DETACHED          (detached)                 \n", ui.StripANSI(buf.String()))
 	assert.NotContains(t, buf.String(), "/repo")
 }
 

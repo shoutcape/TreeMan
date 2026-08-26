@@ -117,8 +117,8 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
 	render := outputRenderer(cmd)
 	fmt.Fprintf(out, "\n%s\n\n", render.Title("WORKTREES"))
-	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-8s  %-6s  %-27s", "MARKERS", "STATUS", "MERGED", "BRANCH")))
-	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s", "───────", "──────", "──────", "───────────────────────────")))
+	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s  %-6s  %-27s", "STATUS", "MERGED", "BRANCH")))
+	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s  %-6s  %-27s", "──────", "──────", "───────────────────────────")))
 	staleCount := 0
 	for _, entry := range entries {
 		branch := entry.Branch
@@ -126,19 +126,11 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 			branch = "(detached)"
 		}
 		status, tone := listStatus(entry)
-		markers := ""
-		if entry.Main {
-			markers = "M"
-		}
-		if entry.Current {
-			markers += "▶"
-		}
 		merged := ""
 		if entry.Merged {
 			merged = "YES"
 		}
-		fmt.Fprintf(out, "    %s %s  %-6s  %s\n",
-			render.Muted(fmt.Sprintf("%-8s", markers)),
+		fmt.Fprintf(out, "    %s  %-6s  %s\n",
 			render.Tone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
 			merged,
 			render.Branch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
