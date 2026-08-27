@@ -8,10 +8,8 @@ import (
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
-	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
-	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/shoutcape/treeman/internal/worktree"
@@ -155,52 +153,22 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 		}
 	}
 
-	// Copy .env* files.
-	if !setupOptions.skipEnv {
-		envResult, envErr := envfile.Copy(mainRoot, worktreePath)
-		if envErr != nil {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", envErr)))
-		} else if len(envResult.Copied) > 0 {
-			for _, f := range envResult.Copied {
-				fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
-			}
-			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(envResult.Copied))))
-		}
-	}
-
-	// Set up branch-specific database (best-effort, non-fatal).
-	if !setupOptions.skipDatabase {
-		setupCreatedDatabase(out, render, cfgResult.Config, worktreePath, info.Branch)
-	}
-
-	// Install dependencies.
-	if !setupOptions.skipDeps {
-		setupDependencies(out, render, worktreePath)
-	}
-	reportNestedModules(out, render, worktreePath)
-
-	// Run post-create hooks (best-effort, non-fatal).
-	if !setupOptions.skipHooks {
-		if postCreateCmds := cfgResult.Config.PostCreateHooks(); len(postCreateCmds) > 0 {
-			fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
-			for _, r := range hooks.RunPostCreate(worktreePath, postCreateCmds, out) {
-				if r.Err != nil {
-					fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
-				} else {
-					fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
-				}
-			}
-		}
-	}
+	summary := runWorktreeSetup(out, render, worktreeSetup{
+		mainRoot:      mainRoot,
+		worktreePath:  worktreePath,
+		branch:        info.Branch,
+		projectConfig: cfgResult.Config,
+		options:       setupOptions,
+	})
 
 	// Print review summary to stderr.
 	fmt.Fprintln(out, "")
+	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Review worktree ready:"))
 	fmt.Fprintf(out, "  PR/MR:  %s\n", render.PR(fmt.Sprintf("#%d", info.Number)))
 	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(info.Title, 10)))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(info.Branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
-	setupOptions.printSkipped(out, render)
 
 	// Print path to stdout for shell wrapper cd.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
