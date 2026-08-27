@@ -27,7 +27,7 @@ func TestSetupDependenciesReportsSilentCargoSuccess(t *testing.T) {
 	status := setupDependencies(&output, ui.NewRenderer(&output, terminal.Capabilities{}), project)
 	plainOutput := ui.StripANSI(output.String())
 
-	assert.Equal(t, "completed: installed with cargo", status)
+	assert.Equal(t, completedStatus("completed: installed with cargo"), status)
 	assert.Contains(t, plainOutput, "Detected Cargo.toml, running cargo fetch...")
 	assert.Contains(t, plainOutput, "Completed cargo fetch.")
 }
@@ -59,27 +59,16 @@ func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) 
 	}
 }
 
-func TestCreationSetupOptions_PrintSkipped(t *testing.T) {
-	var output bytes.Buffer
-	creationSetupOptions{skipEnv: true, skipDeps: true}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
-
-	assert.Equal(t, "  ○  Skipped: environment file copy (requested)\n  ○  Skipped: dependency installation (requested)\n", ui.StripANSI(output.String()))
-}
-
 func TestSetupStatusAppearance(t *testing.T) {
 	for _, test := range []struct {
-		status string
-		want   ui.Tone
+		kind setupStatusKind
+		want ui.Tone
 	}{
-		{status: "completed: copied 1 file", want: ui.ToneSuccess},
-		{status: "available", want: ui.ToneSuccess},
-		{status: "active", want: ui.ToneSuccess},
-		{status: envrc.ActiveInCurrentShell, want: ui.ToneSuccess},
-		{status: "unavailable", want: ui.ToneMuted},
-		{status: "skipped", want: ui.ToneMuted},
-		{status: "completed: 1 failed", want: ui.ToneFailure},
+		{kind: setupStatusCompleted, want: ui.ToneSuccess},
+		{kind: setupStatusSkipped, want: ui.ToneMuted},
+		{kind: setupStatusFailed, want: ui.ToneFailure},
 	} {
-		tone, _ := setupStatusAppearance(test.status)
+		tone, _ := setupStatusAppearance(test.kind)
 		assert.Equal(t, test.want, tone)
 	}
 }
@@ -87,14 +76,14 @@ func TestSetupStatusAppearance(t *testing.T) {
 func TestPrintSetupSummary_ReportsEnvrcToolStatus(t *testing.T) {
 	var output bytes.Buffer
 	printSetupSummary(&output, ui.NewRenderer(&output, terminal.Capabilities{}), setupSummary{
-		environment: "completed: copied 1 file(s)",
+		environment: completedStatus("completed: copied 1 file(s)"),
 		environmentTools: []envrc.ToolStatus{
 			{Name: "direnv", Status: envrc.Available},
 			{Name: "Nix", Status: envrc.ActiveInCurrentShell},
 		},
-		dependencies: "skipped",
-		database:     "completed",
-		hooks:        "skipped",
+		dependencies: skippedStatus("skipped"),
+		database:     completedStatus("completed"),
+		hooks:        skippedStatus("skipped"),
 	})
 
 	text := ui.StripANSI(output.String())
@@ -119,18 +108,11 @@ func TestRunWorktreeSetup_ReportsSourceEnvrcWhenCopySkipped(t *testing.T) {
 		},
 	})
 
-	assert.Equal(t, "skipped (requested)", summary.environment)
+	assert.Equal(t, skippedStatus("skipped (requested)"), summary.environment)
 	assert.Equal(t, []string{"direnv", "Nix"}, []string{
 		summary.environmentTools[0].Name,
 		summary.environmentTools[1].Name,
 	})
-}
-
-func TestCreationSetupOptions_DoesNotPrintUnrequestedSkips(t *testing.T) {
-	var output bytes.Buffer
-	creationSetupOptions{}.printSkipped(&output, ui.NewRenderer(&output, terminal.Capabilities{}))
-
-	assert.Empty(t, output.String())
 }
 
 func TestReportNestedModules(t *testing.T) {

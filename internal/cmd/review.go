@@ -169,7 +169,6 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(info.Title, 10)))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(info.Branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
-	setupOptions.printSkipped(out, render)
 
 	// Print path to stdout for shell wrapper cd.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)

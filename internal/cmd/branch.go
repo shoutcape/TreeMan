@@ -179,7 +179,6 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
-	setupOptions.printSkipped(out, render)
 
 	// Print path to stdout so the shell wrapper can cd into it.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)

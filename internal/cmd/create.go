@@ -115,7 +115,6 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
-	setupOptions.printSkipped(out, render)
 
 	// Print path to stdout so the shell wrapper can cd into it.
 	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)

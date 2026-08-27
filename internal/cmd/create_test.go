@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/hooks"
@@ -18,10 +19,10 @@ func TestPrintSetupSummary(t *testing.T) {
 	var output bytes.Buffer
 
 	printSetupSummary(&output, ui.NewRenderer(&output, terminal.Capabilities{}), setupSummary{
-		environment:  "completed: copied 2 file(s)",
-		dependencies: "skipped",
-		database:     "failed: Docker is unavailable",
-		hooks:        "completed: 1 succeeded, 1 failed: \"make seed\": exit status 1",
+		environment:  completedStatus("completed: copied 2 file(s)"),
+		dependencies: skippedStatus("skipped"),
+		database:     failedStatus("failed: Docker is unavailable"),
+		hooks:        failedStatus("completed: 1 succeeded, 1 failed: \"make seed\": exit status 1"),
 	})
 
 	assert.Equal(t, "SETUP\n"+
@@ -37,27 +38,45 @@ func TestSummarizeHooks(t *testing.T) {
 		{Command: "make seed", Err: errors.New("exit status 1")},
 	})
 
-	assert.Equal(t, "completed: 1 succeeded, 1 failed: \"make seed\": exit status 1", status)
+	assert.Equal(t, failedStatus("completed: 1 succeeded, 1 failed: \"make seed\": exit status 1"), status)
 }
 
 func TestSummarizeHooks_AllSucceed(t *testing.T) {
 	status := summarizeHooks([]hooks.RunResult{{Command: "make build"}})
 
-	assert.Equal(t, "completed: 1 succeeded", status)
+	assert.Equal(t, completedStatus("completed: 1 succeeded"), status)
 }
 
 func TestPrintSetupSummary_DatabaseSkippedIncludesConfigurationLink(t *testing.T) {
 	var output bytes.Buffer
 
 	printSetupSummary(&output, ui.NewRenderer(&output, terminal.Capabilities{}), setupSummary{
-		environment:  "skipped (no environment files found)",
-		dependencies: "skipped",
-		database:     "skipped (database management not configured)",
-		hooks:        "skipped (no post-create hooks configured)",
-		databaseDocs: true,
+		environment:  skippedStatus("skipped (no environment files found)"),
+		dependencies: skippedStatus("skipped"),
+		database: setupStatus{
+			text:    "Not configured. Configure database",
+			kind:    setupStatusSkipped,
+			linkURL: databaseDocsURL,
+		},
+		hooks: skippedStatus("skipped (no post-create hooks configured)"),
 	})
 
 	assert.Contains(t, ui.StripANSI(output.String()), "  ○  Database       Not configured. Configure database\n")
+}
+
+func TestPrintSetupSummary_DatabaseRequestedSkipDoesNotIncludeConfigurationLink(t *testing.T) {
+	var output bytes.Buffer
+
+	printSetupSummary(&output, ui.NewRenderer(&output, terminal.Capabilities{}), setupSummary{
+		environment:  skippedStatus("skipped (requested)"),
+		dependencies: skippedStatus("skipped (requested)"),
+		database:     skippedStatus("skipped (requested)"),
+		hooks:        skippedStatus("skipped (requested)"),
+	})
+
+	text := ui.StripANSI(output.String())
+	assert.Contains(t, text, "  ○  Database       skipped (requested)\n")
+	assert.NotContains(t, text, "Configure database")
 }
 
 func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {
@@ -86,4 +105,6 @@ func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {
 	assert.Contains(t, stderr.String(), "Worktree ready:")
 	assert.Contains(t, stderr.String(), "Nested module apps/web (package-lock.json): skipped; not installed automatically.")
 	assert.NotContains(t, stderr.String(), "npm is not installed")
+	assert.Equal(t, 3, strings.Count(stderr.String(), "skipped (requested)"))
+	assert.NotContains(t, stderr.String(), "Skipped:")
 }
