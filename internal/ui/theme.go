@@ -57,7 +57,7 @@ const (
 var currentTheme = "forest"
 
 type themeStyles struct {
-	title, header, muted, branch, path, link, pr, info, success, warning, failure lipgloss.Style
+	title, header, muted, branch, marker, path, link, pr, info, success, warning, failure lipgloss.Style
 }
 
 // ThemeNames returns the supported canonical theme names.
@@ -138,6 +138,7 @@ func newThemeStylesFor(r *lipgloss.Renderer, p Palette) themeStyles {
 		header:  r.NewStyle().Bold(true).Foreground(lipgloss.Color(p.Foreground)),
 		muted:   r.NewStyle().Foreground(lipgloss.Color(p.Muted)),
 		branch:  r.NewStyle().Foreground(lipgloss.Color(p.Branch)),
+		marker:  r.NewStyle().Foreground(lipgloss.Color("#FFFFFF")),
 		path:    r.NewStyle().Foreground(lipgloss.Color(p.Path)),
 		link:    r.NewStyle().Foreground(lipgloss.Color(p.Title)).Underline(true),
 		pr:      r.NewStyle().Foreground(lipgloss.Color(p.PR)),
@@ -171,6 +172,7 @@ func (r Renderer) Title(value string) string  { return r.styles.title.Render(val
 func (r Renderer) Header(value string) string { return r.styles.header.Render(value) }
 func (r Renderer) Muted(value string) string  { return r.styles.muted.Render(value) }
 func (r Renderer) Branch(value string) string { return r.styles.branch.Render(value) }
+func (r Renderer) Marker(value string) string { return r.styles.marker.Render(value) }
 func (r Renderer) Path(value string) string   { return r.styles.path.Render(value) }
 func (r Renderer) PR(value string) string     { return r.styles.pr.Render(value) }
 

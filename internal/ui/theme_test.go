@@ -17,6 +17,7 @@ func TestThemeRenderersPreserveText(t *testing.T) {
 		want     string
 	}{
 		{name: "branch", rendered: renderer.Branch("feature/forest"), want: "feature/forest"},
+		{name: "marker", rendered: renderer.Marker("→"), want: "→"},
 		{name: "path", rendered: renderer.Path("/repo/.worktrees/forest"), want: "/repo/.worktrees/forest"},
 		{name: "pr", rendered: renderer.PR("#42"), want: "#42"},
 		{name: "success", rendered: renderer.Tone(ToneSuccess, "CLEAN"), want: "CLEAN"},

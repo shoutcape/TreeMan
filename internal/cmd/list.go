@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
@@ -117,23 +118,28 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
 	render := outputRenderer(cmd)
 	fmt.Fprintf(out, "\n%s\n\n", render.Title("WORKTREES"))
-	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s  %-6s  %-27s", "STATUS", "MERGED", "BRANCH")))
-	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s  %-6s  %-27s", "──────", "──────", "───────────────────────────")))
+	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-1s %-8s  %-6s  %-27s", "", "STATUS", "MERGED", "BRANCH")))
+	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-1s %-8s  %-6s  %-27s", "", "──────", "──────", "───────────────────────────")))
 	staleCount := 0
 	for _, entry := range entries {
-		branch := entry.Branch
-		if entry.Detached {
-			branch = "(detached)"
-		}
 		status, tone := listStatus(entry)
+		marker := ""
+		if entry.Current {
+			marker = "→"
+		}
 		merged := ""
 		if entry.Merged {
 			merged = "YES"
 		}
-		fmt.Fprintf(out, "    %s  %-6s  %s\n",
-			render.Tone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
+		markerCell := " "
+		if marker != "" {
+			markerCell = render.Marker(marker)
+		}
+		fmt.Fprintf(out, "    %s %s  %-6s  %s\n",
+			markerCell,
+			render.Tone(tone, fmt.Sprintf("%-8s", status)),
 			merged,
-			render.Branch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
+			formatListBranch(render, entry),
 		)
 		if entry.Stale {
 			staleCount++
@@ -142,6 +148,20 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	if staleCount > 0 {
 		fmt.Fprintf(out, "\n%s\n", render.Muted(fmt.Sprintf("  %d stale worktree(s) -- directory missing or not a directory. Run: git worktree prune", staleCount)))
 	}
+}
+
+func formatListBranch(render ui.Renderer, entry listEntry) string {
+	const branchWidth = 27
+
+	branch := entry.Branch
+	if entry.Detached {
+		branch = "(detached)"
+	}
+	if entry.Current {
+		padding := branchWidth - len([]rune(branch)) - 2
+		return render.Branch(branch+" ") + render.Marker("←") + render.Branch(strings.Repeat(" ", max(0, padding)))
+	}
+	return render.Branch(fmt.Sprintf("%-*s", branchWidth, branch))
 }
 
 func listStatus(entry listEntry) (string, ui.Tone) {
