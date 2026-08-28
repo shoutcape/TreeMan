@@ -18,6 +18,7 @@ Shell integration uses stdout destinations to change the current interactive she
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman shell` | None | Install and manage shell integration |
 | `treeman doctor` | None | Check repository readiness and configuration |
+| `treeman preflight` | None | Report setup compatibility before creation |
 | `treeman theme` | None | Select a terminal color theme |
 | `treeman version` | None | Print build data |
 
@@ -34,6 +35,14 @@ The command fails when the branch or target directory exists. It creates `.workt
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
 Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.
+
+## `preflight`
+
+```text
+treeman preflight
+```
+
+Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
 
 ## `branch`
 

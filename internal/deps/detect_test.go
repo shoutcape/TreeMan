@@ -2,6 +2,7 @@ package deps_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -109,6 +110,9 @@ func TestIsPythonProject(t *testing.T) {
 
 func TestDiscoverNestedModules(t *testing.T) {
 	dir := t.TempDir()
+	output, err := exec.Command("git", "init", "--initial-branch=main", dir).CombinedOutput()
+	require.NoErrorf(t, err, "git init: %s", output)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("generated/\n"), 0o644))
 	for _, path := range []string{
 		"go.mod",
 		"apps/web/pnpm-lock.yaml",
@@ -117,7 +121,9 @@ func TestDiscoverNestedModules(t *testing.T) {
 		"node_modules/ignored/package-lock.json",
 		".git/ignored/go.mod",
 		".worktrees/ignored/go.mod",
+		".opencode/cache/go.mod",
 		"vendor/ignored/go.mod",
+		"generated/ignored/go.mod",
 		".venv/ignored/pyproject.toml",
 	} {
 		fullPath := filepath.Join(dir, path)
@@ -129,6 +135,7 @@ func TestDiscoverNestedModules(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []deps.Module{
+		{Path: ".opencode/cache", Manifest: "go.mod"},
 		{Path: "apps/web", Manifest: "pnpm-lock.yaml"},
 		{Path: "packages/api", Manifest: "go.mod"},
 		{Path: "tools/script", Manifest: "pyproject.toml"},

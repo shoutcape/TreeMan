@@ -22,20 +22,15 @@ func SetupBranchDB(worktreePath, branch, envKey, configuredContainer string) (Se
 }
 
 func setupBranchDB(backend Backend, worktreePath, branch, envKey, configuredContainer string) (SetupResult, error) {
-	if envKey == "" {
+	targetInput, err := loadSetupTarget(worktreePath, envKey)
+	if err != nil {
+		return SetupResult{}, err
+	}
+	if targetInput.skipped {
 		return SetupResult{Skipped: true}, nil
 	}
-	uri, err := ReadEnvValue(worktreePath, envKey)
-	if err != nil {
-		return SetupResult{}, fmt.Errorf("reading %s: %w", envKey, err)
-	}
-	if uri == "" || !isPostgresURI(uri) {
-		return SetupResult{Skipped: true}, nil
-	}
-	parsed, err := ParseURI(uri)
-	if err != nil {
-		return SetupResult{}, fmt.Errorf("parsing %s: %w", envKey, err)
-	}
+	uri := targetInput.uri
+	parsed := targetInput.parsed
 	store, worktreeID, err := databaseStoreForWorktree(worktreePath)
 	if err != nil {
 		return SetupResult{}, err
@@ -52,9 +47,9 @@ func setupBranchDB(backend Backend, worktreePath, branch, envKey, configuredCont
 		return SetupResult{}, fmt.Errorf("listing PostgreSQL containers: %w", err)
 	}
 	if record == nil {
-		target, err := resolver.Resolve(parsed.Host, parsed.Port, configuredContainer)
+		target, err := resolveTarget(resolver, parsed, configuredContainer)
 		if err != nil {
-			return SetupResult{}, fmt.Errorf("finding postgres container: %w", err)
+			return SetupResult{}, err
 		}
 		candidate := &DatabaseRecord{WorktreeID: worktreeID, WorktreePath: worktreePath, Branch: branch, Database: BranchDBNameForRepository(parsed.Database, branch, store.repoID), Container: configuredContainer, ContainerID: target.ID, Host: parsed.Host, Port: parsed.Port, User: parsed.User, Status: databaseStatusSetupPending}
 		record, err = store.beginSetup(candidate)

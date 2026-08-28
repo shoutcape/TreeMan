@@ -48,7 +48,7 @@ func Detect(dir string) (Detection, error) {
 // non-fatal operation: callers should report errors without aborting setup.
 func Run(dir string, installer *Installer, output io.Writer) error {
 	// Check that the binary is available.
-	if _, err := exec.LookPath(installer.Binary); err != nil {
+	if err := InstallerAvailable(installer); err != nil {
 		// Not installed - warn but do not fail.
 		return fmt.Errorf(
 			"%s found but %s is not installed, skipping",
@@ -69,4 +69,10 @@ func Run(dir string, installer *Installer, output io.Writer) error {
 	}
 
 	return nil
+}
+
+// InstallerAvailable reports whether the detected installer can be run.
+func InstallerAvailable(installer *Installer) error {
+	_, err := exec.LookPath(installer.Binary)
+	return err
 }

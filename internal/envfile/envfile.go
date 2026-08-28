@@ -19,21 +19,13 @@ type CopyResult struct {
 // It silently skips if no .env* files exist.
 // Returns the filenames that were copied and any error encountered.
 func Copy(src, dest string) (CopyResult, error) {
-	entries, err := os.ReadDir(src)
+	files, err := Files(src)
 	if err != nil {
-		return CopyResult{}, fmt.Errorf("envfile: reading source directory: %w", err)
+		return CopyResult{}, err
 	}
 
 	var result CopyResult
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, ".env") {
-			continue
-		}
-
+	for _, name := range files {
 		srcPath := filepath.Join(src, name)
 		destPath := filepath.Join(dest, name)
 
@@ -43,6 +35,22 @@ func Copy(src, dest string) (CopyResult, error) {
 		result.Copied = append(result.Copied, name)
 	}
 	return result, nil
+}
+
+// Files returns the names of all .env* files directly in dir.
+func Files(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("envfile: reading source directory: %w", err)
+	}
+
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".env") {
+			files = append(files, entry.Name())
+		}
+	}
+	return files, nil
 }
 
 // copyFile copies a single file from src to dst, preserving permissions.
