@@ -29,8 +29,24 @@ func TestWriteListHuman(t *testing.T) {
 	})
 
 	assert.NotContains(t, buf.String(), "\x1b")
-	assert.Equal(t, "\nWORKTREES\n\n    MARKERS  STATUS    MERGED  BRANCH                     \n    ───────  ──────    ──────  ───────────────────────────\n    M▶       CLEAN             main                       \n             DIRTY     YES     feature                    \n             DETACHED          (detached)                 \n", ui.StripANSI(buf.String()))
+	output := ui.StripANSI(buf.String())
+	assert.Equal(t, "\nWORKTREES\n\n      STATUS    MERGED  BRANCH                     \n      ──────    ──────  ───────────────────────────\n    → CLEAN             main ←                     \n      DIRTY     YES     feature                    \n      DETACHED          (detached)                 \n", output)
+	assert.NotContains(t, output, "Default branch:")
 	assert.NotContains(t, buf.String(), "/repo")
+}
+
+func TestWriteListHumanMarksCurrentBranchWithArrows(t *testing.T) {
+	buf := &bytes.Buffer{}
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	const branch = "012345678901234567890123456789"
+	writeListHuman(cmd, []listEntry{{Branch: branch, Current: true}})
+
+	output := ui.StripANSI(buf.String())
+	assert.Contains(t, output, "→ CLEAN")
+	assert.Contains(t, output, branch+" ←")
+	assert.NotContains(t, output, "[current]")
 }
 
 func TestWriteListHumanShowsStaleWorktrees(t *testing.T) {
