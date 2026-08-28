@@ -117,7 +117,9 @@ func TestDiscoverNestedModules(t *testing.T) {
 		"node_modules/ignored/package-lock.json",
 		".git/ignored/go.mod",
 		".worktrees/ignored/go.mod",
+		".opencode/cache/go.mod",
 		"vendor/ignored/go.mod",
+		"generated/ignored/go.mod",
 		".venv/ignored/pyproject.toml",
 	} {
 		fullPath := filepath.Join(dir, path)
@@ -125,7 +127,9 @@ func TestDiscoverNestedModules(t *testing.T) {
 		require.NoError(t, os.WriteFile(fullPath, []byte(""), 0644))
 	}
 
-	modules, err := deps.DiscoverNestedModules(dir)
+	modules, err := deps.DiscoverNestedModules(dir, map[string]struct{}{
+		filepath.Join(dir, "generated"): {},
+	})
 
 	require.NoError(t, err)
 	assert.Equal(t, []deps.Module{

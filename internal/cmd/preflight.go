@@ -2,12 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/deps"
+	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
@@ -47,53 +46,69 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(mainRoot)
-	if err != nil {
-		return fmt.Errorf("reading repository root: %w", err)
-	}
-
-	files := make([]string, 0, len(entries))
-	envCount := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		files = append(files, entry.Name())
-		if strings.HasPrefix(entry.Name(), ".env") {
-			envCount++
-		}
-	}
-
 	configResult := config.Load(mainRoot)
 	statuses := []preflightStatus{
-		preflightEnvironmentStatus(envCount),
-		preflightDependenciesStatus(files),
+		preflightEnvironmentStatus(mainRoot),
+	}
+	statuses = append(statuses, preflightDependenciesStatuses(mainRoot)...)
+	if status := preflightConfigurationStatus(configResult); status != nil {
+		statuses = append(statuses, *status)
+	}
+	statuses = append(statuses,
 		preflightDatabaseStatus(mainRoot, configResult),
 		preflightHooksStatus(configResult),
-	}
+	)
 	writePreflight(cmd.ErrOrStderr(), commandRenderer(cmd), statuses)
 	return nil
 }
 
-func preflightEnvironmentStatus(count int) preflightStatus {
-	if count == 0 {
+func preflightEnvironmentStatus(dir string) preflightStatus {
+	files, err := envfile.Files(dir)
+	if err != nil {
+		return preflightStatus{name: "Environment", message: fmt.Sprintf("unavailable: could not read .env* files: %v", err), tone: ui.ToneFailure, symbol: "✗"}
+	}
+	if len(files) == 0 {
 		return preflightStatus{name: "Environment", message: "not configured: no .env* files found", tone: ui.ToneMuted, symbol: "○"}
 	}
-	return preflightStatus{name: "Environment", message: fmt.Sprintf("ready: %d .env file(s) will be copied", count), tone: ui.ToneSuccess, symbol: "✓"}
+	return preflightStatus{name: "Environment", message: fmt.Sprintf("ready: %d .env file(s) will be copied", len(files)), tone: ui.ToneSuccess, symbol: "✓"}
 }
 
-func preflightDependenciesStatus(files []string) preflightStatus {
-	installer := deps.DetectInstaller(files)
-	if installer == nil {
-		if deps.IsPythonProject(files) {
+func preflightDependenciesStatuses(dir string) []preflightStatus {
+	detection, err := deps.Detect(dir)
+	if err != nil {
+		return []preflightStatus{{name: "Dependencies", message: fmt.Sprintf("unavailable: %v", err), tone: ui.ToneFailure, symbol: "✗"}}
+	}
+
+	statuses := []preflightStatus{preflightDependenciesStatus(detection)}
+	modules, err := discoverNestedModules(dir)
+	if err != nil {
+		return append(statuses, preflightStatus{name: "Nested modules", message: fmt.Sprintf("unavailable: %v", err), tone: ui.ToneFailure, symbol: "✗"})
+	}
+	for _, module := range modules {
+		statuses = append(statuses, preflightStatus{name: "Nested module", message: fmt.Sprintf("%s (%s): skipped; not installed automatically.", module.Path, module.Manifest), tone: ui.ToneMuted, symbol: "○"})
+	}
+	return statuses
+}
+
+func preflightDependenciesStatus(detection deps.Detection) preflightStatus {
+	if detection.Installer == nil {
+		if detection.Python {
 			return preflightStatus{name: "Dependencies", message: "manual setup: Python virtualenv activation required", tone: ui.ToneMuted, symbol: "○"}
 		}
-		return preflightStatus{name: "Dependencies", message: "not configured: no known dependency file found", tone: ui.ToneMuted, symbol: "○"}
+		return preflightStatus{name: "Dependencies", message: "not configured at repository root", tone: ui.ToneMuted, symbol: "○"}
 	}
+	installer := detection.Installer
 	if _, err := lookPath(installer.Binary); err != nil {
 		return preflightStatus{name: "Dependencies", message: fmt.Sprintf("limited: %s detected but %s is not installed", installer.Lockfile, installer.Binary), tone: ui.ToneWarning, symbol: "!"}
 	}
 	return preflightStatus{name: "Dependencies", message: fmt.Sprintf("ready: %s detected; will run %s %s", installer.Lockfile, installer.Binary, joinArgs(installer.Args)), tone: ui.ToneSuccess, symbol: "✓"}
+}
+
+func preflightConfigurationStatus(result config.LoadResult) *preflightStatus {
+	if result.Path != "" || result.Warning != "" {
+		return nil
+	}
+	return &preflightStatus{name: "Configuration", message: "not configured: .treeman.toml not found", tone: ui.ToneMuted, symbol: "○"}
 }
 
 func preflightDatabaseStatus(mainRoot string, result config.LoadResult) preflightStatus {

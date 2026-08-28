@@ -42,7 +42,7 @@ Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists r
 treeman preflight
 ```
 
-Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks.
+Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
 
 ## `branch`
 

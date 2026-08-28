@@ -59,6 +59,20 @@ func TestParseWorktreePorcelain_Empty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestIgnoredPathsIncludesIgnoredFilesAndDirectories(t *testing.T) {
+	repo := createGitTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("generated/\nprivate.lock\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "generated", "module"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "generated", "module", "go.mod"), []byte("module example.com/generated\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "private.lock"), nil, 0o644))
+
+	paths, err := IgnoredPaths(repo)
+
+	require.NoError(t, err)
+	assert.Contains(t, paths, filepath.Join(repo, "generated"))
+	assert.Contains(t, paths, filepath.Join(repo, "private.lock"))
+}
+
 func TestInspectWorktreeClassifiesFilesystemStates(t *testing.T) {
 	dir := createGitTestRepo(t)
 	file := filepath.Join(t.TempDir(), "worktree")

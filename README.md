@@ -63,7 +63,7 @@ Shell integration changes the current shell directory to the new worktree. Setup
 
 Dependency setup checks only files in the worktree root. TreeMan does not recursively install dependencies for nested modules and does not run project tests automatically. This avoids unexpected commands in subdirectories. Use a trusted `hooks.post_create` command when a nested module needs installation or tests.
 
-Run `treeman preflight` first to report environment, dependency, database, and hook setup compatibility without creating a worktree.
+Run `treeman preflight` first to report environment, dependency, database, and hook setup compatibility without creating a worktree. It reports nested modules as skipped so monorepo setup can be added explicitly through trusted hooks.
 
 ### Use Remote Branches
 

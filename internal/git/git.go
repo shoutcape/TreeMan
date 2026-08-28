@@ -56,6 +56,24 @@ func runInDir(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// IgnoredPaths returns absolute paths ignored by Git in dir. Directory entries
+// represent an ignored subtree when Git can collapse it to one path.
+func IgnoredPaths(dir string) (map[string]struct{}, error) {
+	output, err := runInDir(dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("could not list ignored paths: %w", err)
+	}
+
+	paths := make(map[string]struct{})
+	for _, path := range strings.Split(output, "\x00") {
+		if path == "" {
+			continue
+		}
+		paths[filepath.Clean(filepath.Join(dir, filepath.FromSlash(path)))] = struct{}{}
+	}
+	return paths, nil
+}
+
 // IsInsideRepo reports whether the current working directory is inside a git
 // repository.
 func IsInsideRepo() bool {

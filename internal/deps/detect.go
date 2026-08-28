@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Installer describes a detected package manager and the command to run.
@@ -117,8 +118,8 @@ func isSupportedManifest(name string) bool {
 
 // DiscoverNestedModules finds supported package modules below dir. Paths are
 // relative to dir so callers can report locations without exposing the full
-// worktree path.
-func DiscoverNestedModules(dir string) ([]Module, error) {
+// worktree path. ignoredPaths contains absolute paths ignored by Git.
+func DiscoverNestedModules(dir string, ignoredPaths map[string]struct{}) ([]Module, error) {
 	manifestsByDir := make(map[string]map[string]struct{})
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -126,10 +127,16 @@ func DiscoverNestedModules(dir string) ([]Module, error) {
 		}
 		if entry.IsDir() {
 			if path != dir {
+				if _, ignored := ignoredPaths[path]; ignored || strings.HasPrefix(entry.Name(), ".") {
+					return filepath.SkipDir
+				}
 				if _, ignored := ignoredModuleDirs[entry.Name()]; ignored {
 					return filepath.SkipDir
 				}
 			}
+			return nil
+		}
+		if _, ignored := ignoredPaths[path]; ignored {
 			return nil
 		}
 
