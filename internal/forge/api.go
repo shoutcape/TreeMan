@@ -174,7 +174,52 @@ func githubMergedHead(repoSlug, defaultBranch, branch, sha string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	return parseGithubMergedHead(out, defaultBranch, branch, sha)
+	merged, err := parseGithubMergedHead(out, defaultBranch, branch, sha)
+	if err != nil || merged {
+		return merged, err
+	}
+	// SHA-based lookup found no merged PR. This happens when the local branch
+	// has commits added after the PR was merged (the local tip differs from the
+	// SHA GitHub recorded at merge time). Fall back to a branch-name search.
+	return githubMergedBranch(repoSlug, defaultBranch, branch)
+}
+
+// githubMergedBranch checks whether any closed PR from branch into
+// defaultBranch was merged, without requiring a SHA match. It is used as a
+// fallback when the local branch tip has drifted from the merge-time SHA.
+func githubMergedBranch(repoSlug, defaultBranch, branch string) (bool, error) {
+	owner, _, ok := strings.Cut(repoSlug, "/")
+	if !ok {
+		return false, fmt.Errorf("gh: invalid repository slug %q", repoSlug)
+	}
+	endpoint := fmt.Sprintf("repos/%s/pulls?state=closed&head=%s:%s&base=%s&per_page=100",
+		repoSlug, url.QueryEscape(owner), url.QueryEscape(branch), url.QueryEscape(defaultBranch))
+	out, err := githubAPICall(endpoint)
+	if err != nil {
+		return false, err
+	}
+	return parseGithubMergedBranch(out, defaultBranch, branch)
+}
+
+func parseGithubMergedBranch(data []byte, defaultBranch, branch string) (bool, error) {
+	prs, err := decodePaginated[struct {
+		MergedAt *time.Time `json:"merged_at"`
+		Head     struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+	}](data)
+	if err != nil {
+		return false, fmt.Errorf("gh: parsing closed PR list: %w", err)
+	}
+	for _, pr := range prs {
+		if pr.MergedAt != nil && pr.Base.Ref == defaultBranch && pr.Head.Ref == branch {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func parseGithubMergedHead(data []byte, defaultBranch, branch, sha string) (bool, error) {

@@ -33,7 +33,19 @@ func TestParseGitHubEvidenceExactMatching(t *testing.T) {
 	payload := []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"ref2":null,"commit0":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":"merged111"}],"pageInfo":{"hasNextPage":false}}},"commit1":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"reused","headRefOid":"old111"},{"merged":true,"baseRefName":"other","headRefName":"reused","headRefOid":"new222"},{"merged":false,"baseRefName":"main","headRefName":"reused","headRefOid":"new222"}],"pageInfo":{"hasNextPage":false}}}}}}`)
 	snapshot, err := parseGitHubCompleteSnapshot(payload, "main", plan)
 	require.NoError(t, err)
-	assert.Equal(t, []SnapshotBranch{{Candidate: candidates[0], Verification: SnapshotMerged}, {Candidate: candidates[1], Verification: SnapshotNotMerged}}, snapshot.Branches)
+	assert.Equal(t, []SnapshotBranch{{Candidate: candidates[0], Verification: SnapshotMerged}, {Candidate: candidates[1], Verification: SnapshotNeedsFallback}}, snapshot.Branches)
+}
+
+// TestParseGitHubEvidenceNotMergedIntoDefault verifies that a PR merged into
+// a non-default base is not treated as merged.
+func TestParseGitHubEvidenceNotMergedIntoDefault(t *testing.T) {
+	candidates := []SnapshotCandidate{{Branch: "feature", SHA: "aaa111"}}
+	plan := newGitHubCompleteSnapshotPlan(candidates)
+	// Merged PR only targets "other", not "main".
+	payload := []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"commit0":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"other","headRefName":"feature","headRefOid":"aaa111"}],"pageInfo":{"hasNextPage":false}}}}}}`)
+	snapshot, err := parseGitHubCompleteSnapshot(payload, "main", plan)
+	require.NoError(t, err)
+	assert.Equal(t, []SnapshotBranch{{Candidate: candidates[0], Verification: SnapshotNotMerged}}, snapshot.Branches)
 }
 
 func TestParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {

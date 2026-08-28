@@ -58,22 +58,6 @@ func apiGitHubCompleteSnapshot(t *testing.T) {
 	}}, snapshot.Branches)
 }
 
-func apiParseGitHubEvidenceExactMatching(t *testing.T) {
-	candidates := []SnapshotCandidate{
-		{Branch: "feature", SHA: "merged111"},
-		{Branch: "reused", SHA: "new222"},
-	}
-	plan := newGitHubCompleteSnapshotPlan(candidates)
-	payload := []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"ref2":null,"commit0":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":"merged111"}],"pageInfo":{"hasNextPage":false}}},"commit1":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"reused","headRefOid":"old111"},{"merged":true,"baseRefName":"other","headRefName":"reused","headRefOid":"new222"},{"merged":false,"baseRefName":"main","headRefName":"reused","headRefOid":"new222"}],"pageInfo":{"hasNextPage":false}}}}}}`)
-
-	snapshot, err := parseGitHubCompleteSnapshot(payload, "main", plan)
-	require.NoError(t, err)
-	assert.Equal(t, []SnapshotBranch{
-		{Candidate: candidates[0], Verification: SnapshotMerged},
-		{Candidate: candidates[1], Verification: SnapshotNotMerged},
-	}, snapshot.Branches)
-}
-
 func apiParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {
 	candidates := []SnapshotCandidate{
 		{Branch: "missing", SHA: "aaa111"},
@@ -366,16 +350,100 @@ func TestPaginatedLists(t *testing.T) {
 }
 
 func TestMergedPRHeadGitHub(t *testing.T) {
-	previousAPI := githubAPICall
-	githubAPICall = func(endpoint string) ([]byte, error) {
-		assert.Equal(t, "repos/owner/repo/commits/aaa111/pulls?per_page=100", endpoint)
-		return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"aaa111"}}]`), nil
-	}
-	t.Cleanup(func() { githubAPICall = previousAPI })
+	t.Run("sha match", func(t *testing.T) {
+		previousAPI := githubAPICall
+		calls := 0
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			calls++
+			assert.Equal(t, "repos/owner/repo/commits/aaa111/pulls?per_page=100", endpoint)
+			return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"aaa111"}}]`), nil
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
 
-	merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		require.NoError(t, err)
+		assert.True(t, merged)
+		assert.Equal(t, 1, calls, "should not fall back when SHA matches")
+	})
+
+	t.Run("sha mismatch falls back to branch search", func(t *testing.T) {
+		previousAPI := githubAPICall
+		calls := []string{}
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			calls = append(calls, endpoint)
+			if len(calls) == 1 {
+				// SHA lookup -- PR exists but with a different head SHA (post-merge local commits)
+				return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"old111"}}]`), nil
+			}
+			// Branch-name fallback
+			assert.Equal(t, "repos/owner/repo/pulls?state=closed&head=owner:feature%2Fx&base=main&per_page=100", endpoint)
+			return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x"}}]`), nil
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
+
+		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		require.NoError(t, err)
+		assert.True(t, merged)
+		assert.Equal(t, 2, len(calls), "should fall back to branch search")
+	})
+
+	t.Run("no merged PR found", func(t *testing.T) {
+		previousAPI := githubAPICall
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			return []byte(`[]`), nil
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
+
+		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		require.NoError(t, err)
+		assert.False(t, merged)
+	})
+
+	t.Run("sha lookup error does not fall back", func(t *testing.T) {
+		previousAPI := githubAPICall
+		calls := 0
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			calls++
+			return nil, assert.AnError
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
+
+		_, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		assert.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, 1, calls, "should not fall back on error")
+	})
+}
+
+func TestParseGithubMergedBranch(t *testing.T) {
+	payload := []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x"}}]`)
+	merged, err := parseGithubMergedBranch(payload, "main", "feature/x")
 	require.NoError(t, err)
 	assert.True(t, merged)
+
+	// Not merged (closed without merge)
+	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":null,"base":{"ref":"main"},"head":{"ref":"feature/x"}}]`), "main", "feature/x")
+	require.NoError(t, err)
+	assert.False(t, merged)
+
+	// Wrong base
+	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"other"},"head":{"ref":"feature/x"}}]`), "main", "feature/x")
+	require.NoError(t, err)
+	assert.False(t, merged)
+
+	// Wrong branch
+	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"other"}}]`), "main", "feature/x")
+	require.NoError(t, err)
+	assert.False(t, merged)
+
+	// Paginated
+	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":null,"base":{"ref":"main"},"head":{"ref":"feature/x"}}][{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x"}}]`), "main", "feature/x")
+	require.NoError(t, err)
+	assert.True(t, merged)
+
+	for _, payload := range [][]byte{[]byte(``), []byte(`null`), []byte(`{}`)} {
+		_, err = parseGithubMergedBranch(payload, "main", "feature/x")
+		assert.Error(t, err)
+	}
 }
 
 func TestMergedPRHeadGitLab(t *testing.T) {

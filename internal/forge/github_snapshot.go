@@ -292,8 +292,16 @@ func parseGitHubSnapshotCommit(data json.RawMessage, defaultBranch string, candi
 		if pr.Merged && (pr.BaseRefName == nil || pr.HeadRefName == nil || pr.HeadRefOID == nil) {
 			return false, false, nil
 		}
-		if pr.Merged && *pr.BaseRefName == defaultBranch && *pr.HeadRefName == candidate.Branch && *pr.HeadRefOID == candidate.SHA {
-			merged = true
+		if pr.Merged && *pr.BaseRefName == defaultBranch && *pr.HeadRefName == candidate.Branch {
+			if *pr.HeadRefOID == candidate.SHA {
+				merged = true
+			} else {
+				// A merged PR exists for this branch but the head SHA recorded
+				// by GitHub differs from the local tip. The local branch has
+				// drifted (post-merge commits). Defer to the branch-name
+				// fallback rather than treating this as not-merged.
+				return false, false, nil
+			}
 		}
 	}
 	return merged, true, nil

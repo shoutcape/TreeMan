@@ -286,6 +286,12 @@ func normalizeGitHubSnapshot(candidates []Candidate, result forge.GitHubSnapshot
 		}
 		switch branch.Verification {
 		case forge.SnapshotNotMerged:
+			// For remote-absent branches, SHA-based "not merged" is not definitive:
+			// the local branch may have drifted from the SHA GitHub recorded. Keep
+			// MergeUnknown so the branch-name fallback can still run.
+			if !branch.RemoteExists {
+				break
+			}
 			observation.candidates[index].merge = MergeNo
 		case forge.SnapshotMerged:
 			observation.candidates[index].merge = MergeYes

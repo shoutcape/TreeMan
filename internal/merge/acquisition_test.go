@@ -304,7 +304,7 @@ func TestAcquireReportsGitHubSnapshotFailureWhenFallbackFindsAncestor(t *testing
 	assert.Contains(t, warnings[0].String(), "GitHub snapshot failed")
 }
 
-func TestAcquireFallsBackToRESTOnlyForIncompleteGitHubSnapshotCandidates(t *testing.T) {
+func TestAcquireFallsBackToRESTForRemoteAbsentGitHubSnapshotCandidates(t *testing.T) {
 	a := testAcquirer()
 	a.forge.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
 	a.forge.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
@@ -321,10 +321,12 @@ func TestAcquireFallsBackToRESTOnlyForIncompleteGitHubSnapshotCandidates(t *test
 		assert.Equal(t, []string{"complete", "fallback"}, branches)
 		return map[string]string{"complete": "complete-sha", "fallback": "fallback-sha"}, nil
 	}
-	called := false
 	a.forge.mergedPRHead = func(kind forge.Type, _, _, _, branch, sha string) (bool, error) {
-		called = true
 		assert.Equal(t, forge.GitHub, kind)
+		if branch == "complete" {
+			assert.Equal(t, "complete-sha", sha)
+			return false, nil
+		}
 		assert.Equal(t, "fallback", branch)
 		assert.Equal(t, "fallback-sha", sha)
 		return true, nil
@@ -334,7 +336,6 @@ func TestAcquireFallsBackToRESTOnlyForIncompleteGitHubSnapshotCandidates(t *test
 
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
-	assert.True(t, called)
 	assert.Equal(t, MergeNo, snapshot.Candidates[0].Merge)
 	assert.Equal(t, MergeYes, snapshot.Candidates[1].Merge)
 	assert.Equal(t, []Candidate{{Branch: "fallback", SHA: "fallback-sha"}}, Cleanable(snapshot))
