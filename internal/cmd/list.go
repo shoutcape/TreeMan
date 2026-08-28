@@ -3,8 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
@@ -119,8 +117,8 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 	out := cmd.OutOrStdout()
 	render := outputRenderer(cmd)
 	fmt.Fprintf(out, "\n%s\n\n", render.Title("WORKTREES"))
-	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "MARKERS", "STATUS", "MERGED", "BRANCH", "PATH")))
-	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s  %-25s", "───────", "──────", "──────", "───────────────────────────", "─────────────────────────")))
+	fmt.Fprintf(out, "    %s\n", render.Header(fmt.Sprintf("%-8s %-8s  %-6s  %-27s", "MARKERS", "STATUS", "MERGED", "BRANCH")))
+	fmt.Fprintf(out, "    %s\n", render.Muted(fmt.Sprintf("%-8s %-8s  %-6s  %-27s", "───────", "──────", "──────", "───────────────────────────")))
 	staleCount := 0
 	for _, entry := range entries {
 		branch := entry.Branch
@@ -139,12 +137,11 @@ func writeListHuman(cmd *cobra.Command, entries []listEntry) {
 		if entry.Merged {
 			merged = "YES"
 		}
-		fmt.Fprintf(out, "    %s %s  %-6s  %s  %s\n",
+		fmt.Fprintf(out, "    %s %s  %-6s  %s\n",
 			render.Muted(fmt.Sprintf("%-8s", markers)),
 			render.Tone(tone, fmt.Sprintf("%-8s", truncateListCell(status, 8))),
 			merged,
 			render.Branch(fmt.Sprintf("%-27s", truncateListCell(branch, 27))),
-			render.Path(displayListPath(entry.Path)),
 		)
 		if entry.Stale {
 			staleCount++
@@ -172,14 +169,6 @@ func listStatus(entry listEntry) (string, ui.Tone) {
 		tone = ui.ToneWarning
 	}
 	return status, tone
-}
-
-func displayListPath(path string) string {
-	home, err := os.UserHomeDir()
-	if err == nil && (path == home || strings.HasPrefix(path, home+string(os.PathSeparator))) {
-		return "~" + strings.TrimPrefix(path, home)
-	}
-	return path
 }
 
 func truncateListCell(value string, width int) string {
