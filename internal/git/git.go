@@ -4,6 +4,7 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -420,7 +421,56 @@ func BranchCanDeleteAtSHA(dir, branch, sha string) (bool, error) {
 
 // BranchMergedInto reports whether branch is an ancestor of target.
 func BranchMergedInto(dir, branch, target string) (bool, error) {
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", branch, target)
+	return refIsAncestor(dir, branch, target)
+}
+
+// AnyCommitIsAncestor reports whether any ancestor is reachable from
+// descendant in the current repository. It streams the descendant history and
+// stops at the first matching commit.
+func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
+	if len(ancestors) == 0 {
+		return false, nil
+	}
+	wanted := make(map[string]struct{}, len(ancestors))
+	for _, ancestor := range ancestors {
+		wanted[ancestor] = struct{}{}
+	}
+
+	cmd := exec.Command("git", "rev-list", descendant)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return false, fmt.Errorf("could not read history for %q: %w", descendant, err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("could not read history for %q: %w", descendant, err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		if _, ok := wanted[scanner.Text()]; ok {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return true, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		_ = cmd.Wait()
+		return false, fmt.Errorf("could not read history for %q: %w", descendant, err)
+	}
+	if err := cmd.Wait(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return false, fmt.Errorf("could not read history for %q: %s", descendant, msg)
+		}
+		return false, fmt.Errorf("could not read history for %q: %w", descendant, err)
+	}
+	return false, nil
+}
+
+func refIsAncestor(dir, ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
 	cmd.Dir = dir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -430,9 +480,9 @@ func BranchMergedInto(dir, branch, target string) (bool, error) {
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
-			return false, fmt.Errorf("could not check whether branch %q is merged: %s", branch, msg)
+			return false, fmt.Errorf("could not check whether %q is an ancestor: %s", ancestor, msg)
 		}
-		return false, fmt.Errorf("could not check whether branch %q is merged: %w", branch, err)
+		return false, fmt.Errorf("could not check whether %q is an ancestor: %w", ancestor, err)
 	}
 	return true, nil
 }

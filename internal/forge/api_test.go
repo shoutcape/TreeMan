@@ -58,22 +58,6 @@ func apiGitHubCompleteSnapshot(t *testing.T) {
 	}}, snapshot.Branches)
 }
 
-func apiParseGitHubEvidenceExactMatching(t *testing.T) {
-	candidates := []SnapshotCandidate{
-		{Branch: "feature", SHA: "merged111"},
-		{Branch: "reused", SHA: "new222"},
-	}
-	plan := newGitHubCompleteSnapshotPlan(candidates)
-	payload := []byte(`{"data":{"repository":{"ref0":{"target":{"oid":"main111"}},"ref1":null,"ref2":null,"commit0":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":"merged111"}],"pageInfo":{"hasNextPage":false}}},"commit1":{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"reused","headRefOid":"old111"},{"merged":true,"baseRefName":"other","headRefName":"reused","headRefOid":"new222"},{"merged":false,"baseRefName":"main","headRefName":"reused","headRefOid":"new222"}],"pageInfo":{"hasNextPage":false}}}}}}`)
-
-	snapshot, err := parseGitHubCompleteSnapshot(payload, "main", plan)
-	require.NoError(t, err)
-	assert.Equal(t, []SnapshotBranch{
-		{Candidate: candidates[0], Verification: SnapshotMerged},
-		{Candidate: candidates[1], Verification: SnapshotNotMerged},
-	}, snapshot.Branches)
-}
-
 func apiParseGitHubEvidenceMarksIncompleteCandidatesForFallback(t *testing.T) {
 	candidates := []SnapshotCandidate{
 		{Branch: "missing", SHA: "aaa111"},
@@ -366,16 +350,63 @@ func TestPaginatedLists(t *testing.T) {
 }
 
 func TestMergedPRHeadGitHub(t *testing.T) {
-	previousAPI := githubAPICall
-	githubAPICall = func(endpoint string) ([]byte, error) {
-		assert.Equal(t, "repos/owner/repo/commits/aaa111/pulls?per_page=100", endpoint)
-		return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"aaa111"}}]`), nil
-	}
-	t.Cleanup(func() { githubAPICall = previousAPI })
+	t.Run("sha match", func(t *testing.T) {
+		previousAPI := githubAPICall
+		calls := 0
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			calls++
+			assert.Equal(t, "repos/owner/repo/commits/aaa111/pulls?per_page=100", endpoint)
+			return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"aaa111"}}]`), nil
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
 
-	merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
-	require.NoError(t, err)
-	assert.True(t, merged)
+		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		require.NoError(t, err)
+		assert.True(t, merged)
+		assert.Equal(t, 1, calls, "should not fall back when SHA matches")
+	})
+
+	t.Run("sha mismatch remains unmerged", func(t *testing.T) {
+		previousAPI := githubAPICall
+		calls := 0
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			calls++
+			assert.Equal(t, "repos/owner/repo/commits/aaa111/pulls?per_page=100", endpoint)
+			return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"old111"}}]`), nil
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
+
+		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		require.NoError(t, err)
+		assert.False(t, merged)
+		assert.Equal(t, 1, calls, "exact cleanup verification must not use branch-name history")
+	})
+
+	t.Run("no merged PR found", func(t *testing.T) {
+		previousAPI := githubAPICall
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			return []byte(`[]`), nil
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
+
+		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		require.NoError(t, err)
+		assert.False(t, merged)
+	})
+
+	t.Run("sha lookup error does not fall back", func(t *testing.T) {
+		previousAPI := githubAPICall
+		calls := 0
+		githubAPICall = func(endpoint string) ([]byte, error) {
+			calls++
+			return nil, assert.AnError
+		}
+		t.Cleanup(func() { githubAPICall = previousAPI })
+
+		_, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
+		assert.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, 1, calls, "should not fall back on error")
+	})
 }
 
 func TestMergedPRHeadGitLab(t *testing.T) {

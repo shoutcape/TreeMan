@@ -174,7 +174,8 @@ func githubMergedHead(repoSlug, defaultBranch, branch, sha string) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	return parseGithubMergedHead(out, defaultBranch, branch, sha)
+	merged, err := parseGithubMergedHead(out, defaultBranch, branch, sha)
+	return merged, err
 }
 
 func parseGithubMergedHead(data []byte, defaultBranch, branch, sha string) (bool, error) {

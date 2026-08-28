@@ -74,7 +74,7 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 			writeMergeDiagnostics(cmd.ErrOrStderr(), outputRenderer(cmd), []merge.Diagnostic{{Operation: "merge status unavailable", Err: classifyErr}})
 			defaultBranch = ""
 		} else {
-			for _, candidate := range classification.Cleanable {
+			for _, candidate := range classification.Merged {
 				if candidate.SHA != "" {
 					verified[candidate.Branch] = candidate.SHA
 				}
@@ -85,9 +85,8 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	result := make([]listEntry, 0, len(entries))
 	for _, worktree := range inspected {
 		entry := worktree.Entry
-		// MERGED reports merge eligibility: its tip is an ancestor of
-		// origin/<default>, or its remote counterpart is gone and the forge
-		// confirms a merged PR/MR (squash/rebase merge).
+		// MERGED reports whether the tip is integrated into origin/<default> or
+		// descends from a merged PR/MR head. Cleanup uses stricter exact evidence.
 		isMerged := defaultBranch != "" &&
 			entry.Branch != "" &&
 			entry.Branch != defaultBranch &&
