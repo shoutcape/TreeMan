@@ -19,15 +19,6 @@ type preflightStatus struct {
 	symbol  string
 }
 
-var preflightDatabaseTarget = func(host, port, configuredContainer string) error {
-	resolver, err := database.NewContainerResolver()
-	if err != nil {
-		return err
-	}
-	_, err = resolver.Resolve(host, port, configuredContainer)
-	return err
-}
-
 func newPreflightCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "preflight",
@@ -51,9 +42,7 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 		preflightEnvironmentStatus(mainRoot),
 	}
 	statuses = append(statuses, preflightDependenciesStatuses(mainRoot)...)
-	if status := preflightConfigurationStatus(configResult); status != nil {
-		statuses = append(statuses, *status)
-	}
+	statuses = append(statuses, preflightConfigurationStatus(configResult))
 	statuses = append(statuses,
 		preflightDatabaseStatus(mainRoot, configResult),
 		preflightHooksStatus(configResult),
@@ -80,7 +69,7 @@ func preflightDependenciesStatuses(dir string) []preflightStatus {
 	}
 
 	statuses := []preflightStatus{preflightDependenciesStatus(detection)}
-	modules, err := discoverNestedModules(dir)
+	modules, err := deps.DiscoverNestedModules(dir)
 	if err != nil {
 		return append(statuses, preflightStatus{name: "Nested modules", message: fmt.Sprintf("unavailable: %v", err), tone: ui.ToneFailure, symbol: "✗"})
 	}
@@ -98,47 +87,43 @@ func preflightDependenciesStatus(detection deps.Detection) preflightStatus {
 		return preflightStatus{name: "Dependencies", message: "not configured at repository root", tone: ui.ToneMuted, symbol: "○"}
 	}
 	installer := detection.Installer
-	if _, err := lookPath(installer.Binary); err != nil {
+	if err := deps.InstallerAvailable(installer); err != nil {
 		return preflightStatus{name: "Dependencies", message: fmt.Sprintf("limited: %s detected but %s is not installed", installer.Lockfile, installer.Binary), tone: ui.ToneWarning, symbol: "!"}
 	}
 	return preflightStatus{name: "Dependencies", message: fmt.Sprintf("ready: %s detected; will run %s %s", installer.Lockfile, installer.Binary, joinArgs(installer.Args)), tone: ui.ToneSuccess, symbol: "✓"}
 }
 
-func preflightConfigurationStatus(result config.LoadResult) *preflightStatus {
-	if result.Path != "" || result.Warning != "" {
-		return nil
+func preflightConfigurationStatus(result config.LoadResult) preflightStatus {
+	if result.Warning != "" {
+		return preflightStatus{name: "Configuration", message: "unavailable: " + result.Warning, tone: ui.ToneFailure, symbol: "✗"}
 	}
-	return &preflightStatus{name: "Configuration", message: "not configured: .treeman.toml not found", tone: ui.ToneMuted, symbol: "○"}
+	if result.Path == "" {
+		return preflightStatus{name: "Configuration", message: "not configured: .treeman.toml not found", tone: ui.ToneMuted, symbol: "○"}
+	}
+	return preflightStatus{name: "Configuration", message: "ready: .treeman.toml loaded", tone: ui.ToneSuccess, symbol: "✓"}
 }
 
 func preflightDatabaseStatus(mainRoot string, result config.LoadResult) preflightStatus {
 	if result.Warning != "" {
-		return preflightStatus{name: "Database", message: "unavailable: " + result.Warning, tone: ui.ToneFailure, symbol: "✗"}
+		return preflightStatus{name: "Database", message: "unavailable: configuration is invalid", tone: ui.ToneFailure, symbol: "✗"}
 	}
 	envKey := result.Config.DatabaseEnvKey()
 	if envKey == "" {
 		return preflightStatus{name: "Database", message: "not configured: add [database] to .treeman.toml", tone: ui.ToneMuted, symbol: "○"}
 	}
-	uri, err := database.ReadEnvValue(mainRoot, envKey)
+	probe, err := database.Probe(mainRoot, envKey, result.Config.DatabaseContainer())
 	if err != nil {
-		return preflightStatus{name: "Database", message: fmt.Sprintf("unavailable: could not read %s: %v", envKey, err), tone: ui.ToneFailure, symbol: "✗"}
+		return preflightStatus{name: "Database", message: fmt.Sprintf("limited: %v", err), tone: ui.ToneWarning, symbol: "!"}
 	}
-	if uri == "" {
-		return preflightStatus{name: "Database", message: fmt.Sprintf("not configured: %s is not set in .env", envKey), tone: ui.ToneMuted, symbol: "○"}
-	}
-	parsed, err := database.ParseURI(uri)
-	if err != nil {
-		return preflightStatus{name: "Database", message: fmt.Sprintf("limited: %s is not a supported PostgreSQL URI", envKey), tone: ui.ToneWarning, symbol: "!"}
-	}
-	if err := preflightDatabaseTarget(parsed.Host, parsed.Port, result.Config.DatabaseContainer()); err != nil {
-		return preflightStatus{name: "Database", message: fmt.Sprintf("limited: no ready PostgreSQL container: %v", err), tone: ui.ToneWarning, symbol: "!"}
+	if probe.Skipped {
+		return preflightStatus{name: "Database", message: fmt.Sprintf("not configured: no supported PostgreSQL URI found for %s", envKey), tone: ui.ToneMuted, symbol: "○"}
 	}
 	return preflightStatus{name: "Database", message: fmt.Sprintf("ready: %s has a PostgreSQL URI", envKey), tone: ui.ToneSuccess, symbol: "✓"}
 }
 
 func preflightHooksStatus(result config.LoadResult) preflightStatus {
 	if result.Warning != "" {
-		return preflightStatus{name: "Hooks", message: "unavailable: " + result.Warning, tone: ui.ToneFailure, symbol: "✗"}
+		return preflightStatus{name: "Hooks", message: "unavailable: configuration is invalid", tone: ui.ToneFailure, symbol: "✗"}
 	}
 	count := len(result.Config.PostCreateHooks())
 	if count == 0 {

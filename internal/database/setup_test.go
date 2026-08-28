@@ -115,6 +115,19 @@ func TestSetupPersistsOwnershipWithoutCredentials(t *testing.T) {
 	assert.NotContains(t, mustMarshalRecord(t, record), "secret")
 }
 
+func TestProbeChecksTargetWithoutMutatingState(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1:5432/myapp\n"), 0o600))
+	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+
+	result, err := probe(stubBackend{resolver: resolver}, dir, "DATABASE_URL", "")
+
+	require.NoError(t, err)
+	assert.False(t, result.Skipped)
+	assert.Equal(t, 1, resolver.calls)
+	assert.NoDirExists(t, filepath.Join(dir, ".treeman"))
+}
+
 func TestSetupRollsBackWhenEnvironmentRewriteFails(t *testing.T) {
 	_, worktree := newDatabaseWorktree(t)
 	target := filepath.Join(worktree, "outside-env")

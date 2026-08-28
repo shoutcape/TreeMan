@@ -40,6 +40,14 @@ func run(args ...string) (string, error) {
 
 // runInDir is like run but sets the working directory.
 func runInDir(dir string, args ...string) (string, error) {
+	stdout, err := runInDirRaw(dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(stdout)), nil
+}
+
+func runInDirRaw(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
@@ -49,27 +57,27 @@ func runInDir(dir string, args ...string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
+			return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 		}
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return stdout.Bytes(), nil
 }
 
 // IgnoredPaths returns absolute paths ignored by Git in dir. Directory entries
 // represent an ignored subtree when Git can collapse it to one path.
 func IgnoredPaths(dir string) (map[string]struct{}, error) {
-	output, err := runInDir(dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
+	output, err := runInDirRaw(dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("could not list ignored paths: %w", err)
 	}
 
 	paths := make(map[string]struct{})
-	for _, path := range strings.Split(output, "\x00") {
-		if path == "" {
+	for _, path := range bytes.Split(output, []byte{0}) {
+		if len(path) == 0 {
 			continue
 		}
-		paths[filepath.Clean(filepath.Join(dir, filepath.FromSlash(path)))] = struct{}{}
+		paths[filepath.Clean(filepath.Join(dir, filepath.FromSlash(string(path))))] = struct{}{}
 	}
 	return paths, nil
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/envrc"
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
@@ -234,7 +233,7 @@ func setupDependencies(out io.Writer, render ui.Renderer, worktreePath string) s
 }
 
 func reportNestedModules(w io.Writer, render ui.Renderer, dir string) {
-	modules, err := discoverNestedModules(dir)
+	modules, err := deps.DiscoverNestedModules(dir)
 	if err != nil {
 		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not discover nested modules: %v", err)))
 		return
@@ -242,12 +241,4 @@ func reportNestedModules(w io.Writer, render ui.Renderer, dir string) {
 	for _, module := range modules {
 		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", fmt.Sprintf("Nested module %s (%s): skipped; not installed automatically.", module.Path, module.Manifest)))
 	}
-}
-
-func discoverNestedModules(dir string) ([]deps.Module, error) {
-	ignoredPaths, err := git.IgnoredPaths(dir)
-	if err != nil {
-		return nil, err
-	}
-	return deps.DiscoverNestedModules(dir, ignoredPaths)
 }

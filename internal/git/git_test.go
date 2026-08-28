@@ -73,6 +73,17 @@ func TestIgnoredPathsIncludesIgnoredFilesAndDirectories(t *testing.T) {
 	assert.Contains(t, paths, filepath.Join(repo, "private.lock"))
 }
 
+func TestIgnoredPathsPreservesWhitespaceInNames(t *testing.T) {
+	repo := createGitTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(" leading.lock\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, " leading.lock"), nil, 0o644))
+
+	paths, err := IgnoredPaths(repo)
+
+	require.NoError(t, err)
+	assert.Contains(t, paths, filepath.Join(repo, " leading.lock"))
+}
+
 func TestInspectWorktreeClassifiesFilesystemStates(t *testing.T) {
 	dir := createGitTestRepo(t)
 	file := filepath.Join(t.TempDir(), "worktree")

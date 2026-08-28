@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,12 +18,11 @@ func TestPreflightCommandReportsSetupCompatibilityWithoutCreatingWorktree(t *tes
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".env"), []byte("DATABASE_URL=postgres://postgres@localhost:5432/app\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".env.test"), []byte("test=true\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "pnpm-lock.yaml"), []byte("lockfileVersion: '9.0'\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("[database]\nenv_key = \"DATABASE_URL\"\n\n[hooks]\npost_create = [\"make build\", \"make seed\"]\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("[hooks]\npost_create = [\"make build\", \"make seed\"]\n"), 0o600))
 	nestedModule := filepath.Join(repo, "apps", "admin", "go.mod")
 	require.NoError(t, os.MkdirAll(filepath.Dir(nestedModule), 0o755))
 	require.NoError(t, os.WriteFile(nestedModule, []byte("module example.com/admin\n"), 0o600))
-	stubLookPath(t, func(string) error { return nil })
-	stubPreflightDatabaseTarget(t, nil)
+	installPreflightInstaller(t, "pnpm")
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	command := New("", "", "")
@@ -41,7 +39,8 @@ func TestPreflightCommandReportsSetupCompatibilityWithoutCreatingWorktree(t *tes
 	assert.Contains(t, out, "✓  Environment    ready: 2 .env file(s) will be copied")
 	assert.Contains(t, out, "✓  Dependencies   ready: pnpm-lock.yaml detected; will run pnpm install")
 	assert.Contains(t, out, "○  Nested module  apps/admin (go.mod): skipped; not installed automatically.")
-	assert.Contains(t, out, "✓  Database       ready: DATABASE_URL has a PostgreSQL URI")
+	assert.Contains(t, out, "✓  Configuration  ready: .treeman.toml loaded")
+	assert.Contains(t, out, "○  Database       not configured: add [database] to .treeman.toml")
 	assert.Contains(t, out, "✓  Hooks          ready: 2 post-create hook(s) will run")
 }
 
@@ -74,24 +73,23 @@ func TestPreflightCommandReportsNestedModulesWithoutRootDependencySetup(t *testi
 	assert.Contains(t, out, "○  Nested module  apps/frontend (package-lock.json): skipped; not installed automatically.")
 	assert.Contains(t, out, "○  Nested module  services/backend (go.mod): skipped; not installed automatically.")
 	assert.Contains(t, out, "○  Configuration  not configured: .treeman.toml not found")
-	assert.NotContains(t, out, ".opencode/cache")
+	assert.Contains(t, out, "○  Nested module  .opencode/cache (go.mod): skipped; not installed automatically.")
 	assert.NotContains(t, out, "generated/legacy")
 }
 
-func stubPreflightDatabaseTarget(t *testing.T, err error) {
+func installPreflightInstaller(t *testing.T, binary string) {
 	t.Helper()
-	previous := preflightDatabaseTarget
-	preflightDatabaseTarget = func(string, string, string) error { return err }
-	t.Cleanup(func() { preflightDatabaseTarget = previous })
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, binary), nil, 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func TestPreflightDatabaseStatusReportsUnavailableContainer(t *testing.T) {
-	repo := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".env"), []byte("DATABASE_URL=postgres://postgres@localhost:5432/app\n"), 0o600))
-	stubPreflightDatabaseTarget(t, errors.New("Docker is unavailable"))
+func TestPreflightConfigurationStatusReportsInvalidConfiguration(t *testing.T) {
+	result := config.LoadResult{Warning: "could not parse .treeman.toml"}
+	status := preflightConfigurationStatus(result)
 
-	status := preflightDatabaseStatus(repo, config.LoadResult{Config: config.Config{Database: &config.DatabaseConfig{EnvKey: "DATABASE_URL"}}})
-
-	assert.Equal(t, ui.ToneWarning, status.tone)
-	assert.Equal(t, "limited: no ready PostgreSQL container: Docker is unavailable", status.message)
+	assert.Equal(t, ui.ToneFailure, status.tone)
+	assert.Equal(t, "unavailable: could not parse .treeman.toml", status.message)
+	assert.Equal(t, "unavailable: configuration is invalid", preflightDatabaseStatus(t.TempDir(), result).message)
+	assert.Equal(t, "unavailable: configuration is invalid", preflightHooksStatus(result).message)
 }
