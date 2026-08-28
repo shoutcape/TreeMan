@@ -375,8 +375,8 @@ func TestCleanRemovesGitHubSnapshotVerifiedSquashMergedWorktree(t *testing.T) {
 	runGitInDir(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	mainSHA := originBranchSHA(t, repo, "main")
 	featureSHA := gitRevParse(t, repo, "refs/heads/feature")
-	commit := fmt.Sprintf(`{"associatedPullRequests":{"nodes":[{"merged":true,"baseRefName":"main","headRefName":"feature","headRefOid":%q}],"pageInfo":{"hasNextPage":false}}}`, featureSHA)
-	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, commit, false), `[]`)
+	mergedPRs := fmt.Sprintf(`{"nodes":[{"headRefOid":%q}],"pageInfo":{"hasNextPage":false}}`, featureSHA)
+	githubCommands := traceGitHubAPI(t, githubSnapshotResponse(mainSHA, featureSHA, mergedPRs, false), `[]`)
 	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/owner/repo.git")
 	changeToDir(t, repo)
 	gitCommands := traceGitCommands(t, false)
@@ -702,12 +702,12 @@ func countGitHubCommands(commands []string, prefix string) int {
 	return count
 }
 
-func githubSnapshotResponse(defaultSHA, branchSHA, commit string, branchPresent bool) string {
+func githubSnapshotResponse(defaultSHA, branchSHA, mergedPRs string, branchPresent bool) string {
 	branchRef := "null"
 	if branchPresent {
 		branchRef = fmt.Sprintf(`{"target":{"oid":%q}}`, branchSHA)
 	}
-	return fmt.Sprintf(`{"data":{"repository":{"ref0":{"target":{"oid":%q}},"ref1":%s,"commit0":%s}}}`, defaultSHA, branchRef, commit)
+	return fmt.Sprintf(`{"data":{"repository":{"ref0":{"target":{"oid":%q}},"ref1":%s,"prs0":%s}}}`, defaultSHA, branchRef, mergedPRs)
 }
 
 func originBranchSHA(t *testing.T, repo, branch string) string {

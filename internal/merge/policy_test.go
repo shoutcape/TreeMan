@@ -35,6 +35,10 @@ func TestCleanable(t *testing.T) {
 			evidence: Evidence{Candidate: Candidate{Branch: "not-merged", SHA: "e"}, Remote: RemoteAbsent, Ancestor: AncestorNo, Merge: MergeNo},
 		},
 		{
+			name:     "remote gone descendant of a merged head is retained",
+			evidence: Evidence{Candidate: Candidate{Branch: "post-merge", SHA: "g"}, Remote: RemoteAbsent, Ancestor: AncestorNo, Merge: MergeAncestor},
+		},
+		{
 			name:     "moved tip is unknown",
 			evidence: Evidence{Candidate: Candidate{Branch: "moved", SHA: "f"}, Remote: RemoteAbsent, Ancestor: AncestorYes, Merge: MergeYes, Tip: TipChanged},
 		},
@@ -49,6 +53,22 @@ func TestCleanable(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMerged(t *testing.T) {
+	merged := Merged(Snapshot{Candidates: []Evidence{
+		{Candidate: Candidate{Branch: "ancestor", SHA: "a"}, Ancestor: AncestorYes},
+		{Candidate: Candidate{Branch: "exact", SHA: "b"}, Merge: MergeYes},
+		{Candidate: Candidate{Branch: "post-merge", SHA: "c"}, Merge: MergeAncestor},
+		{Candidate: Candidate{Branch: "unmerged", SHA: "d"}, Merge: MergeNo},
+		{Candidate: Candidate{Branch: "moved", SHA: "e"}, Ancestor: AncestorYes, Tip: TipChanged},
+	}})
+
+	assert.Equal(t, []Candidate{
+		{Branch: "ancestor", SHA: "a"},
+		{Branch: "exact", SHA: "b"},
+		{Branch: "post-merge", SHA: "c"},
+	}, merged)
 }
 
 func TestCleanablePreservesCandidateOrder(t *testing.T) {

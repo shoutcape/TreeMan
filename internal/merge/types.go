@@ -28,13 +28,15 @@ const (
 	AncestorYes
 )
 
-// MergeState records exact forge evidence for a remote-gone branch.
+// MergeState records forge evidence for a branch. MergeYes is exact evidence
+// and can authorize cleanup; MergeAncestor is display-only historical evidence.
 type MergeState uint8
 
 const (
 	MergeUnknown MergeState = iota
 	MergeNo
 	MergeYes
+	MergeAncestor
 )
 
 // TipState records whether the local branch changed while evidence was read.
@@ -76,9 +78,10 @@ func (d Diagnostic) String() string {
 	return fmt.Sprintf("%s: %v", d.Operation, d.Err)
 }
 
-// Result contains only exact branch tips authorized for cleanup. All omitted
-// requested branches must be retained.
+// Result separates informational merged candidates from exact branch tips
+// authorized for cleanup. All omitted requested branches must be retained.
 type Result struct {
+	Merged      []Candidate
 	Cleanable   []Candidate
 	Diagnostics []Diagnostic
 }

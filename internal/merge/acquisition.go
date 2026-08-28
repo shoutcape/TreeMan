@@ -25,8 +25,9 @@ type forgeObservation struct {
 }
 
 type forgeCandidateObservation struct {
-	remote RemoteState
-	merge  MergeState
+	remote      RemoteState
+	merge       MergeState
+	mergedHeads []string
 }
 
 type forgeVerification struct {
@@ -42,6 +43,7 @@ type gitAcquirer struct {
 	remoteTrackingSHA func(string) (string, bool, error)
 	fetch             func(string) error
 	mergedBranches    func(string) (map[string]string, error)
+	anyAncestor       func([]string, string) (bool, error)
 }
 
 // forgeAcquirer resolves one applicable forge and exposes its optional
@@ -69,6 +71,7 @@ func productionAcquirer() acquirer {
 			remoteTrackingSHA: git.RemoteTrackingBranchSHA,
 			fetch:             git.Fetch,
 			mergedBranches:    git.MergedBranches,
+			anyAncestor:       git.AnyCommitIsAncestor,
 		},
 		forge: forgeAcquirer{
 			originRemoteURL:   git.OriginRemoteURL,
@@ -99,7 +102,7 @@ func (a acquirer) Classify(defaultBranch string, branches []string) (Result, err
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Cleanable: Cleanable(snapshot), Diagnostics: diagnostics}, nil
+	return Result{Merged: Merged(snapshot), Cleanable: Cleanable(snapshot), Diagnostics: diagnostics}, nil
 }
 
 func (a acquirer) snapshotCandidates(branches []string) ([]Candidate, error) {
@@ -165,6 +168,7 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 			snapshot.Candidates[index].Remote = candidate.remote
 			snapshot.Candidates[index].Merge = candidate.merge
 		}
+		deferredWarnings = append(deferredWarnings, a.markMergedDescendants(&snapshot, observation.candidates)...)
 	}
 	if snapshot.DefaultSHA == "" {
 		heads, err := a.git.remoteHeads(append([]string{defaultBranch}, candidateBranches(candidates)...))
@@ -249,6 +253,26 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 	return snapshot, deferredWarnings, nil
 }
 
+func (a acquirer) markMergedDescendants(snapshot *Snapshot, candidates []forgeCandidateObservation) []Diagnostic {
+	diagnostics := make([]Diagnostic, 0)
+	for index, candidate := range candidates {
+		evidence := &snapshot.Candidates[index]
+		if evidence.Merge != MergeNo || len(candidate.mergedHeads) == 0 {
+			continue
+		}
+		ancestor, err := a.git.anyAncestor(candidate.mergedHeads, evidence.Candidate.SHA)
+		if err != nil {
+			evidence.Merge = MergeUnknown
+			diagnostics = append(diagnostics, Diagnostic{Operation: fmt.Sprintf("merge ancestry check for %q failed", evidence.Candidate.Branch), Err: err})
+			continue
+		}
+		if ancestor {
+			evidence.Merge = MergeAncestor
+		}
+	}
+	return diagnostics
+}
+
 func (a acquirer) refreshDefaultBranch(defaultBranch, expectedSHA string) error {
 	localDefaultSHA, exists, err := a.git.remoteTrackingSHA(defaultBranch)
 	if err != nil {
@@ -286,12 +310,6 @@ func normalizeGitHubSnapshot(candidates []Candidate, result forge.GitHubSnapshot
 		}
 		switch branch.Verification {
 		case forge.SnapshotNotMerged:
-			// For remote-absent branches, SHA-based "not merged" is not definitive:
-			// the local branch may have drifted from the SHA GitHub recorded. Keep
-			// MergeUnknown so the branch-name fallback can still run.
-			if !branch.RemoteExists {
-				break
-			}
 			observation.candidates[index].merge = MergeNo
 		case forge.SnapshotMerged:
 			observation.candidates[index].merge = MergeYes
@@ -299,6 +317,7 @@ func normalizeGitHubSnapshot(candidates []Candidate, result forge.GitHubSnapshot
 		default:
 			return forgeObservation{}, fmt.Errorf("GitHub snapshot returned invalid verification for %q", candidate.Branch)
 		}
+		observation.candidates[index].mergedHeads = branch.MergedHeads
 	}
 	return observation, nil
 }

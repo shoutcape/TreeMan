@@ -144,6 +144,26 @@ func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
 	assert.Empty(t, sha)
 }
 
+func TestAnyCommitIsAncestor(t *testing.T) {
+	repo := createGitTestRepo(t)
+	base := gitTestOutput(t, repo, "rev-parse", "HEAD")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "next")
+	tip := gitTestOutput(t, repo, "rev-parse", "HEAD")
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	ancestor, err := AnyCommitIsAncestor([]string{"missing", base}, tip)
+	require.NoError(t, err)
+	assert.True(t, ancestor)
+
+	ancestor, err = AnyCommitIsAncestor([]string{"missing"}, tip)
+	require.NoError(t, err)
+	assert.False(t, ancestor)
+}
+
 func TestDeleteBranchAtSHA(t *testing.T) {
 	t.Run("deletes matching ref", func(t *testing.T) {
 		repo := createGitTestRepo(t)

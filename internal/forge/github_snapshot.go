@@ -22,7 +22,7 @@ type SnapshotCandidate struct {
 	SHA    string
 }
 
-// SnapshotVerification is GitHub's complete merge decision for a candidate.
+// SnapshotVerification is GitHub's exact merge decision for a candidate.
 // NeedsFallback means the REST verifier must check the candidate instead.
 type SnapshotVerification uint8
 
@@ -37,6 +37,7 @@ type SnapshotBranch struct {
 	Candidate    SnapshotCandidate
 	RemoteExists bool
 	Verification SnapshotVerification
+	MergedHeads  []string
 }
 
 // GitHubSnapshot is a batch-consistent remote-state read. DefaultSHA is
@@ -103,8 +104,8 @@ func githubSnapshotRepository(repoSlug, defaultBranch string, candidates []Snaps
 type githubSnapshotSlot struct {
 	candidate   SnapshotCandidate
 	refAlias    string
-	shaAlias    string
-	commitAlias string
+	branchAlias string
+	mergedAlias string
 }
 
 type githubCompleteSnapshotPlan struct {
@@ -118,8 +119,8 @@ func newGitHubCompleteSnapshotPlan(candidates []SnapshotCandidate) githubComplet
 		plan.slots[index] = githubSnapshotSlot{
 			candidate:   candidate,
 			refAlias:    fmt.Sprintf("ref%d", index+1),
-			shaAlias:    fmt.Sprintf("sha%d", index),
-			commitAlias: fmt.Sprintf("commit%d", index),
+			branchAlias: fmt.Sprintf("branch%d", index),
+			mergedAlias: fmt.Sprintf("prs%d", index),
 		}
 	}
 	return plan
@@ -129,26 +130,27 @@ func (plan githubCompleteSnapshotPlan) variables(owner, name, defaultBranch stri
 	variables := map[string]string{
 		"owner": owner,
 		"name":  name,
+		"base":  defaultBranch,
 		"ref0":  "refs/heads/" + defaultBranch,
 	}
 	for _, slot := range plan.slots {
 		variables[slot.refAlias] = "refs/heads/" + slot.candidate.Branch
-		variables[slot.shaAlias] = slot.candidate.SHA
+		variables[slot.branchAlias] = slot.candidate.Branch
 	}
 	return variables
 }
 
 func (plan githubCompleteSnapshotPlan) query() string {
 	var query strings.Builder
-	query.WriteString("query($owner: String!, $name: String!, $ref0: String!")
+	query.WriteString("query($owner: String!, $name: String!, $base: String!, $ref0: String!")
 	for _, slot := range plan.slots {
-		fmt.Fprintf(&query, ", $%s: String!, $%s: String!", slot.refAlias, slot.shaAlias)
+		fmt.Fprintf(&query, ", $%s: String!, $%s: String!", slot.refAlias, slot.branchAlias)
 	}
 	query.WriteString(") { repository(owner: $owner, name: $name) {")
 	fmt.Fprintf(&query, "%s: ref(qualifiedName: $%s) { target { ... on Commit { oid } } }", plan.defaultRefAlias, plan.defaultRefAlias)
 	for _, slot := range plan.slots {
 		fmt.Fprintf(&query, "%s: ref(qualifiedName: $%s) { target { ... on Commit { oid } } }", slot.refAlias, slot.refAlias)
-		fmt.Fprintf(&query, "%s: object(expression: $%s) { ... on Commit { associatedPullRequests(first: 100) { nodes { merged baseRefName headRefName headRefOid } pageInfo { hasNextPage } } } }", slot.commitAlias, slot.shaAlias)
+		fmt.Fprintf(&query, "%s: pullRequests(first: 100, states: MERGED, baseRefName: $base, headRefName: $%s) { nodes { headRefOid } pageInfo { hasNextPage } }", slot.mergedAlias, slot.branchAlias)
 	}
 	query.WriteString("} }")
 	return query.String()
@@ -226,19 +228,26 @@ func parseGitHubCompleteSnapshot(data []byte, defaultBranch string, plan githubC
 		return GitHubSnapshot{}, fmt.Errorf("gh: parsing GitHub merge evidence: %w", err)
 	}
 	for index, slot := range plan.slots {
-		commit, ok := response.Data.Repository[slot.commitAlias]
+		mergedPRs, ok := response.Data.Repository[slot.mergedAlias]
 		if !ok {
-			return GitHubSnapshot{}, fmt.Errorf("gh: GitHub merge evidence lacks commit result for %q", slot.candidate.Branch)
+			return GitHubSnapshot{}, fmt.Errorf("gh: GitHub merge evidence lacks PR result for %q", slot.candidate.Branch)
 		}
-		merged, complete, err := parseGitHubSnapshotCommit(commit, defaultBranch, slot.candidate)
+		heads, complete, err := parseGitHubSnapshotMergedHeads(mergedPRs)
 		if err != nil {
-			return GitHubSnapshot{}, fmt.Errorf("gh: parsing commit %q: %w", slot.candidate.SHA, err)
+			return GitHubSnapshot{}, fmt.Errorf("gh: parsing merged PRs for %q: %w", slot.candidate.Branch, err)
 		}
-		snapshot.Branches[index].Verification = SnapshotNotMerged
+		branch := &snapshot.Branches[index]
+		branch.MergedHeads = heads
 		if !complete {
-			snapshot.Branches[index].Verification = SnapshotNeedsFallback
-		} else if merged {
-			snapshot.Branches[index].Verification = SnapshotMerged
+			branch.Verification = SnapshotNeedsFallback
+			continue
+		}
+		branch.Verification = SnapshotNotMerged
+		for _, head := range heads {
+			if head == slot.candidate.SHA {
+				branch.Verification = SnapshotMerged
+				break
+			}
 		}
 	}
 	return snapshot, nil
@@ -262,47 +271,29 @@ func parseGitHubSnapshotRef(data json.RawMessage) (sha string, present bool, err
 	return ref.Target.OID, true, nil
 }
 
-func parseGitHubSnapshotCommit(data json.RawMessage, defaultBranch string, candidate SnapshotCandidate) (merged, complete bool, err error) {
+func parseGitHubSnapshotMergedHeads(data json.RawMessage) (heads []string, complete bool, err error) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return false, false, nil
+		return nil, false, nil
 	}
-	var commit struct {
-		AssociatedPullRequests *struct {
-			Nodes []*struct {
-				Merged      bool    `json:"merged"`
-				BaseRefName *string `json:"baseRefName"`
-				HeadRefName *string `json:"headRefName"`
-				HeadRefOID  *string `json:"headRefOid"`
-			} `json:"nodes"`
-			PageInfo *struct {
-				HasNextPage bool `json:"hasNextPage"`
-			} `json:"pageInfo"`
-		} `json:"associatedPullRequests"`
+	var pullRequests struct {
+		Nodes []*struct {
+			HeadRefOID *string `json:"headRefOid"`
+		} `json:"nodes"`
+		PageInfo *struct {
+			HasNextPage bool `json:"hasNextPage"`
+		} `json:"pageInfo"`
 	}
-	if err := json.Unmarshal(data, &commit); err != nil {
-		return false, false, err
+	if err := json.Unmarshal(data, &pullRequests); err != nil {
+		return nil, false, err
 	}
-	if commit.AssociatedPullRequests == nil || commit.AssociatedPullRequests.Nodes == nil || commit.AssociatedPullRequests.PageInfo == nil || commit.AssociatedPullRequests.PageInfo.HasNextPage {
-		return false, false, nil
+	if pullRequests.Nodes == nil || pullRequests.PageInfo == nil || pullRequests.PageInfo.HasNextPage {
+		return nil, false, nil
 	}
-	for _, pr := range commit.AssociatedPullRequests.Nodes {
-		if pr == nil {
-			return false, false, nil
+	for _, pr := range pullRequests.Nodes {
+		if pr == nil || pr.HeadRefOID == nil || *pr.HeadRefOID == "" {
+			return nil, false, nil
 		}
-		if pr.Merged && (pr.BaseRefName == nil || pr.HeadRefName == nil || pr.HeadRefOID == nil) {
-			return false, false, nil
-		}
-		if pr.Merged && *pr.BaseRefName == defaultBranch && *pr.HeadRefName == candidate.Branch {
-			if *pr.HeadRefOID == candidate.SHA {
-				merged = true
-			} else {
-				// A merged PR exists for this branch but the head SHA recorded
-				// by GitHub differs from the local tip. The local branch has
-				// drifted (post-merge commits). Defer to the branch-name
-				// fallback rather than treating this as not-merged.
-				return false, false, nil
-			}
-		}
+		heads = append(heads, *pr.HeadRefOID)
 	}
-	return merged, true, nil
+	return heads, true, nil
 }

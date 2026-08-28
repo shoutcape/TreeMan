@@ -366,25 +366,20 @@ func TestMergedPRHeadGitHub(t *testing.T) {
 		assert.Equal(t, 1, calls, "should not fall back when SHA matches")
 	})
 
-	t.Run("sha mismatch falls back to branch search", func(t *testing.T) {
+	t.Run("sha mismatch remains unmerged", func(t *testing.T) {
 		previousAPI := githubAPICall
-		calls := []string{}
+		calls := 0
 		githubAPICall = func(endpoint string) ([]byte, error) {
-			calls = append(calls, endpoint)
-			if len(calls) == 1 {
-				// SHA lookup -- PR exists but with a different head SHA (post-merge local commits)
-				return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"old111"}}]`), nil
-			}
-			// Branch-name fallback
-			assert.Equal(t, "repos/owner/repo/pulls?state=closed&head=owner:feature%2Fx&base=main&per_page=100", endpoint)
-			return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x"}}]`), nil
+			calls++
+			assert.Equal(t, "repos/owner/repo/commits/aaa111/pulls?per_page=100", endpoint)
+			return []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x","sha":"old111"}}]`), nil
 		}
 		t.Cleanup(func() { githubAPICall = previousAPI })
 
 		merged, err := MergedPRHead(GitHub, "owner/repo", "github.com", "main", "feature/x", "aaa111")
 		require.NoError(t, err)
-		assert.True(t, merged)
-		assert.Equal(t, 2, len(calls), "should fall back to branch search")
+		assert.False(t, merged)
+		assert.Equal(t, 1, calls, "exact cleanup verification must not use branch-name history")
 	})
 
 	t.Run("no merged PR found", func(t *testing.T) {
@@ -412,38 +407,6 @@ func TestMergedPRHeadGitHub(t *testing.T) {
 		assert.ErrorIs(t, err, assert.AnError)
 		assert.Equal(t, 1, calls, "should not fall back on error")
 	})
-}
-
-func TestParseGithubMergedBranch(t *testing.T) {
-	payload := []byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x"}}]`)
-	merged, err := parseGithubMergedBranch(payload, "main", "feature/x")
-	require.NoError(t, err)
-	assert.True(t, merged)
-
-	// Not merged (closed without merge)
-	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":null,"base":{"ref":"main"},"head":{"ref":"feature/x"}}]`), "main", "feature/x")
-	require.NoError(t, err)
-	assert.False(t, merged)
-
-	// Wrong base
-	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"other"},"head":{"ref":"feature/x"}}]`), "main", "feature/x")
-	require.NoError(t, err)
-	assert.False(t, merged)
-
-	// Wrong branch
-	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"other"}}]`), "main", "feature/x")
-	require.NoError(t, err)
-	assert.False(t, merged)
-
-	// Paginated
-	merged, err = parseGithubMergedBranch([]byte(`[{"merged_at":null,"base":{"ref":"main"},"head":{"ref":"feature/x"}}][{"merged_at":"2026-08-01T10:00:00Z","base":{"ref":"main"},"head":{"ref":"feature/x"}}]`), "main", "feature/x")
-	require.NoError(t, err)
-	assert.True(t, merged)
-
-	for _, payload := range [][]byte{[]byte(``), []byte(`null`), []byte(`{}`)} {
-		_, err = parseGithubMergedBranch(payload, "main", "feature/x")
-		assert.Error(t, err)
-	}
 }
 
 func TestMergedPRHeadGitLab(t *testing.T) {
