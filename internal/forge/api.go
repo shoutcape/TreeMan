@@ -140,32 +140,110 @@ func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 }
 
 func githubPRList(repoSlug string) ([]PRInfo, error) {
-	endpoint := fmt.Sprintf("repos/%s/pulls?state=open&per_page=100", repoSlug)
-	out, err := githubAPICall(endpoint)
-	if err != nil {
-		return nil, err
+	owner, name, ok := strings.Cut(repoSlug, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, fmt.Errorf("invalid GitHub repository %q", repoSlug)
 	}
 
-	data, err := decodePaginated[struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-		Head   struct {
-			Ref string `json:"ref"`
-		} `json:"head"`
-	}](out)
-	if err != nil {
-		return nil, fmt.Errorf("gh: parsing PR list: %w", err)
+	var prs []PRInfo
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for {
+		variables := map[string]string{"owner": owner, "name": name}
+		if cursor != "" {
+			variables["cursor"] = cursor
+		}
+		out, err := githubGraphQLCall(githubPRListQuery, variables)
+		if err != nil {
+			return nil, err
+		}
+		page, err := parseGitHubPRListPage(out)
+		if err != nil {
+			return nil, err
+		}
+		prs = append(prs, page.prs...)
+		if !page.hasNextPage {
+			return prs, nil
+		}
+		if page.endCursor == "" {
+			return nil, errors.New("gh: PR list pagination cursor did not advance")
+		}
+		if _, seen := seenCursors[page.endCursor]; seen {
+			return nil, errors.New("gh: PR list pagination cursor did not advance")
+		}
+		seenCursors[page.endCursor] = struct{}{}
+		cursor = page.endCursor
+	}
+}
+
+const githubPRListQuery = `query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 100, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes { number title headRefName }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
+type githubPRListPage struct {
+	prs         []PRInfo
+	hasNextPage bool
+	endCursor   string
+}
+
+func parseGitHubPRListPage(data []byte) (githubPRListPage, error) {
+	var response struct {
+		Data *struct {
+			Repository *struct {
+				PullRequests *struct {
+					Nodes *[]*struct {
+						Number *int    `json:"number"`
+						Title  *string `json:"title"`
+						Branch *string `json:"headRefName"`
+					} `json:"nodes"`
+					PageInfo *struct {
+						HasNextPage *bool   `json:"hasNextPage"`
+						EndCursor   *string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"pullRequests"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return githubPRListPage{}, fmt.Errorf("gh: parsing PR list: %w", err)
+	}
+	if len(response.Errors) > 0 {
+		return githubPRListPage{}, fmt.Errorf("gh: PR list failed: %s", response.Errors[0].Message)
+	}
+	if response.Data == nil || response.Data.Repository == nil || response.Data.Repository.PullRequests == nil {
+		return githubPRListPage{}, errors.New("gh: PR list lacks repository data")
+	}
+	connection := response.Data.Repository.PullRequests
+	if connection.PageInfo == nil {
+		return githubPRListPage{}, errors.New("gh: PR list lacks pagination data")
+	}
+	if connection.Nodes == nil {
+		return githubPRListPage{}, errors.New("gh: PR list lacks nodes")
+	}
+	if connection.PageInfo.HasNextPage == nil {
+		return githubPRListPage{}, errors.New("gh: PR list lacks has-next-page data")
 	}
 
-	prs := make([]PRInfo, 0, len(data))
-	for _, d := range data {
-		prs = append(prs, PRInfo{
-			Number: d.Number,
-			Title:  d.Title,
-			Branch: d.Head.Ref,
-		})
+	prs := make([]PRInfo, 0, len(*connection.Nodes))
+	for _, node := range *connection.Nodes {
+		if node == nil || node.Number == nil || *node.Number <= 0 || node.Title == nil || *node.Title == "" || node.Branch == nil || *node.Branch == "" {
+			return githubPRListPage{}, errors.New("gh: PR list contains incomplete PR data")
+		}
+		prs = append(prs, PRInfo{Number: *node.Number, Title: *node.Title, Branch: *node.Branch})
 	}
-	return prs, nil
+	page := githubPRListPage{prs: prs, hasNextPage: *connection.PageInfo.HasNextPage}
+	if connection.PageInfo.EndCursor != nil {
+		page.endCursor = *connection.PageInfo.EndCursor
+	}
+	return page, nil
 }
 
 func githubMergedHead(repoSlug, defaultBranch, branch, sha string) (bool, error) {

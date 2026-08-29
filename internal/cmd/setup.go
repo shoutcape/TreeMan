@@ -9,8 +9,10 @@ import (
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/envrc"
+	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/ui"
+	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +22,25 @@ type creationSetupOptions struct {
 	skipDatabase bool
 	skipDeps     bool
 	skipHooks    bool
+}
+
+func setupCreatedWorktree(w io.Writer, render ui.Renderer, mainRoot string, created git.CreatedWorktree, options creationSetupOptions) setupSummary {
+	cfgResult := config.Load(mainRoot)
+	if cfgResult.Warning != "" {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
+	}
+	if cfgResult.Config.ShouldUpdateGitignore() {
+		if err := worktree.EnsureIgnored(mainRoot); err != nil {
+			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
+		}
+	}
+	return runWorktreeSetup(w, render, worktreeSetup{
+		mainRoot:      mainRoot,
+		worktreePath:  created.Path,
+		branch:        created.Branch,
+		projectConfig: cfgResult.Config,
+		options:       options,
+	})
 }
 
 func addCreationSetupFlags(cmd *cobra.Command, options *creationSetupOptions) {

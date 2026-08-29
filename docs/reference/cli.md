@@ -108,10 +108,10 @@ List repository worktrees with branch, path, main, current, dirty, stale, and me
 ## `benchmark`
 
 ```text
-treeman benchmark [list] [--runs <count>] [--warmup <count>]
+treeman benchmark [list | branch <remote-branch> | review <pr-number> | branch-results | review-results] [--runs <count>] [--warmup <count>]
 ```
 
-Measure execution time for a supported command. The default and currently supported command is `list`. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
+Measure execution time for a supported command. The default command is `list`. `branch` requires an exact remote branch name and measures the exact remote-branch lookup, fetch, and worktree creation. `review` requires an explicit GitHub PR or GitLab MR number and also measures forge resolution. Both skip project setup: environment files, dependencies, databases, and hooks. After every warmup and timed iteration, TreeMan force-removes the worktree and exact local branch it created. `branch-results` and `review-results` measure the complete data payload used by interactive `wtb` and `wtmr`, respectively. The payload includes paginated forge API retrieval, filtering and association where applicable, and picker-row rendering. They stop before launching `fzf`, make no repository changes, report the number of available results, and flag changes during timed runs. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
 
 ## `clean`
 

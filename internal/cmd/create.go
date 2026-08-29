@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
@@ -84,30 +83,12 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 
 	// Create worktree + branch.
 	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
-	if err := git.WorktreeAdd(worktreePath, branch, "origin/"+defaultBranch); err != nil {
+	created, err := git.CreateWorktree(worktreePath, branch, "origin/"+defaultBranch)
+	if err != nil {
 		return err
 	}
 
-	// Load project config (needed for gitignore, database, and hooks).
-	cfgResult := config.Load(mainRoot)
-	if cfgResult.Warning != "" {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
-	}
-
-	// Ensure .worktrees/ is gitignored if opted in (best-effort, non-fatal).
-	if cfgResult.Config.ShouldUpdateGitignore() {
-		if err := worktree.EnsureIgnored(mainRoot); err != nil {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
-		}
-	}
-
-	summary := runWorktreeSetup(out, render, worktreeSetup{
-		mainRoot:      mainRoot,
-		worktreePath:  worktreePath,
-		branch:        branch,
-		projectConfig: cfgResult.Config,
-		options:       setupOptions,
-	})
+	summary := setupCreatedWorktree(out, render, mainRoot, created, setupOptions)
 
 	// Print result to stderr for the user.
 	fmt.Fprintln(out, "")

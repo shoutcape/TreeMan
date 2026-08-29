@@ -230,6 +230,14 @@ cat > "$MOCK_BIN/gh" <<'EOF'
 set -euo pipefail
 if [[ "${1:-}" == "api" ]]; then
   endpoint="${2:-}"
+  if [[ "$endpoint" == "graphql" ]]; then
+    if [[ -n "${MOCK_GH_GRAPHQL:-}" ]]; then
+      printf '%s\n' "$MOCK_GH_GRAPHQL"
+    else
+      printf '%s\n' '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+    fi
+    exit 0
+  fi
   case "$endpoint" in
     */pulls/123)
       printf '%s\n' "${MOCK_GH_VIEW_123:-}"
@@ -237,10 +245,6 @@ if [[ "${1:-}" == "api" ]]; then
       ;;
     */pulls/124)
       printf '%s\n' "${MOCK_GH_VIEW_124:-}"
-      exit 0
-      ;;
-    *"/pulls?state=open&per_page=100")
-      printf '%s\n' "${MOCK_GH_LIST:-}"
       exit 0
       ;;
     *"/branches?per_page=100")
@@ -382,7 +386,7 @@ echo "==> review picker (GitHub wtmr fzf)"
 
 cd "$MAIN_REPO"
 export MOCK_GH_VIEW_124='{"number":124,"title":"Beta review","head":{"ref":"feature/review-beta","repo":{"owner":{"login":"shoutcape"}}}}'
-export MOCK_GH_LIST='[{"number":123,"title":"Alpha review","head":{"ref":"feature/review-alpha"}},{"number":124,"title":"Beta review","head":{"ref":"feature/review-beta"}}]'
+export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":123,"title":"Alpha review","headRefName":"feature/review-alpha"},{"number":124,"title":"Beta review","headRefName":"feature/review-beta"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 # FZF_CHOICE=3 selects the second data row (row 1 = header, row 2 = #123, row 3 = #124).
 export FZF_CHOICE=3
 wtmr
@@ -518,7 +522,7 @@ git -C "$PR_SOURCE_REPO" push -u origin feature/remote-only >/dev/null
 
 # Mock the forge branch list API to return this branch.
 export MOCK_GH_BRANCHES='[{"name":"feature/remote-only","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
-export MOCK_GH_LIST='[]'
+export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 
 cd "$MAIN_REPO"
 wtb feature/remote-only
@@ -555,7 +559,7 @@ git -C "$PR_SOURCE_REPO" push -u origin feature/picker-test >/dev/null
 
 # Mock returns only the new branch (feature/remote-only already exists locally now).
 export MOCK_GH_BRANCHES='[{"name":"feature/picker-test","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-15T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
-export MOCK_GH_LIST='[{"number":99,"title":"Picker test PR","head":{"ref":"feature/picker-test"}}]'
+export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":99,"title":"Picker test PR","headRefName":"feature/picker-test"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 
 cd "$MAIN_REPO"
 # FZF_CHOICE=2 picks the first data row (row 1 = header).
@@ -565,7 +569,7 @@ assert_exists "$BRANCH_WT_PICKER"
 [[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected wtb picker to cd into created worktree"
 unset FZF_CHOICE
 unset MOCK_GH_BRANCHES
-unset MOCK_GH_LIST
+unset MOCK_GH_GRAPHQL
 
 # ---------------------------------------------------------------------------
 # protected deletions — treeman delete --path/--branch/--yes

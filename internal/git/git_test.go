@@ -204,6 +204,58 @@ func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
 	assert.Empty(t, sha)
 }
 
+func TestFetchRemoteBranchAcceptsForcePushedTip(t *testing.T) {
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()
+	require.NoErrorf(t, err, "could not initialize origin: %s", output)
+
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "remote", "add", "origin", origin)
+	gitTest(t, repo, "push", "-u", "origin", "main")
+	mainSHA := gitTestOutput(t, repo, "rev-parse", "main")
+	gitTest(t, repo, "checkout", "-b", "feature/rewound")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "feature commit")
+	gitTest(t, repo, "push", "-u", "origin", "feature/rewound")
+	gitTest(t, origin, "update-ref", "refs/heads/feature/rewound", mainSHA)
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	require.NoError(t, FetchRemoteBranch("feature/rewound"))
+	trackingSHA, exists, err := RemoteTrackingBranchSHA("feature/rewound")
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, mainSHA, trackingSHA)
+}
+
+func TestFetchCommitUsesTemporaryRefWithoutChangingFetchHead(t *testing.T) {
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()
+	require.NoErrorf(t, err, "could not initialize origin: %s", output)
+
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "remote", "add", "origin", origin)
+	gitTest(t, repo, "branch", "feature")
+	gitTest(t, repo, "push", "origin", "feature")
+	wantSHA := gitTestOutput(t, repo, "rev-parse", "feature")
+	fetchHeadPath := filepath.Join(repo, ".git", "FETCH_HEAD")
+	require.NoError(t, os.WriteFile(fetchHeadPath, []byte("existing state\n"), 0o644))
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	sha, err := FetchCommit("refs/heads/feature")
+
+	require.NoError(t, err)
+	assert.Equal(t, wantSHA, sha)
+	assert.Equal(t, "existing state\n", string(mustReadFile(t, fetchHeadPath)))
+	assert.Empty(t, gitTestOutput(t, repo, "for-each-ref", "--format=%(refname)", "refs/treeman/fetch"))
+}
+
 func TestAnyCommitIsAncestor(t *testing.T) {
 	repo := createGitTestRepo(t)
 	base := gitTestOutput(t, repo, "rev-parse", "HEAD")
@@ -256,6 +308,80 @@ func TestDeleteBranchAtSHA(t *testing.T) {
 		require.EqualError(t, err, `branch "feature" is still checked out at worktree "`+worktree+`"`)
 		assert.Equal(t, sha, gitTestOutput(t, repo, "rev-parse", "feature"))
 	})
+}
+
+func TestCreatedWorktreeLifecycleIsAtomic(t *testing.T) {
+	t.Run("create and remove owned worktree", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := filepath.Join(t.TempDir(), "feature")
+		previousDir, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(repo))
+		t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+		created, err := CreateWorktree(worktree, "feature", "HEAD")
+		require.NoError(t, err)
+		assert.Equal(t, worktree, created.Path)
+		assert.Equal(t, "feature", created.Branch)
+		assert.NotEmpty(t, created.SHA)
+
+		require.NoError(t, RemoveCreatedWorktree(repo, created))
+		assert.NoDirExists(t, worktree)
+		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
+	})
+
+	t.Run("failed worktree add rolls back reserved branch", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := filepath.Join(t.TempDir(), "feature")
+		require.NoError(t, os.WriteFile(worktree, []byte("occupied"), 0o644))
+		previousDir, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(repo))
+		t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+		created, err := CreateWorktree(worktree, "feature", "HEAD")
+
+		require.Error(t, err)
+		assert.Empty(t, created)
+		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
+	})
+
+	t.Run("existing branch is never claimed or removed", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		gitTest(t, repo, "branch", "feature")
+		sha := gitTestOutput(t, repo, "rev-parse", "feature")
+		worktree := filepath.Join(t.TempDir(), "feature")
+		previousDir, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(repo))
+		t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+		created, err := CreateWorktree(worktree, "feature", "HEAD")
+
+		require.Error(t, err)
+		assert.Empty(t, created)
+		assert.Equal(t, sha, gitTestOutput(t, repo, "rev-parse", "feature"))
+	})
+
+	t.Run("rollback preserves a branch checked out by another process", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		otherWorktree := filepath.Join(t.TempDir(), "other")
+		gitTest(t, repo, "worktree", "add", "-b", "feature", otherWorktree)
+		sha := gitTestOutput(t, repo, "rev-parse", "feature")
+
+		err := rollbackWorktreeCreation(repo, filepath.Join(t.TempDir(), "requested"), "feature", sha)
+
+		require.ErrorContains(t, err, "it is checked out")
+		assert.Equal(t, sha, gitTestOutput(t, repo, "rev-parse", "feature"))
+		assert.DirExists(t, otherWorktree)
+	})
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return contents
 }
 
 func TestCommonDirAndWorktreeIDReturnNormalizedPaths(t *testing.T) {
