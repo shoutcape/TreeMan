@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,10 +44,10 @@ func TestBenchmarkReportsResultCounts(t *testing.T) {
 	cmd.SetErr(&stderr)
 	calls := 0
 
-	require.NoError(t, runBenchmarkWithResultCount(cmd, "branch-results", 1, 2, func(*cobra.Command) (int, error) {
+	require.NoError(t, runBenchmarkIterations(cmd, "branch-results", 1, 2, resultCountRunner(func(*cobra.Command) (int, error) {
 		calls++
 		return calls, nil
-	}))
+	})))
 
 	assert.Contains(t, stderr.String(), "run  1/2")
 	assert.Contains(t, stderr.String(), "2 results")
@@ -62,14 +62,14 @@ func TestBenchmarkRunsTargetAndSuppressesItsOutput(t *testing.T) {
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 	calls := 0
-	runner := func(runCmd *cobra.Command) error {
+	runner := func(runCmd *cobra.Command) (benchmarkIteration, error) {
 		calls++
 		fmt.Fprint(runCmd.OutOrStdout(), "target stdout")
 		fmt.Fprint(runCmd.ErrOrStderr(), "target stderr")
-		return nil
+		return benchmarkIteration{}, nil
 	}
 
-	require.NoError(t, runBenchmarkWithRunner(cmd, "list", 1, 2, runner))
+	require.NoError(t, runBenchmarkIterations(cmd, "list", 1, 2, runner))
 
 	assert.Equal(t, 3, calls)
 	assert.Empty(t, stdout.String())
@@ -86,15 +86,15 @@ func TestBenchmarkRunsTargetAndSuppressesItsOutput(t *testing.T) {
 func TestBenchmarkCleansUpEveryIteration(t *testing.T) {
 	calls := 0
 	cleanups := 0
-	runner := func(*cobra.Command) (func() error, error) {
+	runner := func(*cobra.Command) (benchmarkIteration, error) {
 		calls++
-		return func() error {
+		return benchmarkIteration{cleanup: func() error {
 			cleanups++
 			return nil
-		}, nil
+		}}, nil
 	}
 
-	require.NoError(t, runBenchmarkWithCleanupRunner(&cobra.Command{}, "branch feature/test", 1, 2, runner))
+	require.NoError(t, runBenchmarkIterations(&cobra.Command{}, "branch feature/test", 1, 2, runner))
 
 	assert.Equal(t, 3, calls)
 	assert.Equal(t, 3, cleanups)
@@ -102,15 +102,24 @@ func TestBenchmarkCleansUpEveryIteration(t *testing.T) {
 
 func TestBenchmarkCleansUpFailedIteration(t *testing.T) {
 	cleanups := 0
-	err := runBenchmarkWithCleanupRunner(&cobra.Command{}, "branch feature/test", 0, 1, func(*cobra.Command) (func() error, error) {
-		return func() error {
+	err := runBenchmarkIterations(&cobra.Command{}, "branch feature/test", 0, 1, func(*cobra.Command) (benchmarkIteration, error) {
+		return benchmarkIteration{cleanup: func() error {
 			cleanups++
 			return nil
-		}, errors.New("failed")
+		}}, errors.New("failed")
 	})
 
 	require.EqualError(t, err, "run 1 failed: failed")
 	assert.Equal(t, 1, cleanups)
+}
+
+func TestBenchmarkReportsRunAndCleanupFailures(t *testing.T) {
+	err := finishBenchmarkIteration(errors.New("target failed"), func() error {
+		return errors.New("remove failed")
+	})
+
+	require.ErrorContains(t, err, "target failed")
+	require.ErrorContains(t, err, "cleanup failed: remove failed")
 }
 
 func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
@@ -126,30 +135,8 @@ func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
 	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "branch", "feature/benchmark-branch", 1, 2))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/benchmark-branch")
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/remotes/origin/feature/benchmark-branch")
 	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-benchmark-branch"))
-}
-
-func TestBenchmarkBranchPreservesBranchCreatedByAnotherProcess(t *testing.T) {
-	repo := createRemoteRepoWithNestedModule(t)
-	gitTest(t, repo, "checkout", "-b", "feature/benchmark-branch-race")
-	gitTest(t, repo, "push", "-u", "origin", "feature/benchmark-branch-race")
-	gitTest(t, repo, "checkout", "main")
-	gitTest(t, repo, "branch", "-D", "feature/benchmark-branch-race")
-	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/feature/benchmark-branch-race")
-	chdirForTest(t, repo)
-	pathWithOnlyGit(t)
-
-	previousWorktreeAdd := branchWorktreeAddExisting
-	branchWorktreeAddExisting = func(_, branch string) (bool, error) {
-		gitTest(t, repo, "branch", branch, "origin/"+branch)
-		return false, errors.New("branch appeared concurrently")
-	}
-	t.Cleanup(func() { branchWorktreeAddExisting = previousWorktreeAdd })
-
-	err := runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "branch", "feature/benchmark-branch-race", 0, 1)
-
-	require.EqualError(t, err, "run 1 failed: branch appeared concurrently")
-	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/benchmark-branch-race")
 }
 
 func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
@@ -164,66 +151,20 @@ func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
 	t.Setenv("_TREEMAN_FORGE", "github")
 	t.Setenv("_TREEMAN_GH_REPO", "owner/repo")
 
+	fetchHeadPath := filepath.Join(repo, ".git", "FETCH_HEAD")
+	require.NoError(t, os.WriteFile(fetchHeadPath, []byte("user state\n"), 0o644))
 	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "review", "1", 1, 2))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/review")
 	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-review"))
-}
-
-func TestBenchmarkReviewCleansUpPartialWorktreeCreation(t *testing.T) {
-	repo := createRemoteRepoWithNestedModule(t)
-	gitTest(t, repo, "checkout", "-b", "feature/benchmark-review-failure")
-	gitTest(t, repo, "push", "-u", "origin", "feature/benchmark-review-failure")
-	gitTest(t, repo, "push", "origin", "feature/benchmark-review-failure:refs/pull/1/head")
-	gitTest(t, repo, "checkout", "main")
-	gitTest(t, repo, "branch", "-D", "feature/benchmark-review-failure")
-	chdirForTest(t, repo)
-	pathWithGitAndGH(t)
-	t.Setenv("_TREEMAN_FORGE", "github")
-	t.Setenv("_TREEMAN_GH_REPO", "owner/repo")
-
-	previousWorktreeAdd := reviewWorktreeAdd
-	reviewWorktreeAdd = func(path, branch, startPoint string) (bool, error) {
-		require.NoError(t, git.WorktreeAdd(path, branch, startPoint))
-		return true, errors.New("simulated post-create failure")
-	}
-	t.Cleanup(func() { reviewWorktreeAdd = previousWorktreeAdd })
-
-	err := runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "review", "1", 0, 1)
-
-	require.EqualError(t, err, "run 1 failed: simulated post-create failure")
-	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/review")
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-review"))
-}
-
-func TestBenchmarkReviewPreservesBranchCreatedByAnotherProcess(t *testing.T) {
-	repo := createRemoteRepoWithNestedModule(t)
-	gitTest(t, repo, "checkout", "-b", "feature/benchmark-review-race")
-	gitTest(t, repo, "push", "-u", "origin", "feature/benchmark-review-race")
-	gitTest(t, repo, "push", "origin", "feature/benchmark-review-race:refs/pull/1/head")
-	gitTest(t, repo, "checkout", "main")
-	gitTest(t, repo, "branch", "-D", "feature/benchmark-review-race")
-	chdirForTest(t, repo)
-	pathWithGitAndGH(t)
-	t.Setenv("_TREEMAN_FORGE", "github")
-	t.Setenv("_TREEMAN_GH_REPO", "owner/repo")
-
-	previousWorktreeAdd := reviewWorktreeAdd
-	reviewWorktreeAdd = func(_, branch, startPoint string) (bool, error) {
-		gitTest(t, repo, "branch", branch, startPoint)
-		return false, errors.New("branch appeared concurrently")
-	}
-	t.Cleanup(func() { reviewWorktreeAdd = previousWorktreeAdd })
-
-	err := runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "review", "1", 0, 1)
-
-	require.EqualError(t, err, "run 1 failed: branch appeared concurrently")
-	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/review")
+	afterFetchHead, err := os.ReadFile(fetchHeadPath)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("user state\n"), afterFetchHead)
 }
 
 func TestBenchmarkReportsRunnerFailure(t *testing.T) {
-	err := runBenchmarkWithRunner(&cobra.Command{}, "list", 1, 1, func(*cobra.Command) error {
-		return errors.New("failed")
+	err := runBenchmarkIterations(&cobra.Command{}, "list", 1, 1, func(*cobra.Command) (benchmarkIteration, error) {
+		return benchmarkIteration{}, errors.New("failed")
 	})
 
 	require.EqualError(t, err, "warmup run 1 failed: failed")

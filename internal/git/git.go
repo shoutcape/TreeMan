@@ -6,11 +6,13 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -18,6 +20,14 @@ import (
 type WorktreeEntry struct {
 	Path   string
 	Branch string // empty string for detached HEAD
+}
+
+// CreatedWorktree identifies a worktree and branch created by one operation.
+// SHA is captured at creation so cleanup can avoid deleting later work.
+type CreatedWorktree struct {
+	Path   string
+	Branch string
+	SHA    string
 }
 
 // run executes git with the given arguments, returning trimmed stdout.
@@ -230,6 +240,40 @@ func Fetch(refspec string) error {
 	return err
 }
 
+var fetchRefSequence atomic.Uint64
+
+// FetchCommit fetches a ref through a unique temporary ref and returns its
+// immutable commit SHA without relying on process-global FETCH_HEAD state.
+func FetchCommit(refspec string) (string, error) {
+	temporaryRef := fmt.Sprintf("refs/treeman/fetch/%d-%d", os.Getpid(), fetchRefSequence.Add(1))
+	if _, err := run("fetch", "--no-write-fetch-head", "origin", "+"+refspec+":"+temporaryRef); err != nil {
+		return "", err
+	}
+	sha, resolveErr := run("rev-parse", "--verify", temporaryRef+"^{commit}")
+	_, cleanupErr := run("update-ref", "-d", temporaryRef)
+	if resolveErr != nil {
+		resolveErr = fmt.Errorf("could not resolve fetched ref %q: %w", refspec, resolveErr)
+	}
+	if cleanupErr != nil {
+		cleanupErr = fmt.Errorf("could not remove temporary fetch ref %q: %w", temporaryRef, cleanupErr)
+	}
+	return sha, errors.Join(resolveErr, cleanupErr)
+}
+
+// Clone creates a no-checkout clone for isolated command execution.
+func Clone(remoteURL, path string) error {
+	cmd := exec.Command("git", "clone", "--no-checkout", "--origin", "origin", remoteURL, path)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return fmt.Errorf("git clone: %s", msg)
+		}
+		return fmt.Errorf("git clone: %w", err)
+	}
+	return nil
+}
+
 // FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
 func FetchRemoteBranch(branch string) error {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
@@ -237,14 +281,15 @@ func FetchRemoteBranch(branch string) error {
 	return err
 }
 
-// WorktreeAdd creates a new linked worktree.
-// It is equivalent to:
-//
-//	HUSKY=0 git worktree add --no-track -b <branch> <path> <startPoint>
-//
-// HUSKY=0 is set in the process environment to suppress husky hooks.
+// WorktreeAdd creates a new branch and linked worktree.
 func WorktreeAdd(path, branch, startPoint string) error {
-	return worktreeAdd("", path, branch, startPoint)
+	_, err := CreateWorktree(path, branch, startPoint)
+	return err
+}
+
+// CreateWorktree creates a branch and linked worktree as one owned resource.
+func CreateWorktree(path, branch, startPoint string) (CreatedWorktree, error) {
+	return createWorktree("", path, branch, startPoint)
 }
 
 // WorktreeList returns the list of all worktrees, parsed from
@@ -530,6 +575,47 @@ func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
 	})
 }
 
+// RemoveCreatedWorktree removes a worktree and its unchanged branch while
+// holding the repository mutation lock for the complete operation.
+func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
+	return withWorktreeMutationLock(dir, func() error {
+		var errs []error
+		entries, err := worktreeListInDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Path != created.Path {
+				continue
+			}
+			if entry.Branch != created.Branch {
+				errs = append(errs, fmt.Errorf("worktree %q now checks out branch %q, expected %q", created.Path, entry.Branch, created.Branch))
+				break
+			}
+			if _, err := runInDir(dir, "worktree", "remove", "--force", created.Path); err != nil {
+				errs = append(errs, fmt.Errorf("failed to remove worktree %q: %w", created.Path, err))
+			}
+			break
+		}
+
+		entries, err = worktreeListInDir(dir)
+		if err != nil {
+			errs = append(errs, err)
+			return errors.Join(errs...)
+		}
+		for _, entry := range entries {
+			if entry.Branch == created.Branch {
+				errs = append(errs, fmt.Errorf("branch %q is still checked out at worktree %q", created.Branch, entry.Path))
+				return errors.Join(errs...)
+			}
+		}
+		if _, err := runInDir(dir, "update-ref", "-d", "refs/heads/"+created.Branch, created.SHA); err != nil {
+			errs = append(errs, fmt.Errorf("branch %q could not be deleted at expected SHA %s: %w", created.Branch, created.SHA, err))
+		}
+		return errors.Join(errs...)
+	})
+}
+
 // withWorktreeMutationLock serializes TreeMan worktree additions and guarded
 // branch deletions for one repository. Git's ref transaction makes the SHA
 // comparison atomic; this lock keeps another TreeMan process from creating a
@@ -637,29 +723,81 @@ func FindWorktreeForBranch(branch string) (string, error) {
 	return "", nil
 }
 
-// WorktreeAddExisting creates a linked worktree for a branch that already
-// exists on the remote. Unlike WorktreeAdd which creates a new branch (-b),
-// this checks out an existing remote branch and sets up tracking.
-//
-//	HUSKY=0 git worktree add --no-track -b <branch> <path> origin/<branch>
+// WorktreeAddExisting creates a local branch and linked worktree from an
+// existing remote branch.
 func WorktreeAddExisting(path, branch string) error {
-	return worktreeAdd("", path, branch, "origin/"+branch)
+	_, err := CreateWorktreeFromRemote(path, branch)
+	return err
+}
+
+// CreateWorktreeFromRemote creates a worktree from origin/branch.
+func CreateWorktreeFromRemote(path, branch string) (CreatedWorktree, error) {
+	return createWorktree("", path, branch, "origin/"+branch)
 }
 
 func worktreeAdd(dir, path, branch, startPoint string) error {
-	return withWorktreeMutationLock(dir, func() error {
-		cmd := exec.Command("git", "worktree", "add", "--no-track", "-b", branch, path, startPoint)
+	_, err := createWorktree(dir, path, branch, startPoint)
+	return err
+}
+
+func createWorktree(dir, path, branch, startPoint string) (CreatedWorktree, error) {
+	var created CreatedWorktree
+	err := withWorktreeMutationLock(dir, func() error {
+		sha, err := runInDir(dir, "rev-parse", "--verify", startPoint+"^{commit}")
+		if err != nil {
+			return fmt.Errorf("could not resolve worktree start point %q: %w", startPoint, err)
+		}
+		ref := "refs/heads/" + branch
+		if _, err := runInDir(dir, "update-ref", ref, sha, ""); err != nil {
+			return fmt.Errorf("could not create branch %q: %w", branch, err)
+		}
+
+		cmd := exec.Command("git", "worktree", "add", path, branch)
 		cmd.Dir = dir
 		cmd.Env = append(cmd.Environ(), "HUSKY=0")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
+			rollbackErr := rollbackWorktreeCreation(dir, path, branch, sha)
 			msg := strings.TrimSpace(stderr.String())
 			if msg != "" {
-				return fmt.Errorf("git worktree add: %s", msg)
+				return errors.Join(fmt.Errorf("git worktree add: %s", msg), rollbackErr)
 			}
-			return fmt.Errorf("git worktree add: %w", err)
+			return errors.Join(fmt.Errorf("git worktree add: %w", err), rollbackErr)
 		}
+		created = CreatedWorktree{Path: path, Branch: branch, SHA: sha}
 		return nil
 	})
+	return created, err
+}
+
+func rollbackWorktreeCreation(dir, path, branch, sha string) error {
+	var errs []error
+	entries, err := worktreeListInDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Path == path && entry.Branch == branch {
+			if _, removeErr := runInDir(dir, "worktree", "remove", "--force", path); removeErr != nil {
+				errs = append(errs, fmt.Errorf("rolling back worktree %q: %w", path, removeErr))
+			}
+			break
+		}
+	}
+
+	entries, err = worktreeListInDir(dir)
+	if err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	for _, entry := range entries {
+		if entry.Branch == branch {
+			errs = append(errs, fmt.Errorf("cannot roll back branch %q: it is checked out at worktree %q", branch, entry.Path))
+			return errors.Join(errs...)
+		}
+	}
+	if _, err := runInDir(dir, "update-ref", "-d", "refs/heads/"+branch, sha); err != nil {
+		errs = append(errs, fmt.Errorf("rolling back branch %q: %w", branch, err))
+	}
+	return errors.Join(errs...)
 }

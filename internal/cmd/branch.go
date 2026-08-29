@@ -7,18 +7,12 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
-
-var branchWorktreeAddExisting = func(path, branch string) (bool, error) {
-	err := git.WorktreeAddExisting(path, branch)
-	return err == nil, err
-}
 
 func newBranchCmd() *cobra.Command {
 	var setupOptions creationSetupOptions
@@ -58,20 +52,42 @@ func runBranch(cmd *cobra.Command, query string) error {
 }
 
 func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions) error {
-	_, err := runBranchWithResult(cmd, query, setupOptions)
-	return err
+	created, err := createBranchWorktree(cmd, query)
+	if err != nil || created.worktree.Path == "" {
+		return err
+	}
+
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
+	summary := setupCreatedWorktree(out, render, created.mainRoot, created.worktree, setupOptions)
+	fmt.Fprintln(out)
+	printSetupSummary(out, render, summary)
+	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
+	if pr, ok := created.prMap[created.worktree.Branch]; ok {
+		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
+	}
+	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
+	fmt.Fprintln(cmd.OutOrStdout(), created.worktree.Path)
+	return nil
 }
 
-func runBranchWithResult(cmd *cobra.Command, query string, setupOptions creationSetupOptions) (createdWorktree, error) {
+type branchWorktreeCreation struct {
+	mainRoot string
+	worktree git.CreatedWorktree
+	prMap    map[string]forge.PRInfo
+}
+
+func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreation, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
-		return createdWorktree{}, fmt.Errorf("not inside a git repository")
+		return branchWorktreeCreation{}, fmt.Errorf("not inside a git repository")
 	}
 
 	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
-		return createdWorktree{}, err
+		return branchWorktreeCreation{}, err
 	}
 
 	var selected forge.BranchInfo
@@ -82,16 +98,16 @@ func runBranchWithResult(cmd *cobra.Command, query string, setupOptions creation
 	} else {
 		data, err := loadBranchPickerData(cmd)
 		if err != nil {
-			return createdWorktree{}, err
+			return branchWorktreeCreation{}, err
 		}
 		prMap = data.prMap
 		selected, err = pickBranch(cmd, data.branches, query, prMap)
 		if err != nil {
 			if errors.Is(err, errPickerCancelled) {
 				fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
-				return createdWorktree{}, nil
+				return branchWorktreeCreation{}, nil
 			}
-			return createdWorktree{}, err
+			return branchWorktreeCreation{}, err
 		}
 	}
 
@@ -100,24 +116,20 @@ func runBranchWithResult(cmd *cobra.Command, query string, setupOptions creation
 
 	// Guard: directory must not exist.
 	if _, err := os.Stat(worktreePath); err == nil {
-		return createdWorktree{}, fmt.Errorf("directory %q already exists for branch %q", worktreePath, branch)
+		return branchWorktreeCreation{}, fmt.Errorf("directory %q already exists for branch %q", worktreePath, branch)
 	}
 
 	// Fetch the branch from origin.
 	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching branch %s from origin...", branch)))
 	if err := git.FetchRemoteBranch(branch); err != nil {
-		return createdWorktree{}, fmt.Errorf("failed to fetch branch %q: %w", branch, err)
+		return branchWorktreeCreation{}, fmt.Errorf("failed to fetch branch %q: %w", branch, err)
 	}
 
 	// Create the worktree tracking the remote branch.
 	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
-	worktreeCreated, err := branchWorktreeAddExisting(worktreePath, branch)
-	created := createdWorktree{}
-	if worktreeCreated {
-		created = createdWorktree{mainRoot: mainRoot, path: worktreePath, branch: branch}
-	}
+	created, err := git.CreateWorktreeFromRemote(worktreePath, branch)
 	if err != nil {
-		return created, err
+		return branchWorktreeCreation{}, err
 	}
 
 	// Set upstream so git pull/push work.
@@ -125,43 +137,7 @@ func runBranchWithResult(cmd *cobra.Command, query string, setupOptions creation
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", branch, err)))
 	}
 
-	if !setupOptions.skipSetup {
-		// Load project config (needed for gitignore, database, and hooks).
-		cfgResult := config.Load(mainRoot)
-		if cfgResult.Warning != "" {
-			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
-		}
-
-		// Ensure .worktrees/ is gitignored if opted in (best-effort, non-fatal).
-		if cfgResult.Config.ShouldUpdateGitignore() {
-			if err := worktree.EnsureIgnored(mainRoot); err != nil {
-				fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
-			}
-		}
-
-		summary := runWorktreeSetup(out, render, worktreeSetup{
-			mainRoot:      mainRoot,
-			worktreePath:  worktreePath,
-			branch:        branch,
-			projectConfig: cfgResult.Config,
-			options:       setupOptions,
-		})
-
-		// Print summary to stderr.
-		fmt.Fprintln(out, "")
-		printSetupSummary(out, render, summary)
-	}
-	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
-	if pr, ok := prMap[branch]; ok {
-		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
-	}
-	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
-
-	// Print path to stdout so the shell wrapper can cd into it.
-	fmt.Fprintln(cmd.OutOrStdout(), worktreePath)
-
-	return created, nil
+	return branchWorktreeCreation{mainRoot: mainRoot, worktree: created, prMap: prMap}, nil
 }
 
 type branchPickerData struct {
