@@ -117,6 +117,51 @@ func TestDetectDefaultBranchUsesOriginHEADName(t *testing.T) {
 	assert.Equal(t, "dev", branch)
 }
 
+func TestDetectDefaultBranchFallsBackToOriginHeads(t *testing.T) {
+	tests := []struct {
+		name    string
+		branch  string
+		push    bool
+		want    string
+		wantErr string
+	}{
+		{name: "main", branch: "main", push: true, want: "main"},
+		{name: "master", branch: "master", push: true, want: "master"},
+		{name: "unsupported", branch: "trunk", wantErr: "could not find 'main' or 'master' on origin"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			origin := filepath.Join(t.TempDir(), "origin.git")
+			output, err := exec.Command("git", "init", "--bare", "--initial-branch="+test.branch, origin).CombinedOutput()
+			require.NoErrorf(t, err, "could not initialize origin: %s", output)
+
+			repo := createGitTestRepo(t)
+			if test.branch == "master" {
+				gitTest(t, repo, "branch", "-M", "master")
+			}
+			gitTest(t, repo, "remote", "add", "origin", origin)
+			if test.push {
+				gitTest(t, repo, "push", "-u", "origin", test.branch)
+			}
+			gitTestFails(t, repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+
+			previousDir, err := os.Getwd()
+			require.NoError(t, err)
+			require.NoError(t, os.Chdir(repo))
+			t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+			branch, err := DetectDefaultBranch()
+
+			if test.wantErr != "" {
+				require.EqualError(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, branch)
+		})
+	}
+}
+
 func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()
