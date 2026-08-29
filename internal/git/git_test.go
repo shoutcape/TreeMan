@@ -204,6 +204,32 @@ func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
 	assert.Empty(t, sha)
 }
 
+func TestFetchRemoteBranchAcceptsForcePushedTip(t *testing.T) {
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()
+	require.NoErrorf(t, err, "could not initialize origin: %s", output)
+
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "remote", "add", "origin", origin)
+	gitTest(t, repo, "push", "-u", "origin", "main")
+	mainSHA := gitTestOutput(t, repo, "rev-parse", "main")
+	gitTest(t, repo, "checkout", "-b", "feature/rewound")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "feature commit")
+	gitTest(t, repo, "push", "-u", "origin", "feature/rewound")
+	gitTest(t, origin, "update-ref", "refs/heads/feature/rewound", mainSHA)
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	require.NoError(t, FetchRemoteBranch("feature/rewound"))
+	trackingSHA, exists, err := RemoteTrackingBranchSHA("feature/rewound")
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, mainSHA, trackingSHA)
+}
+
 func TestAnyCommitIsAncestor(t *testing.T) {
 	repo := createGitTestRepo(t)
 	base := gitTestOutput(t, repo, "rev-parse", "HEAD")

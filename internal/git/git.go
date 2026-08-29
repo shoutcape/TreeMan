@@ -230,6 +230,13 @@ func Fetch(refspec string) error {
 	return err
 }
 
+// FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
+func FetchRemoteBranch(branch string) error {
+	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
+	_, err := run("fetch", "origin", refspec)
+	return err
+}
+
 // WorktreeAdd creates a new linked worktree.
 // It is equivalent to:
 //

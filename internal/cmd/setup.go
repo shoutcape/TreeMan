@@ -16,6 +16,7 @@ import (
 
 // creationSetupOptions controls optional worktree setup actions.
 type creationSetupOptions struct {
+	skipSetup    bool
 	skipEnv      bool
 	skipDatabase bool
 	skipDeps     bool

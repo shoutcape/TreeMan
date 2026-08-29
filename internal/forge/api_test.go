@@ -299,11 +299,22 @@ func TestDecodePaginated(t *testing.T) {
 
 func TestPaginatedLists(t *testing.T) {
 	t.Run("github PRs", func(t *testing.T) {
-		previous := githubAPICall
-		githubAPICall = func(string) ([]byte, error) {
-			return []byte(`[{"number":1,"title":"first","head":{"ref":"one"}}][{"number":2,"title":"second","head":{"ref":"two"}}]`), nil
+		previous := githubGraphQLCall
+		githubGraphQLCall = func(query string, variables map[string]string) ([]byte, error) {
+			assert.Contains(t, query, "pullRequests(first: 100, after: $cursor, states: OPEN")
+			assert.Contains(t, query, "nodes { number title headRefName }")
+			assert.NotContains(t, query, "body")
+			switch variables["cursor"] {
+			case "":
+				assert.Equal(t, map[string]string{"owner": "owner", "name": "repo"}, variables)
+				return []byte(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":1,"title":"first","headRefName":"one"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}`), nil
+			case "cursor-1":
+				return []byte(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":2,"title":"second","headRefName":"two"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`), nil
+			default:
+				return nil, fmt.Errorf("unexpected cursor %q", variables["cursor"])
+			}
 		}
-		t.Cleanup(func() { githubAPICall = previous })
+		t.Cleanup(func() { githubGraphQLCall = previous })
 
 		prs, err := githubPRList("owner/repo")
 		require.NoError(t, err)
@@ -347,6 +358,52 @@ func TestPaginatedLists(t *testing.T) {
 		assert.Len(t, branches, 2)
 		assert.Equal(t, []string{"one", "two"}, []string{branches[0].Name, branches[1].Name})
 	})
+}
+
+func TestGitHubPRListRejectsInvalidGraphQLPages(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`not-json`),
+		[]byte(`{"errors":[{"message":"forbidden"}]}`),
+		[]byte(`{"data":{"repository":null}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":null}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":null}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":null,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[null],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[{}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":1,"title":"first"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":1,"headRefName":"one"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[{"title":"first","headRefName":"one"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":1,"title":"","headRefName":"one"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"endCursor":null}}}}}`),
+		[]byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":null}}}}}`),
+	} {
+		previous := githubGraphQLCall
+		githubGraphQLCall = func(string, map[string]string) ([]byte, error) { return payload, nil }
+		_, err := githubPRList("owner/repo")
+		githubGraphQLCall = previous
+		assert.Error(t, err)
+	}
+}
+
+func TestGitHubPRListRejectsRepeatedCursor(t *testing.T) {
+	previous := githubGraphQLCall
+	githubGraphQLCall = func(_ string, variables map[string]string) ([]byte, error) {
+		switch variables["cursor"] {
+		case "":
+			return []byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"one"}}}}}`), nil
+		case "one":
+			return []byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"two"}}}}}`), nil
+		case "two":
+			return []byte(`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"one"}}}}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected cursor %q", variables["cursor"])
+		}
+	}
+	t.Cleanup(func() { githubGraphQLCall = previous })
+
+	_, err := githubPRList("owner/repo")
+
+	require.EqualError(t, err, "gh: PR list pagination cursor did not advance")
 }
 
 func TestMergedPRHeadGitHub(t *testing.T) {
