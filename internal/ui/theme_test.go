@@ -76,6 +76,12 @@ func TestPickerRowsStripToLookupText(t *testing.T) {
 	assert.Equal(t, "feature/forest                                      2026-08-18      #42", StripANSI(renderer.BranchRow("feature/forest", "2026-08-18", 42)))
 }
 
+func TestShortPath(t *testing.T) {
+	assert.Equal(t, ".worktrees/feature-forest", ShortPath("/repo/.worktrees/feature-forest"))
+	assert.Equal(t, "external/feature-forest", ShortPath("/tmp/external/feature-forest"))
+	assert.Equal(t, "feature-forest", ShortPath("feature-forest"))
+}
+
 func TestTruncateTerminalText(t *testing.T) {
 	assert.Equal(t, "feature...", ansi.Truncate("feature/very-long-branch", 10, "..."))
 }

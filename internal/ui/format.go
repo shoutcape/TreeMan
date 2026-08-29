@@ -12,7 +12,7 @@ import (
 //
 // Column width for the path component is 40 characters.
 func (r Renderer) WorktreeRow(path, branch string) string {
-	short := shortPath(path)
+	short := ShortPath(path)
 	return r.Path(fmt.Sprintf("%-40s", short)) + "  " + r.Branch(branch)
 }
 
@@ -32,11 +32,11 @@ func (r Renderer) PRRow(number int, branch, title string) string {
 		r.Branch(fmt.Sprintf("%-32s", truncBranch)) + "  " + r.Path(title)
 }
 
-// shortPath returns the last two path components of a filesystem path.
+// ShortPath returns the last two path components of a filesystem path.
 // If the path has only one component, that component is returned.
 //
 // Example: "/home/user/Github/my-project.feat-cool" → "Github/my-project.feat-cool"
-func shortPath(path string) string {
+func ShortPath(path string) string {
 	cleaned := filepath.Clean(path)
 	base := filepath.Base(cleaned)
 	parent := filepath.Base(filepath.Dir(cleaned))

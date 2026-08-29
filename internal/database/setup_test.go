@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shoutcape/treeman/internal/git"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,6 +116,60 @@ func TestSetupPersistsOwnershipWithoutCredentials(t *testing.T) {
 	assert.NotContains(t, mustMarshalRecord(t, record), "secret")
 }
 
+func TestLookupDatabaseName(t *testing.T) {
+	t.Run("absent record does not create state", func(t *testing.T) {
+		_, worktree := newDatabaseWorktree(t)
+		commonDir, err := git.CommonDir(worktree)
+		require.NoError(t, err)
+
+		databaseName, found, err := LookupDatabaseName(worktree)
+
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, databaseName)
+		assert.NoDirExists(t, filepath.Join(commonDir, databaseStateDirectory))
+	})
+
+	t.Run("returns every valid ownership state", func(t *testing.T) {
+		_, worktree := newDatabaseWorktree(t)
+		require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1/myapp\n"), 0o600))
+		resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
+		backend := installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { return nil })
+		result, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
+		require.NoError(t, err)
+		store, worktreeID, err := databaseStoreForWorktree(worktree)
+		require.NoError(t, err)
+
+		for _, status := range []databaseStatus{databaseStatusSetupPending, databaseStatusActive, databaseStatusPendingCleanup} {
+			t.Run(string(status), func(t *testing.T) {
+				record, err := store.load(worktreeID)
+				require.NoError(t, err)
+				require.NotNil(t, record)
+				record.Status = status
+				require.NoError(t, store.save(record))
+
+				databaseName, found, err := LookupDatabaseName(worktree)
+
+				require.NoError(t, err)
+				assert.True(t, found)
+				assert.Equal(t, result.DBName, databaseName)
+			})
+		}
+	})
+
+	t.Run("invalid record fails closed", func(t *testing.T) {
+		_, worktree := newDatabaseWorktree(t)
+		store, worktreeID, err := databaseStoreForWorktree(worktree)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(store.recordPath(worktreeID), []byte("not json"), 0o600))
+
+		_, found, err := LookupDatabaseName(worktree)
+
+		require.ErrorContains(t, err, "parsing database ownership record")
+		assert.False(t, found)
+	})
+}
+
 func TestProbeChecksTargetWithoutMutatingState(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1:5432/myapp\n"), 0o600))
@@ -211,7 +266,7 @@ func TestCleanupRejectsReplacementContainer(t *testing.T) {
 			require.NoError(t, err)
 			resolver.target = ContainerTarget{ID: "new-id", Name: "configured-db"}
 
-			_, err = newCleanupBatch(backend).Prepare(worktree)
+			_, _, err = newCleanupBatch(backend).Prepare(worktree)
 			require.ErrorContains(t, err, "finding recorded postgres container")
 			assert.Zero(t, drops)
 		})
@@ -229,11 +284,13 @@ func TestCleanupUsesRecordAfterEnvironmentRemoval(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(worktree, ".env")))
 
 	batch := newCleanupBatch(backend)
-	commit, err := batch.Prepare(worktree)
+	commit, _, err := batch.Prepare(worktree)
 	require.NoError(t, err)
 	require.NotNil(t, commit)
 	require.NoError(t, commit())
-	require.NoError(t, batch.Flush())
+	removed, err := batch.FlushWithResult()
+	require.NoError(t, err)
+	assert.Equal(t, []string{result.DBName}, removed)
 	assert.Equal(t, []string{result.DBName}, dropped)
 	store, worktreeID, storeErr := databaseStoreForWorktree(worktree)
 	require.NoError(t, storeErr)
@@ -248,10 +305,10 @@ func TestCleanRetriesPendingCleanupAfterWorktreeIsGone(t *testing.T) {
 	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
 	var drops int
 	backend := installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
-	_, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
+	result, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 	batch := newCleanupBatch(backend)
-	commit, err := batch.Prepare(worktree)
+	commit, _, err := batch.Prepare(worktree)
 	require.NoError(t, err)
 	require.NoError(t, commit())
 	require.NoError(t, os.RemoveAll(worktree))
@@ -259,7 +316,7 @@ func TestCleanRetriesPendingCleanupAfterWorktreeIsGone(t *testing.T) {
 	retryBatch := newCleanupBatch(backend)
 	retried, err := retryBatch.RetryPending(repo)
 	require.NoError(t, err)
-	assert.Equal(t, 1, retried)
+	assert.Equal(t, []string{result.DBName}, retried)
 	assert.Equal(t, 1, drops)
 }
 
@@ -269,7 +326,7 @@ func TestCleanRetriesOrphanedActiveCleanup(t *testing.T) {
 	resolver := &testResolver{target: ContainerTarget{ID: "id-1", Name: "project-db"}}
 	drops := 0
 	backend := installDatabaseStubs(t, resolver, func(string, string, string) error { return nil }, func(string, string, []string) error { drops++; return nil })
-	_, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
+	result, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 	require.NoError(t, os.RemoveAll(worktree))
 	runGit(t, repo, "worktree", "prune")
@@ -278,7 +335,7 @@ func TestCleanRetriesOrphanedActiveCleanup(t *testing.T) {
 	batch := newCleanupBatch(backend)
 	retried, err := batch.RetryPending(repo)
 	require.NoError(t, err)
-	assert.Equal(t, 1, retried)
+	assert.Equal(t, []string{result.DBName}, retried)
 	assert.Equal(t, 1, drops)
 }
 
@@ -297,7 +354,7 @@ func TestCleanDoesNotRetryOrphanedDatabaseWhileBranchExists(t *testing.T) {
 	batch := newCleanupBatch(backend)
 	retried, err := batch.RetryPending(repo)
 	require.NoError(t, err)
-	assert.Zero(t, retried)
+	assert.Empty(t, retried)
 	assert.Zero(t, drops)
 }
 
@@ -311,7 +368,7 @@ func TestCleanupNeverDropsUnmarkedRecord(t *testing.T) {
 	require.NoError(t, err)
 
 	batch := newCleanupBatch(backend)
-	commit, err := batch.Prepare(worktree)
+	commit, _, err := batch.Prepare(worktree)
 	require.NoError(t, err)
 	require.NotNil(t, commit)
 	require.NoError(t, batch.Flush())
@@ -329,16 +386,16 @@ func TestCleanupRetainsFailedDropForRetry(t *testing.T) {
 		}
 		return nil
 	})
-	require.NoError(t, func() error {
-		_, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
-		return err
-	}())
+	result, err := setupBranchDB(backend, worktree, "feature/test", "DATABASE_URL", "")
+	require.NoError(t, err)
 
 	batch := newCleanupBatch(backend)
-	commit, err := batch.Prepare(worktree)
+	commit, _, err := batch.Prepare(worktree)
 	require.NoError(t, err)
 	require.NoError(t, commit())
-	require.ErrorIs(t, batch.Flush(), assert.AnError)
+	removed, err := batch.FlushWithResult()
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Empty(t, removed)
 	store, worktreeID, err := databaseStoreForWorktree(worktree)
 	require.NoError(t, err)
 	record, err := store.load(worktreeID)
@@ -350,7 +407,7 @@ func TestCleanupRetainsFailedDropForRetry(t *testing.T) {
 	retry := newCleanupBatch(backend)
 	retried, err := retry.RetryPending(repo)
 	require.NoError(t, err)
-	assert.Equal(t, 1, retried)
+	assert.Equal(t, []string{result.DBName}, retried)
 	record, err = store.load(worktreeID)
 	require.NoError(t, err)
 	assert.Nil(t, record)
@@ -378,7 +435,7 @@ func TestRetryPendingCleansHealthyContainersWhenOneIsUnavailable(t *testing.T) {
 	batch := newCleanupBatch(backend)
 	retried, err := batch.RetryPending(repo)
 	require.ErrorContains(t, err, "unavailable")
-	assert.Equal(t, 1, retried)
+	assert.Equal(t, []string{"database_healthy"}, retried)
 	assert.Equal(t, []string{"database_healthy"}, dropped)
 
 	healthy, err := store.load("healthy")

@@ -10,6 +10,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type cleanDatabaseCleanupBatch interface {
+	Prepare(string) (func() error, string, error)
+	RetryPending(string) ([]string, error)
+	FlushWithResult() ([]string, error)
+}
+
+var (
+	newCleanCleanupBatch    = func() cleanDatabaseCleanupBatch { return database.NewCleanupBatch() }
+	lookupCleanDatabaseName = database.LookupDatabaseName
+)
+
 func newCleanCmd() *cobra.Command {
 	var dryRun bool
 	var skipConfirm bool
@@ -33,11 +44,17 @@ func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
 type cleanCandidate struct {
 	entry       git.WorktreeEntry
 	verifiedSHA string
+	database    string
 }
 
 type cleanSelection struct {
 	candidates  []cleanCandidate
 	diagnostics []merge.Diagnostic
+}
+
+type cleanResult struct {
+	branch   string
+	database databaseCleanupOutcome
 }
 
 func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
@@ -92,19 +109,50 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 
 	if len(candidates) > 0 {
+		hasDatabases := false
+		for index := range candidates {
+			_, found, err := lookupCleanDatabaseName(candidates[index].entry.Path)
+			if err != nil {
+				candidates[index].database = "unavailable"
+				fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not read database ownership for %s: %v", candidates[index].entry.Branch, err)))
+				continue
+			}
+			if found {
+				candidates[index].database = "✓"
+				hasDatabases = true
+			} else {
+				candidates[index].database = "-"
+			}
+		}
 		branchWidth := len("BRANCH")
+		worktreeWidth := len("WORKTREE")
 		for _, candidate := range candidates {
 			branchWidth = max(branchWidth, len(candidate.entry.Branch))
+			worktreeWidth = max(worktreeWidth, len(ui.ShortPath(candidate.entry.Path)))
 		}
 
 		// Stdout is reserved for the main worktree path when the current
 		// worktree is removed, allowing the shell wrapper to navigate there.
 		fmt.Fprintln(out, render.Title("Cleanup candidates"))
-		fmt.Fprintln(out, render.Muted("Merged, clean worktrees and branches to remove"))
+		description := "Merged, clean worktrees and branches to remove"
+		if hasDatabases {
+			description = "Merged, clean worktrees, branches, and databases to remove"
+		}
+		fmt.Fprintln(out, render.Muted(description))
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "BRANCH")), render.Header("WORKTREE"))
+		if hasDatabases {
+			fmt.Fprintf(out, "  %s  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "BRANCH")), render.Header(fmt.Sprintf("%-*s", worktreeWidth, "WORKTREE")), render.Header("DATABASE"))
+		} else {
+			fmt.Fprintf(out, "  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "BRANCH")), render.Header("WORKTREE"))
+		}
 		for _, candidate := range candidates {
-			fmt.Fprintf(out, "  %s  %s\n", render.Branch(fmt.Sprintf("%-*s", branchWidth, candidate.entry.Branch)), render.Path(candidate.entry.Path))
+			branch := render.Branch(fmt.Sprintf("%-*s", branchWidth, candidate.entry.Branch))
+			worktree := render.Path(fmt.Sprintf("%-*s", worktreeWidth, ui.ShortPath(candidate.entry.Path)))
+			if hasDatabases {
+				fmt.Fprintf(out, "  %s  %s  %s\n", branch, worktree, renderCleanCandidateDatabase(render, candidate.database))
+			} else {
+				fmt.Fprintf(out, "  %s  %s\n", branch, worktree)
+			}
 		}
 		fmt.Fprintln(out)
 	}
@@ -131,30 +179,95 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 		candidates = revalidated.candidates
 	}
 
-	removed := 0
-	cleanupBatch := database.NewCleanupBatch()
-	if retried, err := cleanupBatch.RetryPending(mainRoot); err != nil {
+	cleanupBatch := newCleanCleanupBatch()
+	removedDatabases, err := cleanupBatch.RetryPending(mainRoot)
+	writeRecoveredDatabases(out, render, removedDatabases)
+	if err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("pending database cleanup failed: %v", err)))
-	} else if retried > 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Retried %d pending database cleanup(s).", retried)))
 	}
-	flushDatabaseCleanup := func() {
-		if err := cleanupBatch.Flush(); err != nil {
-			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", err)))
-		}
-	}
+	results := make([]cleanResult, 0, len(candidates))
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		if err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch); err != nil {
-			flushDatabaseCleanup()
+		cleanupOutcome, err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch)
+		if err != nil {
+			removedDatabases, cleanupErr := cleanupBatch.FlushWithResult()
+			writeCleanResults(out, render, results, removedDatabases)
+			if cleanupErr != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", cleanupErr)))
+			}
 			return err
 		}
-		removed++
+		results = append(results, cleanResult{branch: candidate.entry.Branch, database: cleanupOutcome.database})
+		if cleanupOutcome.currentWorktree {
+			fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
+		}
 	}
-	flushDatabaseCleanup()
-	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", removed)))
+	removedDatabases, err = cleanupBatch.FlushWithResult()
+	writeCleanResults(out, render, results, removedDatabases)
+	if err != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", err)))
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", len(results))))
 	return nil
+}
+
+func renderCleanCandidateDatabase(render ui.Renderer, databaseName string) string {
+	if databaseName == "-" {
+		return render.Muted(databaseName)
+	}
+	if databaseName == "unavailable" {
+		return render.Tone(ui.ToneWarning, databaseName)
+	}
+	return render.Tone(ui.ToneSuccess, databaseName)
+}
+
+func writeRecoveredDatabases(out interface{ Write([]byte) (int, error) }, render ui.Renderer, databases []string) {
+	if len(databases) == 0 {
+		return
+	}
+	fmt.Fprintln(out, render.Title("Recovered pending databases"))
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  %s  %s\n", render.Header(fmt.Sprintf("%-32s", "DATABASE")), render.Header("STATUS"))
+	for _, databaseName := range databases {
+		fmt.Fprintf(out, "  %s  %s\n", render.Path(fmt.Sprintf("%-32s", databaseName)), render.Tone(ui.ToneSuccess, "removed"))
+	}
+	fmt.Fprintln(out)
+}
+
+func writeCleanResults(out interface{ Write([]byte) (int, error) }, render ui.Renderer, results []cleanResult, removedDatabases []string) {
+	if len(results) == 0 {
+		return
+	}
+	removed := make(map[string]struct{}, len(removedDatabases))
+	for _, databaseName := range removedDatabases {
+		removed[databaseName] = struct{}{}
+	}
+	branchWidth := len("TREEBRANCH")
+	for _, result := range results {
+		branchWidth = max(branchWidth, len(result.branch))
+	}
+	fmt.Fprintln(out, render.Title("Cleanup results"))
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  %s  %s  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "TREEBRANCH")), render.Header("WORKTREE"), render.Header("BRANCH"), render.Header("DATABASE"))
+	for _, result := range results {
+		fmt.Fprintf(out, "  %s  %s  %s  %s\n", render.Branch(fmt.Sprintf("%-*s", branchWidth, result.branch)), render.Tone(ui.ToneSuccess, "removed"), render.Tone(ui.ToneSuccess, "removed"), renderCleanDatabaseStatus(render, result.database, removed))
+	}
+	fmt.Fprintln(out)
+}
+
+func renderCleanDatabaseStatus(render ui.Renderer, outcome databaseCleanupOutcome, removed map[string]struct{}) string {
+	switch outcome.status {
+	case databaseCleanupAbsent:
+		return render.Muted("not found")
+	case databaseCleanupPending:
+		if _, ok := removed[outcome.database]; ok {
+			return render.Tone(ui.ToneSuccess, "removed "+outcome.database)
+		}
+		return render.Tone(ui.ToneWarning, "cleanup pending")
+	default:
+		return render.Tone(ui.ToneWarning, "unavailable")
+	}
 }
 
 // revalidateCleanCandidates returns only unchanged preview candidates. A fresh

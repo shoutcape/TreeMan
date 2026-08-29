@@ -69,6 +69,39 @@ func newDatabaseStore(dir string) (*databaseStore, error) {
 	return store, nil
 }
 
+// LookupDatabaseName returns the recorded database for a linked worktree
+// without creating or modifying ownership state.
+func LookupDatabaseName(worktreePath string) (string, bool, error) {
+	commonDir, err := git.CommonDir(worktreePath)
+	if err != nil {
+		return "", false, fmt.Errorf("opening database ownership state: %w", err)
+	}
+	worktreeID, err := git.WorktreeID(worktreePath)
+	if err != nil {
+		return "", false, fmt.Errorf("identifying linked worktree: %w", err)
+	}
+	store := &databaseStore{commonDir: commonDir}
+	if _, err := os.Lstat(store.recordPath(worktreeID)); os.IsNotExist(err) {
+		return "", false, nil
+	} else if err != nil {
+		return "", false, fmt.Errorf("reading database ownership record: %w", err)
+	}
+
+	repositoryID, err := readRepositoryID(store.stateDir())
+	if err != nil {
+		return "", false, err
+	}
+	store.repoID = repositoryID
+	record, err := store.load(worktreeID)
+	if err != nil {
+		return "", false, err
+	}
+	if record == nil {
+		return "", false, nil
+	}
+	return record.Database, true, nil
+}
+
 func (s *databaseStore) stateDir() string {
 	return filepath.Join(s.commonDir, databaseStateDirectory)
 }
@@ -112,6 +145,19 @@ func (s *databaseStore) repositoryID() (string, error) {
 	id := hex.EncodeToString(bytes)
 	if err := writePrivateFile(path, []byte(id), 0o600); err != nil {
 		return "", fmt.Errorf("writing database repository ID: %w", err)
+	}
+	return id, nil
+}
+
+func readRepositoryID(stateDir string) (string, error) {
+	path := filepath.Join(stateDir, "repository-id")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading database repository ID: %w", err)
+	}
+	id := string(data)
+	if !validRepositoryID(id) {
+		return "", fmt.Errorf("invalid database repository ID in %s", path)
 	}
 	return id, nil
 }
