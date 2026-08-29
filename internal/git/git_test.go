@@ -102,6 +102,21 @@ func TestInspectWorktreeClassifiesFilesystemStates(t *testing.T) {
 	assert.Equal(t, WorktreeStateStale, state)
 }
 
+func TestDetectDefaultBranchUsesOriginHEADName(t *testing.T) {
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev")
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	branch, err := DetectDefaultBranch()
+
+	require.NoError(t, err)
+	assert.Equal(t, "dev", branch)
+}
+
 func TestRemoteHeadsAndTrackingBranchSHA(t *testing.T) {
 	origin := filepath.Join(t.TempDir(), "origin.git")
 	output, err := exec.Command("git", "init", "--bare", "--initial-branch=main", origin).CombinedOutput()
