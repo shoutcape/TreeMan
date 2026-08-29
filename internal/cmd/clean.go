@@ -244,14 +244,29 @@ func writeCleanResults(out interface{ Write([]byte) (int, error) }, render ui.Re
 		removed[databaseName] = struct{}{}
 	}
 	branchWidth := len("TREEBRANCH")
+	hasDatabases := false
 	for _, result := range results {
 		branchWidth = max(branchWidth, len(result.branch))
+		if result.database.status == databaseCleanupPending {
+			hasDatabases = true
+		}
 	}
 	fmt.Fprintln(out, render.Title("Cleanup results"))
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "  %s  %s  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "TREEBRANCH")), render.Header("WORKTREE"), render.Header("BRANCH"), render.Header("DATABASE"))
+	if hasDatabases {
+		fmt.Fprintf(out, "  %s  %s  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "TREEBRANCH")), render.Header("WORKTREE"), render.Header("BRANCH"), render.Header("DATABASE"))
+	} else {
+		fmt.Fprintf(out, "  %s  %s  %s\n", render.Header(fmt.Sprintf("%-*s", branchWidth, "TREEBRANCH")), render.Header("WORKTREE"), render.Header("BRANCH"))
+	}
 	for _, result := range results {
-		fmt.Fprintf(out, "  %s  %s  %s  %s\n", render.Branch(fmt.Sprintf("%-*s", branchWidth, result.branch)), render.Tone(ui.ToneSuccess, "removed"), render.Tone(ui.ToneSuccess, "removed"), renderCleanDatabaseStatus(render, result.database, removed))
+		branch := render.Branch(fmt.Sprintf("%-*s", branchWidth, result.branch))
+		worktree := render.Tone(ui.ToneSuccess, "removed")
+		branchStatus := render.Tone(ui.ToneSuccess, "removed")
+		if hasDatabases {
+			fmt.Fprintf(out, "  %s  %s  %s  %s\n", branch, worktree, branchStatus, renderCleanDatabaseStatus(render, result.database, removed))
+		} else {
+			fmt.Fprintf(out, "  %s  %s  %s\n", branch, worktree, branchStatus)
+		}
 	}
 	fmt.Fprintln(out)
 }
