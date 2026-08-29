@@ -116,15 +116,15 @@ func CurrentWorktreeRoot() (string, error) {
 	return root, nil
 }
 
-// DetectDefaultBranch returns "main" or "master" by inspecting the origin
-// remote. It prefers the fast path (local origin/HEAD ref) and falls back to
-// querying origin with ls-remote.
+// DetectDefaultBranch returns the branch named by origin/HEAD. It prefers the
+// fast path (local origin/HEAD ref) and falls back to querying origin for main
+// or master when that ref is unavailable.
 func DetectDefaultBranch() (string, error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
 	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	if err == nil {
 		b := strings.TrimPrefix(originHead, "origin/")
-		if b == "main" || b == "master" {
+		if b != "" {
 			return b, nil
 		}
 	}
