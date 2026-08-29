@@ -22,12 +22,12 @@ type transitionCleanupSession struct {
 	events *[]string
 }
 
-func (s *transitionCleanupSession) Prepare(string) (func() error, error) {
+func (s *transitionCleanupSession) Prepare(string) (func() error, string, error) {
 	*s.events = append(*s.events, "active")
 	return func() error {
 		*s.events = append(*s.events, "pending_cleanup")
 		return nil
-	}, nil
+	}, "database", nil
 }
 
 func (s *transitionCleanupSession) Flush() error {
@@ -35,9 +35,9 @@ func (s *transitionCleanupSession) Flush() error {
 	return nil
 }
 
-func (s *recordingCleanupSession) Prepare(string) (func() error, error) {
+func (s *recordingCleanupSession) Prepare(string) (func() error, string, error) {
 	*s.events = append(*s.events, "prepare")
-	return nil, nil
+	return nil, "", nil
 }
 
 func (s *recordingCleanupSession) Flush() error {
@@ -128,6 +128,18 @@ func TestRunDeleteDirect_ForceRemovesDirtyWorktreeAndBranch(t *testing.T) {
 	require.NoError(t, runDeleteDirect(&cobra.Command{}, worktree, "feature/remove", true, true))
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/remove")
+}
+
+func TestRunDeleteDirectReportsDeletedWorktree(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/report")
+	chdirForTest(t, repo)
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+
+	require.NoError(t, runDeleteDirect(command, worktree, "feature/report", true, true))
+
+	assert.Contains(t, stderr.String(), "Deleted worktree and branch: feature/report")
 }
 
 func TestRunDeleteDirect_PreservesBranchUsedByAnotherWorktree(t *testing.T) {

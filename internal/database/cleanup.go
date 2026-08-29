@@ -22,26 +22,26 @@ type CleanupBatch struct {
 func NewCleanupBatch() *CleanupBatch                { return newCleanupBatch(defaultBackend()) }
 func newCleanupBatch(backend Backend) *CleanupBatch { return &CleanupBatch{backend: backend} }
 
-// Prepare returns an opaque commit function. Call it only after the worktree
-// and its SHA-guarded branch are deleted.
-func (b *CleanupBatch) Prepare(worktreePath string) (func() error, error) {
+// Prepare returns an opaque commit function and the owned database name. Call
+// the function only after the worktree and its SHA-guarded branch are deleted.
+func (b *CleanupBatch) Prepare(worktreePath string) (func() error, string, error) {
 	store, id, err := databaseStoreForWorktree(worktreePath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	record, err := store.cleanupRecord(id)
 	if err != nil || record == nil {
-		return nil, err
+		return nil, "", err
 	}
 	if b.resolver == nil {
 		b.resolver, err = b.backend.Snapshot()
 		if err != nil {
-			return nil, fmt.Errorf("listing PostgreSQL containers: %w", err)
+			return nil, "", fmt.Errorf("listing PostgreSQL containers: %w", err)
 		}
 	}
 	target, err := b.resolver.ResolveID(record.ContainerID)
 	if err != nil {
-		return nil, fmt.Errorf("finding recorded postgres container: %w", err)
+		return nil, "", fmt.Errorf("finding recorded postgres container: %w", err)
 	}
 	plan := &cleanupPlan{store: store, worktreeID: id, record: *record, containerID: target.ID}
 	committed := false
@@ -57,7 +57,7 @@ func (b *CleanupBatch) Prepare(worktreePath string) (func() error, error) {
 		b.plans = append(b.plans, plan)
 		committed = true
 		return nil
-	}, nil
+	}, record.Database, nil
 }
 
 func (b *CleanupBatch) Flush() error {
