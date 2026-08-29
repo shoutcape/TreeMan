@@ -88,7 +88,7 @@ func TestCleanReportsDatabaseCleanupOutcome(t *testing.T) {
 		expected     []string
 	}{
 		{name: "database present", database: "app_feature", expected: []string{"Cleanup results", "removed app_feature"}},
-		{name: "database absent", expected: []string{"Cleanup results", "not found"}},
+		{name: "database absent", expected: []string{"Cleanup results"}},
 		{name: "partial retry", database: "app_feature", retryRemoved: []string{"app_retried"}, retryErr: assert.AnError, expected: []string{"Recovered pending databases", "app_retried", "pending database cleanup failed", "removed app_feature"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -110,6 +110,11 @@ func TestCleanReportsDatabaseCleanupOutcome(t *testing.T) {
 			output := ui.StripANSI(stderr.String())
 			for _, expected := range test.expected {
 				assert.Contains(t, output, expected)
+			}
+			if test.database == "" {
+				assert.NotContains(t, output, "DATABASE")
+			} else {
+				assert.Contains(t, output, "DATABASE")
 			}
 		})
 	}
@@ -141,10 +146,24 @@ func TestCleanRendersResultsByTreebranch(t *testing.T) {
 	require.NoError(t, runCleanWithClassifier(command, classifier, false, true))
 	output := ui.StripANSI(stderr.String())
 	assert.Contains(t, output, "Cleanup results")
-	assert.Contains(t, output, "TREEBRANCH  WORKTREE  BRANCH  DATABASE")
-	assert.Regexp(t, `(?m)^  feature\s+removed\s+removed\s+not found$`, output)
-	assert.Regexp(t, `(?m)^  second\s+removed\s+removed\s+not found$`, output)
+	assert.Contains(t, output, "TREEBRANCH  WORKTREE  BRANCH")
+	assert.NotContains(t, output, "DATABASE")
+	assert.Regexp(t, `(?m)^  feature\s+removed\s+removed$`, output)
+	assert.Regexp(t, `(?m)^  second\s+removed\s+removed$`, output)
 	assert.NotContains(t, output, "Deleted worktree and branch")
+}
+
+func TestWriteCleanResultsRendersDatabaseColumnForMixedResults(t *testing.T) {
+	var output bytes.Buffer
+	writeCleanResults(&output, ui.NewRenderer(&output, terminal.Capabilities{}), []cleanResult{
+		{branch: "with-database", database: databaseCleanupOutcome{status: databaseCleanupPending, database: "app_feature"}},
+		{branch: "without-database", database: databaseCleanupOutcome{status: databaseCleanupAbsent}},
+	}, []string{"app_feature"})
+
+	cleanOutput := ui.StripANSI(output.String())
+	assert.Regexp(t, `(?m)^  TREEBRANCH\s+WORKTREE\s+BRANCH\s+DATABASE$`, cleanOutput)
+	assert.Regexp(t, `(?m)^  with-database\s+removed\s+removed\s+removed app_feature$`, cleanOutput)
+	assert.Regexp(t, `(?m)^  without-database\s+removed\s+removed\s+not found$`, cleanOutput)
 }
 
 func TestCleanSkipsDirtyMergedWorktreeBeforeClassification(t *testing.T) {
