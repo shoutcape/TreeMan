@@ -85,3 +85,39 @@ func TestStreamPickerRowsTreatsAClosedConsumerAsDone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Less(t, count, 100000)
 }
+
+// A picker whose list is ready up front can let fzf settle it, because there
+// is no wait to shorten.
+func TestPickerArgsLetFzfSettleACompleteList(t *testing.T) {
+	args := pickerArgs(false, " worktrees ", "switch > ")
+
+	assert.Contains(t, args, "--select-1")
+	assert.Contains(t, args, "--exit-0")
+}
+
+// fzf paints nothing while --select-1 or --exit-0 is set, so a streamed picker
+// without a query must not use them: the terminal would stay blank until the
+// first row arrived.
+func TestStreamingPickerArgsDropTheFlagsThatDelayThefirstPaint(t *testing.T) {
+	args := streamingPickerArgs(false, pickerRequest{label: " branches ", prompt: "branch > "})
+
+	assert.NotContains(t, args, "--select-1")
+	assert.NotContains(t, args, "--exit-0")
+	assert.NotContains(t, args, "--query")
+	assert.Contains(t, args, "--header-lines=1")
+	assert.Contains(t, args, "--prompt=branch > ")
+	assert.False(t, pickerSettlesItself(pickerRequest{}))
+}
+
+// With a query only fzf knows how many rows match it, so it keeps the flags
+// and the first paint waits.
+func TestStreamingPickerArgsKeepTheFlagsForAQuery(t *testing.T) {
+	request := pickerRequest{label: " branches ", prompt: "branch > ", query: "feature"}
+	args := streamingPickerArgs(false, request)
+
+	assert.Contains(t, args, "--select-1")
+	assert.Contains(t, args, "--exit-0")
+	assert.Contains(t, args, "--query")
+	assert.Contains(t, args, "feature")
+	assert.True(t, pickerSettlesItself(request))
+}

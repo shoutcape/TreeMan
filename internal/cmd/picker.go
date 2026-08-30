@@ -16,7 +16,8 @@ import (
 
 var errPickerCancelled = errors.New("picker cancelled")
 
-func pickerArgs(color bool, label, prompt string) []string {
+// pickerBaseArgs is the fzf configuration every picker shares.
+func pickerBaseArgs(color bool, label, prompt string) []string {
 	args := []string{
 		"--height=40%",
 		"--layout=reverse",
@@ -25,13 +26,51 @@ func pickerArgs(color bool, label, prompt string) []string {
 		"--with-nth=1",
 		"--border-label", label,
 		"--prompt=" + prompt,
-		"--select-1",
-		"--exit-0",
 	}
 	if color {
 		return append(args, "--ansi", "--color="+ui.FZFColors())
 	}
 	return append(args, "--no-color")
+}
+
+// pickerArgs configures a picker whose whole list is ready before fzf starts.
+// --select-1 and --exit-0 let fzf settle a single-result or empty list without
+// showing anything.
+func pickerArgs(color bool, label, prompt string) []string {
+	return append(pickerBaseArgs(color, label, prompt), "--select-1", "--exit-0")
+}
+
+// streamingPickerArgs configures a picker that is fed while it runs.
+//
+// fzf paints nothing at all while --select-1 or --exit-0 is set, because
+// either can make it exit before it has shown a UI. On a streamed list that
+// leaves the terminal blank until the first row lands, which is most of the
+// wait. So those flags are used only alongside a query, where fzf is the only
+// one that can tell how many rows match it. Without them runStreamingPicker
+// settles the single-result and empty cases itself.
+func streamingPickerArgs(color bool, request pickerRequest) []string {
+	args := append(pickerBaseArgs(color, request.label, request.prompt), "--header-lines=1")
+	if request.query != "" {
+		args = append(args, "--query", request.query, "--select-1", "--exit-0")
+	}
+	return args
+}
+
+// pickerSettlesItself reports whether fzf was given the flags that let it
+// resolve a single-result or empty list on its own.
+func pickerSettlesItself(request pickerRequest) bool {
+	return request.query != ""
+}
+
+// stopPicker ends an fzf that is still waiting for a choice.
+//
+// SIGTERM, not Kill: fzf restores the terminal when it is asked to terminate,
+// while a killed fzf leaves the cursor hidden for everything printed after it.
+func stopPicker(fzfCmd *exec.Cmd) {
+	if err := fzfCmd.Process.Signal(syscall.SIGTERM); err != nil {
+		_ = fzfCmd.Process.Kill()
+	}
+	_ = fzfCmd.Wait()
 }
 
 func pickerRow(display string, index int) string {
@@ -104,10 +143,7 @@ func consumerClosed(err error) bool {
 // It returns the zero-based index of the selected row and the number of rows
 // that were streamed. errPickerCancelled is returned when the user aborts.
 func runStreamingPicker(cmd *cobra.Command, request pickerRequest, produce func(emit func(display string) error) error) (int, int, error) {
-	args := append(pickerArgs(sessionFor(cmd).errorOutput.Color, request.label, request.prompt), "--header-lines=1")
-	if request.query != "" {
-		args = append(args, "--query", request.query)
-	}
+	args := streamingPickerArgs(sessionFor(cmd).errorOutput.Color, request)
 
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -133,9 +169,17 @@ func runStreamingPicker(cmd *cobra.Command, request pickerRequest, produce func(
 
 	if produceErr != nil {
 		// The rows are incomplete, so whatever fzf shows cannot be trusted.
-		_ = fzfCmd.Process.Kill()
-		_ = fzfCmd.Wait()
+		stopPicker(fzfCmd)
 		return 0, count, produceErr
+	}
+
+	if !pickerSettlesItself(request) && count <= 1 {
+		// Do what --select-1 and --exit-0 would have done at end of input.
+		stopPicker(fzfCmd)
+		if count == 0 {
+			return 0, 0, errPickerCancelled
+		}
+		return 0, 1, nil
 	}
 
 	if err := fzfCmd.Wait(); err != nil {
