@@ -43,17 +43,15 @@ treeman benchmark branch-results --warmup 3 --runs 10
 treeman benchmark review-results --warmup 3 --runs 10
 ```
 
-`branch-results` measures forge detection, all branch and open-review API
-pages, local-branch filtering, PR/MR association, and complete picker-row
-rendering. `review-results` measures forge detection, all open-review API
-pages, and complete picker-row rendering. Both report result counts and flag
-count changes between timed runs.
+`branch-results` measures forge detection, the branch preview query, all
+branch API pages, local-branch filtering, per-branch PR/MR association, and
+complete picker-row rendering. `review-results` measures forge detection, all
+open-review API pages, and complete picker-row rendering. Both report result
+counts and flag count changes between timed runs.
 
 Both targets also report the time to the first picker row. Use that value to
-measure what the user sees first. `review-results` streams its rows, so its
-first row comes many seconds before its last row. `branch-results` must wait
-for the open PR/MR query that fills its MR/PR column, so its first row and its
-total time are almost equal.
+measure what the user sees first. Both stream their rows, so the first row
+comes seconds before the last one.
 
 Install [hyperfine](https://github.com/sharkdp/hyperfine) to run the repeatable development benchmark.
 

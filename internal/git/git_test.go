@@ -485,3 +485,23 @@ func gitTestFails(t *testing.T, dir string, args ...string) {
 	output, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
 	require.Errorf(t, err, "git %v unexpectedly succeeded: %s", args, output)
 }
+
+func TestLocalBranchNamesListsEveryLocalBranch(t *testing.T) {
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "branch", "feature/one")
+	gitTest(t, repo, "branch", "feature/two")
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	names, err := LocalBranchNames()
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]struct{}{
+		"main":        {},
+		"feature/one": {},
+		"feature/two": {},
+	}, names)
+}

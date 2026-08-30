@@ -231,6 +231,51 @@ set -euo pipefail
 if [[ "${1:-}" == "api" ]]; then
   endpoint="${2:-}"
   if [[ "$endpoint" == "graphql" ]]; then
+    # The branch picker previews the first refs before paginating the branch
+    # list. An empty preview is valid: the full list still follows.
+    if [[ " $* " == *"refPrefix"* ]]; then
+      printf '%s\n' "${MOCK_GH_REFS:-{\"data\":{\"repository\":{\"refs\":{\"nodes\":[]}}}}}"
+      exit 0
+    fi
+    # The branch picker asks for each branch's own open PR in aliased batches.
+    # Answer one alias per ref variable, in the order they were passed.
+    if [[ " $* " == *"branch0: ref(qualifiedName:"* ]]; then
+      nodes=""
+      index=0
+      while true; do
+        branch=""
+        for arg in "$@"; do
+          if [[ "$arg" == "ref${index}=refs/heads/"* ]]; then
+            branch="${arg#ref${index}=refs/heads/}"
+            break
+          fi
+        done
+        if [[ -z "$branch" ]]; then
+          break
+        fi
+        number=""
+        if [[ -n "${MOCK_GH_BRANCH_PRS:-}" ]]; then
+          IFS=';' read -ra pairs <<< "$MOCK_GH_BRANCH_PRS"
+          for pair in "${pairs[@]}"; do
+            if [[ "$pair" == "${branch}="* ]]; then
+              number="${pair#*=}"
+            fi
+          done
+        fi
+        if [[ -n "$number" ]]; then
+          node="{\"associatedPullRequests\":{\"nodes\":[{\"number\":${number},\"title\":\"Mock PR ${number}\"}]}}"
+        else
+          node="{\"associatedPullRequests\":{\"nodes\":[]}}"
+        fi
+        if [[ -n "$nodes" ]]; then
+          nodes="${nodes},"
+        fi
+        nodes="${nodes}\"branch${index}\":${node}"
+        index=$((index + 1))
+      done
+      printf '%s\n' "{\"data\":{\"repository\":{${nodes}}}}"
+      exit 0
+    fi
     if [[ -n "${MOCK_GH_GRAPHQL:-}" ]]; then
       printf '%s\n' "$MOCK_GH_GRAPHQL"
     else
@@ -564,7 +609,7 @@ git -C "$PR_SOURCE_REPO" push -u origin feature/picker-test >/dev/null
 
 # Mock returns only the new branch (feature/remote-only already exists locally now).
 export MOCK_GH_BRANCHES='[{"name":"feature/picker-test","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-15T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
-export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":99,"title":"Picker test PR","headRefName":"feature/picker-test"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+export MOCK_GH_BRANCH_PRS='feature/picker-test=99'
 
 cd "$MAIN_REPO"
 # FZF_CHOICE=2 picks the first data row (row 1 = header).
@@ -574,6 +619,7 @@ assert_exists "$BRANCH_WT_PICKER"
 [[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected wtb picker to cd into created worktree"
 unset FZF_CHOICE
 unset MOCK_GH_BRANCHES
+unset MOCK_GH_BRANCH_PRS
 unset MOCK_GH_GRAPHQL
 
 # ---------------------------------------------------------------------------

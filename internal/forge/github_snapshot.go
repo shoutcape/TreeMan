@@ -80,9 +80,9 @@ func githubSnapshotBatches(owner, name, defaultBranch string, candidates []Snaps
 }
 
 func githubSnapshotRepository(repoSlug, defaultBranch string, candidates []SnapshotCandidate) (string, string, error) {
-	owner, name, ok := strings.Cut(repoSlug, "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", "", fmt.Errorf("invalid GitHub repository %q", repoSlug)
+	owner, name, err := splitRepoSlug(repoSlug)
+	if err != nil {
+		return "", "", err
 	}
 	if defaultBranch == "" {
 		return "", "", errors.New("GitHub default branch is required")

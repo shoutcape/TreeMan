@@ -801,3 +801,20 @@ func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 	}
 	return errors.Join(errs...)
 }
+
+// LocalBranchNames returns the name of every local branch. Unlike BranchSHAs
+// it needs no candidate list, so a caller that is still streaming remote
+// branches can filter them without knowing the full set up front.
+func LocalBranchNames() (map[string]struct{}, error) {
+	out, err := run("for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil {
+		return nil, fmt.Errorf("could not list local branches: %w", err)
+	}
+	names := make(map[string]struct{})
+	for _, line := range strings.Split(out, "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			names[name] = struct{}{}
+		}
+	}
+	return names, nil
+}

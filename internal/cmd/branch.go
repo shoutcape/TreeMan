@@ -97,12 +97,7 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 		// An exact branch name can be fetched by git without forge discovery or fzf.
 		selected.Name = query
 	} else {
-		data, err := loadBranchPickerData(cmd)
-		if err != nil {
-			return branchWorktreeCreation{}, err
-		}
-		prMap = data.prMap
-		selected, err = pickBranch(cmd, data.branches, query, prMap)
+		selection, err := pickBranchForForge(cmd, query)
 		if err != nil {
 			if errors.Is(err, errPickerCancelled) {
 				fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
@@ -110,6 +105,7 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 			}
 			return branchWorktreeCreation{}, err
 		}
+		selected, prMap = selection.branch, selection.prMap
 	}
 
 	branch := selected.Name
@@ -151,26 +147,75 @@ var (
 	branchPickerPRList        = forge.PRList
 	branchPickerBranchSHAs    = git.BranchSHAs
 	branchPickerDefaultBranch = git.DetectDefaultBranch
+
+	branchPickerPreview       = forge.GitHubBranchPRPreview
+	branchPickerBranchPRs     = forge.GitHubBranchPRs
+	branchPickerBranchPages   = forge.BranchListPages
+	branchPickerLocalBranches = git.LocalBranchNames
 )
 
-// loadBranchPickerData fetches and prepares every branch that wtb can present.
-func loadBranchPickerData(cmd *cobra.Command) (branchPickerData, error) {
+// branchForge is the repository the branch picker will query.
+type branchForge struct {
+	forgeType forge.Type
+	repoSlug  string
+	host      string
+}
+
+func resolveBranchForge() (branchForge, error) {
 	remoteURL, err := git.OriginRemoteURL()
 	if err != nil {
-		return branchPickerData{}, err
+		return branchForge{}, err
 	}
 
 	forgeType, repoSlug, host, err := forge.ResolveFromRemote(remoteURL)
 	if err != nil {
-		return branchPickerData{}, err
+		return branchForge{}, err
 	}
 
 	cliTool := forge.CLITool(forgeType)
 	if _, err := exec.LookPath(cliTool); err != nil {
-		return branchPickerData{}, fmt.Errorf("%s is required for branch listing with %s repos. Install it from %s",
+		return branchForge{}, fmt.Errorf("%s is required for branch listing with %s repos. Install it from %s",
 			cliTool, forgeType, cliInstallURL(forgeType))
 	}
-	return loadBranchPickerDataForForge(cmd, forgeType, repoSlug, host)
+	return branchForge{forgeType: forgeType, repoSlug: repoSlug, host: host}, nil
+}
+
+// branchSelection is the branch the user picked, with the PR metadata that was
+// gathered for the picker so the summary can name the branch's open review.
+type branchSelection struct {
+	branch forge.BranchInfo
+	prMap  map[string]forge.PRInfo
+}
+
+// pickBranchForForge runs the picker that suits the forge. GitHub streams rows
+// as they are enriched; GitLab still builds the whole list first.
+func pickBranchForForge(cmd *cobra.Command, query string) (branchSelection, error) {
+	forgeInfo, err := resolveBranchForge()
+	if err != nil {
+		return branchSelection{}, err
+	}
+	if forgeInfo.forgeType == forge.GitHub {
+		return pickGitHubBranch(cmd, forgeInfo.repoSlug, query)
+	}
+
+	data, err := loadBranchPickerDataForForge(cmd, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
+	if err != nil {
+		return branchSelection{}, err
+	}
+	branch, err := pickBranch(cmd, data.branches, query, data.prMap)
+	if err != nil {
+		return branchSelection{}, err
+	}
+	return branchSelection{branch: branch, prMap: data.prMap}, nil
+}
+
+// loadBranchPickerData fetches and prepares every branch that wtb can present.
+func loadBranchPickerData(cmd *cobra.Command) (branchPickerData, error) {
+	forgeInfo, err := resolveBranchForge()
+	if err != nil {
+		return branchPickerData{}, err
+	}
+	return loadBranchPickerDataForForge(cmd, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
 }
 
 func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repoSlug, host string) (branchPickerData, error) {
@@ -247,22 +292,217 @@ func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if _, err := git.MainWorktreeRoot(); err != nil {
 		return 0, 0, err
 	}
-	// Timed from before the fetch: the branch picker cannot emit a row until
-	// the concurrent PR/MR lookup that fills its MR column has finished.
-	writer := newFirstRowWriter(io.Discard, time.Now)
-	data, err := loadBranchPickerData(cmd)
+	forgeInfo, err := resolveBranchForge()
 	if err != nil {
 		return 0, 0, err
 	}
+	// Timed from before the fetch, so the reported first row includes every
+	// API round trip the picker waits on.
+	writer := newFirstRowWriter(io.Discard, time.Now)
 	render := commandRenderer(cmd)
+
+	if forgeInfo.forgeType == forge.GitHub {
+		stream, err := newBranchStream(render)
+		if err != nil {
+			return 0, 0, err
+		}
+		count, err := streamPickerRows(writer, render.BranchHeader(), stream.produce(forgeInfo.repoSlug))
+		if err != nil {
+			return 0, 0, err
+		}
+		return count, writer.firstRow(), nil
+	}
+
+	data, err := loadBranchPickerDataForForge(cmd, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
+	if err != nil {
+		return 0, 0, err
+	}
 	if _, err := streamPickerRows(writer, render.BranchHeader(), streamBranchRows(render, data.branches, data.prMap)); err != nil {
 		return 0, 0, err
 	}
 	return len(data.branches), writer.firstRow(), nil
 }
 
-// pickBranch opens an fzf picker populated with remote branches and returns
-// the selected branch. If query is provided, it pre-filters the list.
+// pickGitHubBranch opens the picker before the branch list exists and feeds it
+// rows as they are enriched with their open PR.
+func pickGitHubBranch(cmd *cobra.Command, repoSlug, query string) (branchSelection, error) {
+	if !canInteract(cmd) {
+		return branchSelection{}, fmt.Errorf("interactive selection is unavailable; pass an exact branch name")
+	}
+	if _, err := exec.LookPath("fzf"); err != nil {
+		if query != "" {
+			return branchSelection{}, fmt.Errorf("no exact match for %q and fzf is not installed for interactive selection", query)
+		}
+		return branchSelection{}, fmt.Errorf("fzf is required to pick a remote branch; pass an exact branch name or install fzf")
+	}
+
+	render := commandRenderer(cmd)
+	stream, err := newBranchStream(render)
+	if err != nil {
+		return branchSelection{}, err
+	}
+	index, count, err := runStreamingPicker(cmd, pickerRequest{
+		label:  " remote branches ",
+		prompt: "branch > ",
+		query:  query,
+		header: render.BranchHeader(),
+	}, stream.produce(repoSlug))
+	if err != nil {
+		if errors.Is(err, errPickerCancelled) && count == 0 {
+			return branchSelection{}, fmt.Errorf("no remote branches available (all already exist locally or only default branch found)")
+		}
+		return branchSelection{}, err
+	}
+	return branchSelection{branch: stream.branches[index], prMap: stream.prMap}, nil
+}
+
+// branchStream renders branch/PR pairs into picker rows, keeping the branches
+// it emitted so the selected row index can be resolved back to a branch.
+//
+// Rows arrive from two sources that overlap — a preview query and the enriched
+// branch list — so it drops branches it has already shown.
+type branchStream struct {
+	render        ui.Renderer
+	defaultBranch string
+	localBranches map[string]struct{}
+	seen          map[string]struct{}
+	branches      []forge.BranchInfo
+	prMap         map[string]forge.PRInfo
+}
+
+func newBranchStream(render ui.Renderer) (*branchStream, error) {
+	localBranches, err := branchPickerLocalBranches()
+	if err != nil {
+		return nil, err
+	}
+	// A repository with no origin/HEAD still lists fine; it just cannot hide
+	// its default branch.
+	defaultBranch, _ := branchPickerDefaultBranch()
+	return &branchStream{
+		render:        render,
+		defaultBranch: defaultBranch,
+		localBranches: localBranches,
+		seen:          make(map[string]struct{}),
+		prMap:         make(map[string]forge.PRInfo),
+	}, nil
+}
+
+// offered reports whether the picker may show a branch. It reads only fields
+// fixed at construction, so the branch-list goroutine can call it to skip
+// branches before they are enriched.
+func (s *branchStream) offered(name string) bool {
+	if name == "" || name == s.defaultBranch {
+		return false
+	}
+	_, existsLocally := s.localBranches[name]
+	return !existsLocally
+}
+
+func (s *branchStream) keep(branches []forge.BranchInfo) []forge.BranchInfo {
+	kept := branches[:0:0]
+	for _, branch := range branches {
+		if s.offered(branch.Name) {
+			kept = append(kept, branch)
+		}
+	}
+	return kept
+}
+
+// emit writes one row per branch the picker has not shown yet.
+func (s *branchStream) emit(group []forge.BranchPR, write func(string) error) error {
+	for _, entry := range group {
+		name := entry.Branch.Name
+		if !s.offered(name) {
+			continue
+		}
+		if _, shown := s.seen[name]; shown {
+			continue
+		}
+		s.seen[name] = struct{}{}
+		s.branches = append(s.branches, entry.Branch)
+
+		number := 0
+		if entry.HasPR {
+			s.prMap[name] = entry.PR
+			number = entry.PR.Number
+		}
+		if err := write(s.render.BranchRow(name, entry.Branch.Date, number)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// branchGroupBuffer lets enrichment keep running while the picker is still
+// writing earlier rows.
+const branchGroupBuffer = 16
+
+// produce streams every branch the picker can offer.
+//
+// A preview query returns the first branches with their PRs in one round trip,
+// which is what puts rows on screen before the branch list has been paginated.
+// The full list is enriched concurrently in the background and drained after,
+// re-showing nothing the preview already covered.
+func (s *branchStream) produce(repoSlug string) func(write func(string) error) error {
+	return func(write func(string) error) error {
+		type preview struct {
+			group []forge.BranchPR
+			err   error
+		}
+		previews := make(chan preview, 1)
+		go func() {
+			group, err := branchPickerPreview(repoSlug)
+			previews <- preview{group: group, err: err}
+		}()
+
+		groups := make(chan []forge.BranchPR, branchGroupBuffer)
+		// Closed on return so the enrichment goroutine stops queueing rows
+		// once the picker is gone.
+		stopped := make(chan struct{})
+		defer close(stopped)
+		enriched := make(chan error, 1)
+		go func() {
+			defer close(groups)
+			enriched <- branchPickerBranchPRs(repoSlug, func(add func([]forge.BranchInfo) error) error {
+				return branchPickerBranchPages(forge.GitHub, repoSlug, "", func(page []forge.BranchInfo) error {
+					return add(s.keep(page))
+				})
+			}, func(group []forge.BranchPR) error {
+				select {
+				case groups <- group:
+					return nil
+				case <-stopped:
+					return errBranchStreamStopped
+				}
+			})
+		}()
+
+		// A failed preview costs nothing but the head start: the full list is
+		// already being fetched and carries the same branches.
+		if result := <-previews; result.err == nil {
+			if err := s.emit(result.group, write); err != nil {
+				return err
+			}
+		}
+		for group := range groups {
+			if err := s.emit(group, write); err != nil {
+				return err
+			}
+		}
+		if err := <-enriched; err != nil {
+			return fmt.Errorf("failed to list remote branches: %w", err)
+		}
+		return nil
+	}
+}
+
+// errBranchStreamStopped unwinds the enrichment goroutine when the picker
+// closes before the whole list has been shown.
+var errBranchStreamStopped = errors.New("branch row stream stopped")
+
+// pickBranch opens an fzf picker populated with an already-fetched list of
+// remote branches and returns the selected branch. GitHub uses
+// pickGitHubBranch, which streams instead. If query is provided, it pre-filters the list.
 // If query is an exact match, it auto-selects without showing the picker.
 // prMap maps branch names to their associated PR/MR info (may be nil).
 func pickBranch(cmd *cobra.Command, branches []forge.BranchInfo, query string, prMap map[string]forge.PRInfo) (forge.BranchInfo, error) {
@@ -298,11 +538,13 @@ func pickBranch(cmd *cobra.Command, branches []forge.BranchInfo, query string, p
 	return branches[index], nil
 }
 
-// streamBranchRows emits one picker row per remote branch.
+// streamBranchRows emits one picker row per remote branch from a list that has
+// already been fetched.
 //
-// Unlike the review picker these rows cannot be streamed straight from the API:
-// the MR/PR column comes from a second, concurrent query, and a row written
-// before that query lands would claim a branch has no open review.
+// This is the GitLab path. Its MR column comes from a separate query for every
+// open MR, so no row can be written until that query lands. GitHub instead
+// asks each branch for its own PR and streams rows as they are enriched; see
+// branchStream.
 func streamBranchRows(render ui.Renderer, branches []forge.BranchInfo, prMap map[string]forge.PRInfo) func(emit func(string) error) error {
 	return func(emit func(string) error) error {
 		for _, branch := range branches {

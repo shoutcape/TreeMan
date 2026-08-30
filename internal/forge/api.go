@@ -177,9 +177,9 @@ func githubPRList(repoSlug string) ([]PRInfo, error) {
 // concurrently; delivering them one at a time is what lets a picker show the
 // first results while the rest are still in flight.
 func githubPRListPages(repoSlug string, onPage func([]PRInfo) error) error {
-	owner, name, ok := strings.Cut(repoSlug, "/")
-	if !ok || owner == "" || name == "" {
-		return fmt.Errorf("invalid GitHub repository %q", repoSlug)
+	owner, name, err := splitRepoSlug(repoSlug)
+	if err != nil {
+		return err
 	}
 
 	cursor := ""
