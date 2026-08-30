@@ -322,11 +322,15 @@ func TestPaginatedLists(t *testing.T) {
 	})
 
 	t.Run("github branches", func(t *testing.T) {
-		previous := githubAPICall
-		githubAPICall = func(string) ([]byte, error) {
-			return []byte(`[{"name":"one","commit":{"commit":{"committer":{"date":"2026-08-01T10:00:00Z"}}}}][{"name":"two","commit":{"commit":{"committer":{"date":"2026-08-02T10:00:00Z"}}}}]`), nil
+		previous := githubPageCall
+		githubPageCall = func(endpoint string) (string, []byte, error) {
+			if endpoint == "repos/owner/repo/branches?per_page=100" {
+				return `<https://api.github.com/x?page=2>; rel="last"`,
+					[]byte(`[{"name":"one","commit":{"commit":{"committer":{"date":"2026-08-01T10:00:00Z"}}}}]`), nil
+			}
+			return "", []byte(`[{"name":"two","commit":{"commit":{"committer":{"date":"2026-08-02T10:00:00Z"}}}}]`), nil
 		}
-		t.Cleanup(func() { githubAPICall = previous })
+		t.Cleanup(func() { githubPageCall = previous })
 
 		branches, err := githubBranchList("owner/repo")
 		require.NoError(t, err)

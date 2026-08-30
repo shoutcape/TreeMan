@@ -49,6 +49,12 @@ rendering. `review-results` measures forge detection, all open-review API
 pages, and complete picker-row rendering. Both report result counts and flag
 count changes between timed runs.
 
+Both targets also report the time to the first picker row. Use that value to
+measure what the user sees first. `review-results` streams its rows, so its
+first row comes many seconds before its last row. `branch-results` must wait
+for the open PR/MR query that fills its MR/PR column, so its first row and its
+total time are almost equal.
+
 Install [hyperfine](https://github.com/sharkdp/hyperfine) to run the repeatable development benchmark.
 
 ```bash

@@ -3,9 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
-	"strings"
+	"time"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
@@ -236,21 +237,28 @@ func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repo
 	return data, nil
 }
 
-// branchPickerResults loads and renders the complete wtb picker payload without
-// starting fzf, returning the number of available branches.
-func branchPickerResults(cmd *cobra.Command) (int, error) {
+// branchPickerResults streams the whole wtb picker payload without starting
+// fzf, returning the number of available branches and how long the first row
+// took.
+func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {
-		return 0, fmt.Errorf("not inside a git repository")
+		return 0, 0, fmt.Errorf("not inside a git repository")
 	}
 	if _, err := git.MainWorktreeRoot(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
+	// Timed from before the fetch: the branch picker cannot emit a row until
+	// the concurrent PR/MR lookup that fills its MR column has finished.
+	writer := newFirstRowWriter(io.Discard, time.Now)
 	data, err := loadBranchPickerData(cmd)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	_ = branchPickerPayload(cmd, data.branches, data.prMap)
-	return len(data.branches), nil
+	render := commandRenderer(cmd)
+	if _, err := streamPickerRows(writer, render.BranchHeader(), streamBranchRows(render, data.branches, data.prMap)); err != nil {
+		return 0, 0, err
+	}
+	return len(data.branches), writer.firstRow(), nil
 }
 
 // pickBranch opens an fzf picker populated with remote branches and returns
@@ -277,50 +285,35 @@ func pickBranch(cmd *cobra.Command, branches []forge.BranchInfo, query string, p
 		return forge.BranchInfo{}, fmt.Errorf("fzf is required to pick a remote branch; pass an exact branch name or install fzf")
 	}
 
-	payload := branchPickerPayload(cmd, branches, prMap)
-
-	// Pipe to fzf.
-	fzfArgs := append(pickerArgs(sessionFor(cmd).errorOutput.Color, " remote branches ", "branch > "), "--header-lines=1")
-	if query != "" {
-		fzfArgs = append(fzfArgs, "--query", query)
-	}
-
-	fzfCmd := exec.Command("fzf", fzfArgs...)
-	fzfCmd.Stdin = strings.NewReader(payload)
-	fzfCmd.Stderr = cmd.ErrOrStderr()
-
-	out, err := fzfCmd.Output()
+	render := commandRenderer(cmd)
+	index, _, err := runStreamingPicker(cmd, pickerRequest{
+		label:  " remote branches ",
+		prompt: "branch > ",
+		query:  query,
+		header: render.BranchHeader(),
+	}, streamBranchRows(render, branches, prMap))
 	if err != nil {
-		if pickerCancelled(err) {
-			return forge.BranchInfo{}, errPickerCancelled
-		}
-		return forge.BranchInfo{}, fmt.Errorf("fzf failed while selecting a branch: %w", err)
-	}
-
-	selection := strings.TrimSpace(string(out))
-	if selection == "" {
-		return forge.BranchInfo{}, errPickerCancelled
-	}
-
-	index := pickerSelectionIndex(selection, len(branches))
-	if index < 0 {
-		return forge.BranchInfo{}, fmt.Errorf("could not map fzf selection to a branch")
+		return forge.BranchInfo{}, err
 	}
 	return branches[index], nil
 }
 
-func branchPickerPayload(cmd *cobra.Command, branches []forge.BranchInfo, prMap map[string]forge.PRInfo) string {
-	var sb strings.Builder
-	render := commandRenderer(cmd)
-	sb.WriteString(render.BranchHeader())
-	sb.WriteByte('\n')
-	for i, b := range branches {
-		mrNumber := 0
-		if pr, ok := prMap[b.Name]; ok {
-			mrNumber = pr.Number
+// streamBranchRows emits one picker row per remote branch.
+//
+// Unlike the review picker these rows cannot be streamed straight from the API:
+// the MR/PR column comes from a second, concurrent query, and a row written
+// before that query lands would claim a branch has no open review.
+func streamBranchRows(render ui.Renderer, branches []forge.BranchInfo, prMap map[string]forge.PRInfo) func(emit func(string) error) error {
+	return func(emit func(string) error) error {
+		for _, branch := range branches {
+			mrNumber := 0
+			if pr, ok := prMap[branch.Name]; ok {
+				mrNumber = pr.Number
+			}
+			if err := emit(render.BranchRow(branch.Name, branch.Date, mrNumber)); err != nil {
+				return err
+			}
 		}
-		sb.WriteString(pickerRow(render.BranchRow(b.Name, b.Date, mrNumber), i))
-		sb.WriteByte('\n')
+		return nil
 	}
-	return sb.String()
 }

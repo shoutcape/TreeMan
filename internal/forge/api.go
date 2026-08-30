@@ -42,13 +42,25 @@ func PRMetadata(forge Type, repoSlug, host string, prNumber int) (PRInfo, error)
 
 // PRList returns all open PRs/MRs via gh or glab.
 func PRList(forge Type, repoSlug, host string) ([]PRInfo, error) {
+	var prs []PRInfo
+	err := PRListPages(forge, repoSlug, host, func(page []PRInfo) error {
+		prs = append(prs, page...)
+		return nil
+	})
+	return prs, err
+}
+
+// PRListPages delivers open PRs/MRs to onPage one API page at a time so a
+// caller can render results before the whole list has arrived. Pages are
+// delivered in API order; an error from onPage stops the walk.
+func PRListPages(forge Type, repoSlug, host string, onPage func([]PRInfo) error) error {
 	switch forge {
 	case GitHub:
-		return githubPRList(repoSlug)
+		return githubPRListPages(repoSlug, onPage)
 	case GitLab:
-		return gitlabMRList(repoSlug, host)
+		return gitlabMRListPages(repoSlug, host, onPage)
 	default:
-		return nil, fmt.Errorf("unsupported forge: %q", forge)
+		return fmt.Errorf("unsupported forge: %q", forge)
 	}
 }
 
@@ -92,13 +104,25 @@ func FetchRef(forge Type, prNumber int) string {
 // BranchList returns all remote branches via gh or glab.
 // Returns branch names and last commit dates.
 func BranchList(forge Type, repoSlug, host string) ([]BranchInfo, error) {
+	var branches []BranchInfo
+	err := BranchListPages(forge, repoSlug, host, func(page []BranchInfo) error {
+		branches = append(branches, page...)
+		return nil
+	})
+	return branches, err
+}
+
+// BranchListPages delivers remote branches to onPage one API page at a time so
+// a caller can render results before the whole list has arrived. Pages are
+// delivered in API order; an error from onPage stops the walk.
+func BranchListPages(forge Type, repoSlug, host string, onPage func([]BranchInfo) error) error {
 	switch forge {
 	case GitHub:
-		return githubBranchList(repoSlug)
+		return githubBranchListPages(repoSlug, onPage)
 	case GitLab:
-		return gitlabBranchList(repoSlug, host)
+		return gitlabBranchListPages(repoSlug, host, onPage)
 	default:
-		return nil, fmt.Errorf("unsupported forge: %q", forge)
+		return fmt.Errorf("unsupported forge: %q", forge)
 	}
 }
 
@@ -140,12 +164,24 @@ func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 }
 
 func githubPRList(repoSlug string) ([]PRInfo, error) {
+	var prs []PRInfo
+	err := githubPRListPages(repoSlug, func(page []PRInfo) error {
+		prs = append(prs, page...)
+		return nil
+	})
+	return prs, err
+}
+
+// githubPRListPages walks the GraphQL cursor pagination, handing each page to
+// onPage as it arrives. Cursors are opaque, so the pages cannot be requested
+// concurrently; delivering them one at a time is what lets a picker show the
+// first results while the rest are still in flight.
+func githubPRListPages(repoSlug string, onPage func([]PRInfo) error) error {
 	owner, name, ok := strings.Cut(repoSlug, "/")
 	if !ok || owner == "" || name == "" {
-		return nil, fmt.Errorf("invalid GitHub repository %q", repoSlug)
+		return fmt.Errorf("invalid GitHub repository %q", repoSlug)
 	}
 
-	var prs []PRInfo
 	cursor := ""
 	seenCursors := make(map[string]struct{})
 	for {
@@ -155,21 +191,23 @@ func githubPRList(repoSlug string) ([]PRInfo, error) {
 		}
 		out, err := githubGraphQLCall(githubPRListQuery, variables)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		page, err := parseGitHubPRListPage(out)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		prs = append(prs, page.prs...)
+		if err := onPage(page.prs); err != nil {
+			return err
+		}
 		if !page.hasNextPage {
-			return prs, nil
+			return nil
 		}
 		if page.endCursor == "" {
-			return nil, errors.New("gh: PR list pagination cursor did not advance")
+			return errors.New("gh: PR list pagination cursor did not advance")
 		}
 		if _, seen := seenCursors[page.endCursor]; seen {
-			return nil, errors.New("gh: PR list pagination cursor did not advance")
+			return errors.New("gh: PR list pagination cursor did not advance")
 		}
 		seenCursors[page.endCursor] = struct{}{}
 		cursor = page.endCursor
@@ -304,12 +342,28 @@ func ghGraphQLArgs(query string, variables map[string]string) []string {
 }
 
 func githubBranchList(repoSlug string) ([]BranchInfo, error) {
-	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
-	out, err := githubAPICall(endpoint)
-	if err != nil {
-		return nil, err
-	}
+	var branches []BranchInfo
+	err := githubBranchListPages(repoSlug, func(page []BranchInfo) error {
+		branches = append(branches, page...)
+		return nil
+	})
+	return branches, err
+}
 
+// githubBranchListPages hands each REST page of branches to onPage. Pages
+// after the first are requested concurrently by fetchGitHubPages.
+func githubBranchListPages(repoSlug string, onPage func([]BranchInfo) error) error {
+	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
+	return fetchGitHubPages(endpoint, func(raw []byte) error {
+		branches, err := parseGitHubBranchPage(raw)
+		if err != nil {
+			return err
+		}
+		return onPage(branches)
+	})
+}
+
+func parseGitHubBranchPage(raw []byte) ([]BranchInfo, error) {
 	data, err := decodePaginated[struct {
 		Name   string `json:"name"`
 		Commit struct {
@@ -319,7 +373,7 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 				} `json:"committer"`
 			} `json:"commit"`
 		} `json:"commit"`
-	}](out)
+	}](raw)
 	if err != nil {
 		return nil, fmt.Errorf("gh: parsing branch list: %w", err)
 	}
@@ -388,6 +442,16 @@ func gitlabMRList(repoSlug, host string) ([]PRInfo, error) {
 		})
 	}
 	return mrs, nil
+}
+
+// gitlabMRListPages delivers the MR list as one page. glab handles pagination
+// inside a single --paginate invocation, so there is nothing to stream.
+func gitlabMRListPages(repoSlug, host string, onPage func([]PRInfo) error) error {
+	mrs, err := gitlabMRList(repoSlug, host)
+	if err != nil {
+		return err
+	}
+	return onPage(mrs)
 }
 
 // decodePaginated reads the consecutive JSON arrays emitted by gh and glab
@@ -469,6 +533,17 @@ func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
 		})
 	}
 	return branches, nil
+}
+
+// gitlabBranchListPages delivers the branch list as one page. glab handles
+// pagination inside a single --paginate invocation, so there is nothing to
+// stream.
+func gitlabBranchListPages(repoSlug, host string, onPage func([]BranchInfo) error) error {
+	branches, err := gitlabBranchList(repoSlug, host)
+	if err != nil {
+		return err
+	}
+	return onPage(branches)
 }
 
 // ---------------------------------------------------------------------------

@@ -248,6 +248,11 @@ if [[ "${1:-}" == "api" ]]; then
       exit 0
       ;;
     *"/branches?per_page=100")
+      # TreeMan requests branch pages with --include, so answer with the
+      # response headers real gh prints. One page means no Link header.
+      if [[ " $* " == *" --include "* ]]; then
+        printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n'
+      fi
       printf '%s\n' "${MOCK_GH_BRANCHES:-[]}"
       exit 0
       ;;

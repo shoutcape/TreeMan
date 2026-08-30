@@ -44,15 +44,17 @@ func TestBenchmarkReportsResultCounts(t *testing.T) {
 	cmd.SetErr(&stderr)
 	calls := 0
 
-	require.NoError(t, runBenchmarkIterations(cmd, "branch-results", 1, 2, resultCountRunner(func(*cobra.Command) (int, error) {
+	require.NoError(t, runBenchmarkIterations(cmd, "branch-results", 1, 2, resultCountRunner(func(*cobra.Command) (int, time.Duration, error) {
 		calls++
-		return calls, nil
+		return calls, time.Duration(calls) * 100 * time.Millisecond, nil
 	})))
 
 	assert.Contains(t, stderr.String(), "run  1/2")
 	assert.Contains(t, stderr.String(), "2 results")
 	assert.Contains(t, stderr.String(), "3 results")
 	assert.Contains(t, stderr.String(), "results: 2-3 (changed during benchmark)")
+	assert.Contains(t, stderr.String(), "first 200.0 ms")
+	assert.Contains(t, stderr.String(), "first result: mean 250.0 ms   min 200.0 ms   max 300.0 ms")
 }
 
 func TestBenchmarkRunsTargetAndSuppressesItsOutput(t *testing.T) {
@@ -202,4 +204,42 @@ func TestFormatBenchmarkDuration(t *testing.T) {
 	assert.Equal(t, "2.000 s", formatDuration(2*time.Second))
 	assert.Equal(t, "2.5 ms", formatDuration(2500*time.Microsecond))
 	assert.Equal(t, "2.5 us", formatDuration(2500*time.Nanosecond))
+}
+
+func TestFirstRowWriterTimesTheRowAfterTheHeader(t *testing.T) {
+	clock := time.Unix(0, 0)
+	out := &bytes.Buffer{}
+	writer := newFirstRowWriter(out, func() time.Time { return clock })
+
+	clock = clock.Add(2 * time.Second)
+	_, err := writer.Write([]byte("HEADER\n"))
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), writer.firstRow(), "the header is not a result")
+
+	clock = clock.Add(3 * time.Second)
+	_, err = writer.Write([]byte("row one\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, writer.firstRow())
+
+	clock = clock.Add(10 * time.Second)
+	_, err = writer.Write([]byte("row two\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, writer.firstRow(), "later rows must not overwrite the first")
+
+	assert.Equal(t, "HEADER\nrow one\nrow two\n", out.String())
+}
+
+func TestFirstRowWriterReportsNothingWithoutRows(t *testing.T) {
+	writer := newFirstRowWriter(io.Discard, time.Now)
+
+	_, err := writer.Write([]byte("HEADER\n"))
+	require.NoError(t, err)
+
+	assert.Equal(t, time.Duration(0), writer.firstRow())
+}
+
+func TestFormatBenchmarkFirstResults(t *testing.T) {
+	assert.Equal(t, "first result: unavailable", formatBenchmarkFirstResults(nil))
+	assert.Equal(t, "first result: mean 500.0 ms   min 400.0 ms   max 600.0 ms",
+		formatBenchmarkFirstResults([]time.Duration{400 * time.Millisecond, 500 * time.Millisecond, 600 * time.Millisecond}))
 }
