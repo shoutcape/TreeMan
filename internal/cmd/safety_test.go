@@ -462,6 +462,16 @@ func gitTest(t *testing.T, dir string, args ...string) {
 	require.NoErrorf(t, err, "git %v failed: %s", args, output)
 }
 
+// gitTestOutput is gitTest for commands whose output the test inspects.
+func gitTestOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git %v failed: %s", args, output)
+	return string(output)
+}
+
 func gitTestFails(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

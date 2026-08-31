@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
@@ -23,7 +24,7 @@ func newBenchmarkCmd() *cobra.Command {
 		Use:       "benchmark [command] [target]",
 		Short:     "Measure execution time of a treeman command",
 		Args:      cobra.RangeArgs(0, 2),
-		ValidArgs: []string{"list", "branch", "review", "branch-results", "review-results"},
+		ValidArgs: []string{"list", "branch", "review", "delete", "branch-results", "review-results"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := "list"
 			if len(args) == 1 {
@@ -42,55 +43,119 @@ func newBenchmarkCmd() *cobra.Command {
 	return cmd
 }
 
-func runBenchmark(cmd *cobra.Command, target, argument string, warmup, runs int) error {
+func runBenchmark(cmd *cobra.Command, target, argument string, warmup, runs int) (err error) {
+	resolved, err := newBenchmarkTarget(target, argument)
+	// Registered before the error check so a sandbox always gets removed, even
+	// if a future target starts returning one alongside an error.
+	defer func() { err = errors.Join(err, resolved.sandbox.close()) }()
+	if err != nil {
+		return err
+	}
+	return runBenchmarkIterations(cmd, resolved, warmup, runs, time.Now)
+}
+
+// benchmarkTarget is one resolved benchmark: the label reported in its header,
+// the runner that produces each iteration, and the sandbox those iterations
+// run in. A zero sandbox means the target measures the current repository in
+// place, and closing it is a no-op.
+type benchmarkTarget struct {
+	label   string
+	runner  benchmarkRunner
+	sandbox benchmarkSandbox
+}
+
+// newBenchmarkTarget validates a target and its argument and builds the
+// benchmark for it. On failure nothing is left open: the sandbox constructors
+// close their own sandbox before returning an error.
+func newBenchmarkTarget(target, argument string) (benchmarkTarget, error) {
+	rejectArgument := func() error {
+		if argument != "" {
+			return fmt.Errorf("benchmark target %s does not accept an argument", target)
+		}
+		return nil
+	}
+
 	switch target {
 	case "list":
-		if argument != "" {
-			return fmt.Errorf("benchmark target list does not accept an argument")
+		if err := rejectArgument(); err != nil {
+			return benchmarkTarget{}, err
 		}
-		return runBenchmarkIterations(cmd, target, warmup, runs, func(cmd *cobra.Command) (benchmarkIteration, error) {
-			return benchmarkIteration{}, runList(cmd, false)
-		})
+		runner := func(cmd *cobra.Command) (*benchmarkIteration, error) {
+			return &benchmarkIteration{run: func() error { return runList(cmd, false) }}, nil
+		}
+		return benchmarkTarget{label: target, runner: runner}, nil
 	case "branch":
 		if argument == "" {
-			return fmt.Errorf("benchmark target branch requires an exact remote branch name")
+			return benchmarkTarget{}, fmt.Errorf("benchmark target branch requires an exact remote branch name")
 		}
-		runner, closeSandbox, err := newBranchBenchmarkRunner(argument)
+		runner, sandbox, err := newBranchBenchmarkRunner(argument)
 		if err != nil {
-			return err
+			return benchmarkTarget{}, err
 		}
-		return runIsolatedBenchmark(cmd, target+" "+argument, warmup, runs, runner, closeSandbox)
+		return benchmarkTarget{label: target + " " + argument, runner: runner, sandbox: sandbox}, nil
 	case "review":
 		if argument == "" {
-			return fmt.Errorf("benchmark target review requires a PR or MR number")
+			return benchmarkTarget{}, fmt.Errorf("benchmark target review requires a PR or MR number")
 		}
 		if _, err := validate.PRNumber(argument); err != nil {
-			return fmt.Errorf("benchmark target review: %w", err)
+			return benchmarkTarget{}, fmt.Errorf("benchmark target review: %w", err)
 		}
-		runner, closeSandbox, err := newReviewBenchmarkRunner(argument)
+		runner, sandbox, err := newReviewBenchmarkRunner(argument)
 		if err != nil {
-			return err
+			return benchmarkTarget{}, err
 		}
-		return runIsolatedBenchmark(cmd, target+" "+argument, warmup, runs, runner, closeSandbox)
+		return benchmarkTarget{label: target + " " + argument, runner: runner, sandbox: sandbox}, nil
+	case "delete":
+		if err := rejectArgument(); err != nil {
+			return benchmarkTarget{}, err
+		}
+		runner, sandbox, err := newDeleteBenchmarkRunner()
+		if err != nil {
+			return benchmarkTarget{}, err
+		}
+		return benchmarkTarget{label: target, runner: runner, sandbox: sandbox}, nil
 	case "branch-results":
-		if argument != "" {
-			return fmt.Errorf("benchmark target branch-results does not accept an argument")
+		if err := rejectArgument(); err != nil {
+			return benchmarkTarget{}, err
 		}
-		return runBenchmarkIterations(cmd, target, warmup, runs, resultCountRunner(branchPickerResults))
+		return benchmarkTarget{label: target, runner: resultCountRunner(branchPickerResults)}, nil
 	case "review-results":
-		if argument != "" {
-			return fmt.Errorf("benchmark target review-results does not accept an argument")
+		if err := rejectArgument(); err != nil {
+			return benchmarkTarget{}, err
 		}
-		return runBenchmarkIterations(cmd, target, warmup, runs, resultCountRunner(reviewPickerResults))
+		return benchmarkTarget{label: target, runner: resultCountRunner(reviewPickerResults)}, nil
 	default:
-		return fmt.Errorf("unknown benchmark target %q (available: list, branch, review, branch-results, review-results)", target)
+		return benchmarkTarget{}, fmt.Errorf("unknown benchmark target %q (available: list, branch, review, delete, branch-results, review-results)", target)
 	}
 }
 
+// benchmarkIteration is one warmup or measured pass. Only run is timed, so
+// whatever a target has to set up per iteration belongs in the runner that
+// builds this. run may fill in the remaining fields as it discovers them: the
+// worktree cleanup has to remove is only known once the run has created it.
 type benchmarkIteration struct {
+	run         func() error
 	cleanup     func() error
 	resultCount *int
 	firstResult *time.Duration
+}
+
+// benchmarkRunner builds the next iteration. It is called outside the clock.
+type benchmarkRunner func(*cobra.Command) (*benchmarkIteration, error)
+
+type benchmarkResultRunner func(*cobra.Command) (int, time.Duration, error)
+
+func resultCountRunner(runner benchmarkResultRunner) benchmarkRunner {
+	return func(runCmd *cobra.Command) (*benchmarkIteration, error) {
+		iteration := &benchmarkIteration{}
+		iteration.run = func() error {
+			count, firstResult, err := runner(runCmd)
+			iteration.resultCount = &count
+			iteration.firstResult = &firstResult
+			return err
+		}
+		return iteration, nil
+	}
 }
 
 // firstRowWriter records how long the first picker row took to reach the
@@ -142,18 +207,7 @@ func formatBenchmarkFirstResults(durations []time.Duration) string {
 		formatDuration(mean), formatDuration(minDuration), formatDuration(maxDuration))
 }
 
-type benchmarkRunner func(*cobra.Command) (benchmarkIteration, error)
-
-type benchmarkResultRunner func(*cobra.Command) (int, time.Duration, error)
-
-func resultCountRunner(runner benchmarkResultRunner) benchmarkRunner {
-	return func(runCmd *cobra.Command) (benchmarkIteration, error) {
-		count, firstResult, err := runner(runCmd)
-		return benchmarkIteration{resultCount: &count, firstResult: &firstResult}, err
-	}
-}
-
-func runBenchmarkIterations(cmd *cobra.Command, target string, warmup, runs int, runner benchmarkRunner) error {
+func runBenchmarkIterations(cmd *cobra.Command, target benchmarkTarget, warmup, runs int, now func() time.Time) error {
 	if err := validateBenchmarkCounts(warmup, runs); err != nil {
 		return err
 	}
@@ -161,12 +215,12 @@ func runBenchmarkIterations(cmd *cobra.Command, target string, warmup, runs int,
 	render := commandRenderer(cmd)
 	errOut := cmd.ErrOrStderr()
 	fmt.Fprintf(errOut, "\n%s\n\n", render.Title("BENCHMARK"))
-	fmt.Fprintf(errOut, "  %s\n\n", render.Muted(fmt.Sprintf("command: %s   warmup: %d   runs: %d", target, warmup, runs)))
+	fmt.Fprintf(errOut, "  %s\n\n", render.Muted(fmt.Sprintf("command: %s   warmup: %d   runs: %d", target.label, warmup, runs)))
 
 	silenced := silentCommand(cmd)
 	for index := range warmup {
 		fmt.Fprintf(errOut, "  %s\n", render.Status(ui.ToneMuted, "~", fmt.Sprintf("warmup %d/%d", index+1, warmup)))
-		if err := runBenchmarkIteration(silenced, runner); err != nil {
+		if _, _, err := runBenchmarkIteration(silenced, target.runner, now); err != nil {
 			return fmt.Errorf("warmup run %d failed: %w", index+1, err)
 		}
 	}
@@ -178,11 +232,9 @@ func runBenchmarkIterations(cmd *cobra.Command, target string, warmup, runs int,
 	counts := make([]int, 0, runs)
 	firstResults := make([]time.Duration, 0, runs)
 	for index := range runs {
-		start := time.Now()
-		iteration, err := runner(silenced)
-		duration := time.Since(start)
-		if iterationErr := finishBenchmarkIteration(err, iteration.cleanup); iterationErr != nil {
-			return fmt.Errorf("run %d failed: %w", index+1, iterationErr)
+		iteration, duration, err := runBenchmarkIteration(silenced, target.runner, now)
+		if err != nil {
+			return fmt.Errorf("run %d failed: %w", index+1, err)
 		}
 		durations = append(durations, duration)
 		result := fmt.Sprintf("run %2d/%d  %s", index+1, runs, formatDuration(duration))
@@ -238,9 +290,21 @@ func formatBenchmarkResultCounts(counts []int) string {
 	return fmt.Sprintf("results: %d-%d (changed during benchmark)", minCount, maxCount)
 }
 
-func runBenchmarkIteration(cmd *cobra.Command, runner benchmarkRunner) error {
+// runBenchmarkIteration prepares, runs, and tears down one iteration. Only the
+// run step is measured: preparation and cleanup stay outside the returned
+// duration.
+func runBenchmarkIteration(cmd *cobra.Command, runner benchmarkRunner, now func() time.Time) (*benchmarkIteration, time.Duration, error) {
 	iteration, err := runner(cmd)
-	return finishBenchmarkIteration(err, iteration.cleanup)
+	if err != nil {
+		return nil, 0, fmt.Errorf("preparation failed: %w", err)
+	}
+	if iteration == nil || iteration.run == nil {
+		return nil, 0, fmt.Errorf("benchmark target prepared no operation to measure")
+	}
+	start := now()
+	runErr := iteration.run()
+	duration := now().Sub(start)
+	return iteration, duration, finishBenchmarkIteration(runErr, iteration.cleanup)
 }
 
 func finishBenchmarkIteration(runErr error, cleanup func() error) error {
@@ -254,61 +318,60 @@ func finishBenchmarkIteration(runErr error, cleanup func() error) error {
 	return errors.Join(runErr, cleanupErr)
 }
 
-func newBranchBenchmarkRunner(branch string) (benchmarkRunner, func() error, error) {
+func newBranchBenchmarkRunner(branch string) (benchmarkRunner, benchmarkSandbox, error) {
 	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
-		return nil, nil, err
+		return nil, benchmarkSandbox{}, err
 	}
 	worktreePath := worktree.PathForBranch(mainRoot, branch)
 	if git.BranchExists(branch) {
-		return nil, nil, fmt.Errorf("cannot benchmark branch %q: it already exists locally", branch)
+		return nil, benchmarkSandbox{}, fmt.Errorf("cannot benchmark branch %q: it already exists locally", branch)
 	}
 	if _, err := os.Stat(worktreePath); err == nil {
-		return nil, nil, fmt.Errorf("cannot benchmark branch %q: directory %q already exists", branch, worktreePath)
+		return nil, benchmarkSandbox{}, fmt.Errorf("cannot benchmark branch %q: directory %q already exists", branch, worktreePath)
 	} else if !os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("cannot inspect benchmark worktree path %q: %w", worktreePath, err)
+		return nil, benchmarkSandbox{}, fmt.Errorf("cannot inspect benchmark worktree path %q: %w", worktreePath, err)
 	}
 
 	sandbox, err := newBenchmarkSandbox()
 	if err != nil {
-		return nil, nil, err
+		return nil, benchmarkSandbox{}, err
 	}
-	runner := func(runCmd *cobra.Command) (benchmarkIteration, error) {
-		var iteration benchmarkIteration
-		err := sandbox.run(func() error {
-			created, err := createBranchWorktree(runCmd, branch)
-			if created.worktree.Path != "" {
-				iteration.cleanup = func() error { return git.RemoveCreatedWorktree(created.mainRoot, created.worktree) }
-			}
-			return err
-		})
-		return iteration, err
+	runner := func(runCmd *cobra.Command) (*benchmarkIteration, error) {
+		iteration := &benchmarkIteration{}
+		iteration.run = func() error {
+			return sandbox.run(func() error {
+				created, err := createBranchWorktree(runCmd, branch)
+				if created.worktree.Path != "" {
+					iteration.cleanup = func() error { return git.RemoveCreatedWorktree(created.mainRoot, created.worktree) }
+				}
+				return err
+			})
+		}
+		return iteration, nil
 	}
-	return runner, sandbox.close, nil
+	return runner, sandbox, nil
 }
 
-func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, func() error, error) {
+func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, benchmarkSandbox, error) {
 	sandbox, err := newBenchmarkSandbox()
 	if err != nil {
-		return nil, nil, err
+		return nil, benchmarkSandbox{}, err
 	}
-	runner := func(runCmd *cobra.Command) (benchmarkIteration, error) {
-		var iteration benchmarkIteration
-		err := sandbox.run(func() error {
-			created, err := createReviewWorktree(runCmd, prArg)
-			if created.worktree.Path != "" {
-				iteration.cleanup = func() error { return git.RemoveCreatedWorktree(created.mainRoot, created.worktree) }
-			}
-			return err
-		})
-		return iteration, err
+	runner := func(runCmd *cobra.Command) (*benchmarkIteration, error) {
+		iteration := &benchmarkIteration{}
+		iteration.run = func() error {
+			return sandbox.run(func() error {
+				created, err := createReviewWorktree(runCmd, prArg)
+				if created.worktree.Path != "" {
+					iteration.cleanup = func() error { return git.RemoveCreatedWorktree(created.mainRoot, created.worktree) }
+				}
+				return err
+			})
+		}
+		return iteration, nil
 	}
-	return runner, sandbox.close, nil
-}
-
-func runIsolatedBenchmark(cmd *cobra.Command, target string, warmup, runs int, runner benchmarkRunner, closeSandbox func() error) (err error) {
-	defer func() { err = errors.Join(err, closeSandbox()) }()
-	return runBenchmarkIterations(cmd, target, warmup, runs, runner)
+	return runner, sandbox, nil
 }
 
 type benchmarkSandbox struct {
@@ -316,6 +379,10 @@ type benchmarkSandbox struct {
 	repo string
 }
 
+// newBenchmarkSandbox clones the current repository into a temporary directory
+// so iterations never touch the user's checkout. The clone has no working
+// tree; targets that need the project's files on disk use
+// newProjectBenchmarkSandbox instead.
 func newBenchmarkSandbox() (benchmarkSandbox, error) {
 	remoteURL, err := git.OriginRemoteURL()
 	if err != nil {
@@ -328,6 +395,29 @@ func newBenchmarkSandbox() (benchmarkSandbox, error) {
 	sandbox := benchmarkSandbox{root: root, repo: filepath.Join(root, "repo")}
 	if err := git.Clone(remoteURL, sandbox.repo); err != nil {
 		return benchmarkSandbox{}, errors.Join(err, sandbox.close())
+	}
+	return sandbox, nil
+}
+
+// newProjectBenchmarkSandbox additionally gives the clone a working tree and
+// the source repository's environment files. Targets that run project setup
+// need both: the setup steps read .treeman.toml and .env* from the repository
+// root they are given.
+func newProjectBenchmarkSandbox() (benchmarkSandbox, error) {
+	sourceRoot, err := git.MainWorktreeRoot()
+	if err != nil {
+		return benchmarkSandbox{}, err
+	}
+	sandbox, err := newBenchmarkSandbox()
+	if err != nil {
+		return benchmarkSandbox{}, err
+	}
+	if err := git.CheckOutHead(sandbox.repo); err != nil {
+		return benchmarkSandbox{}, errors.Join(err, sandbox.close())
+	}
+	if _, err := envfile.Copy(sourceRoot, sandbox.repo); err != nil {
+		return benchmarkSandbox{}, errors.Join(
+			fmt.Errorf("could not copy environment files into benchmark sandbox: %w", err), sandbox.close())
 	}
 	return sandbox, nil
 }

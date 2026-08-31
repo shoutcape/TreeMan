@@ -92,6 +92,37 @@ type setupSummary struct {
 	hooks            setupStatus
 }
 
+// setupStep pairs one setup action with its reported result. Environment
+// carries the detected tools because they describe that step's outcome.
+type setupStep struct {
+	name   string
+	status setupStatus
+	tools  []envrc.ToolStatus
+}
+
+// steps lists the setup actions in report order. Every reader of a summary
+// goes through this, so a new setup action only has to be added here.
+func (summary setupSummary) steps() []setupStep {
+	return []setupStep{
+		{name: "Environment", status: summary.environment, tools: summary.environmentTools},
+		{name: "Dependencies", status: summary.dependencies},
+		{name: "Database", status: summary.database},
+		{name: "Hooks", status: summary.hooks},
+	}
+}
+
+// failures describes every setup action that failed, using the lowercased step
+// name so the text reads as a sentence fragment.
+func (summary setupSummary) failures() []string {
+	var failures []string
+	for _, step := range summary.steps() {
+		if step.status.kind == setupStatusFailed {
+			failures = append(failures, strings.ToLower(step.name)+" "+step.status.text)
+		}
+	}
+	return failures
+}
+
 // runWorktreeSetup performs the common best-effort setup actions for every
 // newly created worktree and captures their results for a consistent summary.
 func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setupSummary {
@@ -158,13 +189,12 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 
 func printSetupSummary(w io.Writer, render ui.Renderer, summary setupSummary) {
 	fmt.Fprintln(w, render.Title("SETUP"))
-	writeSetupStatus(w, render, "Environment", summary.environment)
-	for _, tool := range summary.environmentTools {
-		writeEnvironmentToolStatus(w, render, tool)
+	for _, step := range summary.steps() {
+		writeSetupStatus(w, render, step.name, step.status)
+		for _, tool := range step.tools {
+			writeEnvironmentToolStatus(w, render, tool)
+		}
 	}
-	writeSetupStatus(w, render, "Dependencies", summary.dependencies)
-	writeSetupStatus(w, render, "Database", summary.database)
-	writeSetupStatus(w, render, "Hooks", summary.hooks)
 }
 
 func summarizeHooks(results []hooks.RunResult) setupStatus {
