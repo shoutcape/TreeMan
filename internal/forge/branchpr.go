@@ -17,6 +17,131 @@ type BranchPR struct {
 	HasPR  bool
 }
 
+// branchGroupBuffer lets enrichment keep running while the consumer is still
+// rendering earlier groups.
+const branchGroupBuffer = 16
+
+// StreamGitHubBranchPRs delivers every branch of a GitHub repository that the
+// caller wants to see, each paired with the open PR whose head it is, in
+// groups as they resolve. No branch is delivered twice.
+//
+// keep decides which branches are worth showing. It is asked before a branch
+// is enriched, so a branch the caller will not render costs no query, and it
+// is called from more than one goroutine — it must be safe to call
+// concurrently and must not read state onGroup writes.
+//
+// Two sources feed the stream. A preview query returns the first branches
+// with their PRs in one round trip, which is what puts rows on screen before
+// the branch list has been paginated; the full branch list is paginated and
+// enriched concurrently. Whichever source has a group ready is delivered
+// first, so neither holds the other's rows back. A failed preview costs
+// nothing but the head start: the full list carries the same branches.
+//
+// Everything this starts runs under ctx and is joined before it returns, so a
+// caller that stops reading stops the queries it was waiting on. onGroup runs
+// on the calling goroutine; returning an error from it ends the stream.
+func StreamGitHubBranchPRs(ctx context.Context, repoSlug string, keep func(BranchInfo) bool, onGroup func([]BranchPR) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	// Both sources stop on the context and never block on a send once it is
+	// cancelled, so cancelling and waiting joins them however this returns:
+	// nothing started here outlives the call it was feeding.
+	var sources sync.WaitGroup
+	sources.Add(2)
+	defer func() {
+		cancel()
+		sources.Wait()
+	}()
+
+	previews := make(chan []BranchPR, 1)
+	go func() {
+		defer sources.Done()
+		defer close(previews)
+		if group, err := githubBranchPRPreview(ctx, repoSlug); err == nil {
+			previews <- group
+		}
+	}()
+
+	groups := make(chan []BranchPR, branchGroupBuffer)
+	enriched := make(chan error, 1)
+	go func() {
+		defer sources.Done()
+		defer close(groups)
+		enriched <- githubBranchPRs(ctx, repoSlug, func(batchCtx context.Context, add func([]BranchInfo) error) error {
+			return StreamBranchBatches(batchCtx, GitHub, repoSlug, "", func(batch []BranchInfo) error {
+				return add(keptBranches(batch, keep))
+			})
+		}, func(group []BranchPR) error {
+			select {
+			case groups <- group:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+
+	// The enriched list is the complete one, so it decides when the caller has
+	// everything; a preview still in flight when it ends can only repeat
+	// branches already delivered, and is stopped by the deferred cancel rather
+	// than waited on.
+	seen := make(map[string]struct{})
+	for groups != nil {
+		var group []BranchPR
+		select {
+		case preview, open := <-previews:
+			if !open {
+				// A nil channel never fires again, which leaves the enriched
+				// groups as the only case.
+				previews = nil
+				continue
+			}
+			group = preview
+		case enrichedGroup, open := <-groups:
+			if !open {
+				groups = nil
+				continue
+			}
+			group = enrichedGroup
+		}
+		fresh := unseenBranchPRs(group, keep, seen)
+		if len(fresh) == 0 {
+			continue
+		}
+		if err := onGroup(fresh); err != nil {
+			return err
+		}
+	}
+	return <-enriched
+}
+
+// keptBranches drops the branches the caller does not want before they are
+// enriched.
+func keptBranches(branches []BranchInfo, keep func(BranchInfo) bool) []BranchInfo {
+	kept := branches[:0:0]
+	for _, branch := range branches {
+		if keep(branch) {
+			kept = append(kept, branch)
+		}
+	}
+	return kept
+}
+
+// unseenBranchPRs returns the entries of group the caller may still be shown,
+// recording them as delivered. The two sources overlap, so this is what keeps
+// a branch from being delivered twice.
+func unseenBranchPRs(group []BranchPR, keep func(BranchInfo) bool, seen map[string]struct{}) []BranchPR {
+	fresh := group[:0:0]
+	for _, entry := range group {
+		name := entry.Branch.Name
+		if _, delivered := seen[name]; delivered || name == "" || !keep(entry.Branch) {
+			continue
+		}
+		seen[name] = struct{}{}
+		fresh = append(fresh, entry)
+	}
+	return fresh
+}
+
 const (
 	// githubBranchPreviewLimit is how many branches the preview query returns.
 	// It exists to put rows on screen before the REST branch list lands, so it
@@ -44,14 +169,14 @@ const (
 // githubGraphQLFunc is the shape of the stubbable GraphQL entry point.
 type githubGraphQLFunc func(ctx context.Context, query string, variables map[string]string) ([]byte, error)
 
-// GitHubBranchPRPreview returns the alphabetically first branches together
+// githubBranchPRPreview returns the alphabetically first branches together
 // with their open PRs in a single query.
 //
 // It exists so the branch picker can show rows without waiting for the REST
 // branch list. GitHub orders refs and the REST branch list the same way, so
 // the result is a prefix of the first REST page and the caller can drop the
 // duplicates as the full list arrives.
-func GitHubBranchPRPreview(ctx context.Context, repoSlug string) ([]BranchPR, error) {
+func githubBranchPRPreview(ctx context.Context, repoSlug string) ([]BranchPR, error) {
 	owner, name, err := splitRepoSlug(repoSlug)
 	if err != nil {
 		return nil, err
@@ -118,7 +243,7 @@ func parseGitHubBranchPreview(data []byte) ([]BranchPR, error) {
 	return previews, nil
 }
 
-// GitHubBranchPRs pairs each branch with the open PR whose head it is, handing
+// githubBranchPRs pairs each branch with the open PR whose head it is, handing
 // groups to onGroup in the order produce emitted them.
 //
 // The PR column used to come from the whole open-PR list, which meant no row
@@ -131,7 +256,7 @@ func parseGitHubBranchPreview(data []byte) ([]BranchPR, error) {
 // paginating the REST branch list — so enriching the first branches overlaps
 // fetching the last ones. It is handed the context this call derives, so the
 // branch list it is walking stops with the enrichment it feeds.
-func GitHubBranchPRs(ctx context.Context, repoSlug string, produce func(ctx context.Context, add func([]BranchInfo) error) error, onGroup func([]BranchPR) error) error {
+func githubBranchPRs(ctx context.Context, repoSlug string, produce func(ctx context.Context, add func([]BranchInfo) error) error, onGroup func([]BranchPR) error) error {
 	owner, name, err := splitRepoSlug(repoSlug)
 	if err != nil {
 		return err

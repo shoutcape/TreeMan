@@ -14,8 +14,12 @@ import (
 // requested at the same time.
 const githubPageConcurrency = 8
 
-// githubPageCall is the indirection point so tests can stub page requests.
-var githubPageCall = ghAPIPage
+// githubPageFunc is the shape of the stubbable page request.
+type githubPageFunc func(ctx context.Context, endpoint string) (string, []byte, error)
+
+// githubPageCall is the indirection point so tests can stub page requests. It
+// is resolved once per call, never read from a worker goroutine.
+var githubPageCall githubPageFunc = ghAPIPage
 
 // ghAPIPage requests a single page and returns its Link header with the body.
 func ghAPIPage(ctx context.Context, endpoint string) (string, []byte, error) {
@@ -38,7 +42,11 @@ func ghAPIPageArgs(endpoint string) []string {
 // walking one "next" link at a time. Endpoints that omit rel="last" fall back
 // to that sequential walk.
 func fetchGitHubPages(ctx context.Context, endpoint string, onPage func(page []byte) error) error {
-	link, body, err := githubPageCall(ctx, endpoint)
+	// Resolving the request function once keeps the page workers off package
+	// state that a test may be reassigning.
+	page := githubPageCall
+
+	link, body, err := page(ctx, endpoint)
 	if err != nil {
 		return err
 	}
@@ -47,11 +55,11 @@ func fetchGitHubPages(ctx context.Context, endpoint string, onPage func(page []b
 	}
 
 	if last := linkLastPage(link); last >= 2 {
-		return fetchGitHubPageRange(ctx, endpoint, last, onPage)
+		return fetchGitHubPageRange(ctx, page, endpoint, last, onPage)
 	}
 
 	for next := linkRelationURL(link, "next"); next != ""; next = linkRelationURL(link, "next") {
-		link, body, err = githubPageCall(ctx, next)
+		link, body, err = page(ctx, next)
 		if err != nil {
 			return err
 		}
@@ -69,7 +77,7 @@ func fetchGitHubPages(ctx context.Context, endpoint string, onPage func(page []b
 // scheduling window advances only when the next ordered page is delivered,
 // bounding active requests and retained out-of-order responses. Returning
 // cancels and joins every worker.
-func fetchGitHubPageRange(ctx context.Context, endpoint string, last int, onPage func(page []byte) error) error {
+func fetchGitHubPageRange(ctx context.Context, request githubPageFunc, endpoint string, last int, onPage func(page []byte) error) error {
 	type pageResult struct {
 		page int
 		body []byte
@@ -87,7 +95,7 @@ func fetchGitHubPageRange(ctx context.Context, endpoint string, last int, onPage
 		go func() {
 			defer group.Done()
 			for page := range requests {
-				_, body, err := githubPageCall(ctx, pageEndpoint(endpoint, page))
+				_, body, err := request(ctx, pageEndpoint(endpoint, page))
 				select {
 				case results <- pageResult{page: page, body: body, err: err}:
 				case <-ctx.Done():

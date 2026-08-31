@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"time"
@@ -214,9 +213,7 @@ func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {
 		return 0, 0, fmt.Errorf("not inside a git repository")
 	}
-	// Started before forge resolution, the same boundary branchPickerResults
-	// uses, so the two targets report comparable numbers.
-	writer := newFirstRowWriter(io.Discard, time.Now)
+	writer := newPickerResultsWriter()
 	forgeInfo, err := resolveReviewForge()
 	if err != nil {
 		return 0, 0, err

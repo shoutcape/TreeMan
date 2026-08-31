@@ -89,4 +89,12 @@ TREEMAN_BIN=/path/to/treeman ./smoke-test.sh
 
 The smoke test creates temporary Git repositories. It uses mock `gh`, `glab`, and `fzf` programs. It tests installation, uninstallation, create, review, branch, switch, delete, and unit tests.
 
+The mock `fzf` reads the streamed list in one of two modes. By default it reads
+the whole list before answering, which is what a user who waits for every row
+does. With `FZF_MOCK_MODE=stream` it answers as soon as the wanted row arrives
+and exits, leaving the rest unwritten — the picker closing under a running
+producer. The branch picker is covered in both modes, because only the second
+one exercises selecting an early row and cancelling the forge requests that
+were still fetching the rest.
+
 The GitHub [CI workflow](ci.md) runs formatting, static checks, unit tests, a build, and the smoke test on pull requests.

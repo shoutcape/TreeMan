@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"time"
@@ -287,12 +286,10 @@ func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {
 		return 0, 0, fmt.Errorf("not inside a git repository")
 	}
+	writer := newPickerResultsWriter()
 	if _, err := git.MainWorktreeRoot(); err != nil {
 		return 0, 0, err
 	}
-	// Started before forge resolution, the same boundary reviewPickerResults
-	// uses, so the two targets report comparable numbers.
-	writer := newFirstRowWriter(io.Discard, time.Now)
 	forgeInfo, err := resolveBranchForge()
 	if err != nil {
 		return 0, 0, err
@@ -300,7 +297,7 @@ func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	render := commandRenderer(cmd)
 
 	if forgeInfo.forgeType == forge.GitHub {
-		stream, err := newBranchStream(render)
+		stream, err := newBranchStream(render, githubBranchSources())
 		if err != nil {
 			return 0, 0, err
 		}

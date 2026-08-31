@@ -112,6 +112,15 @@ func newFirstRowWriter(out io.Writer, now func() time.Time) *firstRowWriter {
 	return &firstRowWriter{out: out, now: now, start: now()}
 }
 
+// newPickerResultsWriter starts the clock the picker-results targets are
+// judged by. Both targets take it from here — once the command knows it is in
+// a repository, before any forge work — so their numbers are comparable
+// rather than each timing from wherever its own preconditions happened to
+// end.
+func newPickerResultsWriter() *firstRowWriter {
+	return newFirstRowWriter(io.Discard, time.Now)
+}
+
 func (writer *firstRowWriter) Write(payload []byte) (int, error) {
 	writer.writes++
 	if writer.writes == 2 {

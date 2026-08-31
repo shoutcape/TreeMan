@@ -108,6 +108,12 @@ type pickerRequest struct {
 // pickerProducer emits the picker's rows. It is handed the picker's context so
 // that a picker the user closes stops the work that was still fetching rows
 // for it.
+//
+// A producer owns everything it starts: it may fan out as widely as its forge
+// needs, but it stops on ctx and joins its own goroutines before returning.
+// That is what keeps the picker's own shutdown to the two things below —
+// the fzf process and one producer result — however many requests were in
+// flight underneath.
 type pickerProducer func(ctx context.Context, emit func(display string) error) error
 
 // streamPickerRows writes the header row and then every row produce emits,

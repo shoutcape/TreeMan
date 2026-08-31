@@ -73,7 +73,7 @@ func namedBranches(names ...string) []BranchInfo {
 func collectBranchPRs(t *testing.T, repoSlug string, pages [][]BranchInfo) ([]BranchPR, error) {
 	t.Helper()
 	var collected []BranchPR
-	err := GitHubBranchPRs(context.Background(), repoSlug, func(_ context.Context, add func([]BranchInfo) error) error {
+	err := githubBranchPRs(context.Background(), repoSlug, func(_ context.Context, add func([]BranchInfo) error) error {
 		for _, page := range pages {
 			if err := add(page); err != nil {
 				return err
@@ -183,7 +183,7 @@ func TestGitHubBranchPRsStopsQueryingWhenTheConsumerFails(t *testing.T) {
 	}
 
 	stop := errors.New("picker closed")
-	err := GitHubBranchPRs(context.Background(), "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
+	err := githubBranchPRs(context.Background(), "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
 		return add(branches)
 	}, func([]BranchPR) error { return stop })
 
@@ -196,7 +196,7 @@ func TestGitHubBranchPRsReportsAProducerFailure(t *testing.T) {
 	stubRefBatches(t, nil)
 
 	broken := errors.New("branch list failed")
-	err := GitHubBranchPRs(context.Background(), "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
+	err := githubBranchPRs(context.Background(), "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
 		if err := add(namedBranches("feature/one")); err != nil {
 			return err
 		}
@@ -208,7 +208,7 @@ func TestGitHubBranchPRsReportsAProducerFailure(t *testing.T) {
 
 func TestGitHubBranchPRsRejectsAnInvalidRepository(t *testing.T) {
 	for _, slug := range []string{"", "owner", "owner/", "/repo", "owner/repo/extra"} {
-		err := GitHubBranchPRs(context.Background(), slug, func(context.Context, func([]BranchInfo) error) error { return nil }, func([]BranchPR) error { return nil })
+		err := githubBranchPRs(context.Background(), slug, func(context.Context, func([]BranchInfo) error) error { return nil }, func([]BranchPR) error { return nil })
 		assert.ErrorContains(t, err, "invalid GitHub repository", "slug %q", slug)
 	}
 }
@@ -268,7 +268,7 @@ func TestGitHubBranchPRPreviewReturnsBranchesWithTheirPRs(t *testing.T) {
 	}
 	t.Cleanup(func() { githubGraphQLCall = previous })
 
-	preview, err := GitHubBranchPRPreview(context.Background(), "owner/repo")
+	preview, err := githubBranchPRPreview(context.Background(), "owner/repo")
 
 	require.NoError(t, err)
 	require.Len(t, preview, 2)
@@ -316,7 +316,7 @@ func TestGitHubBranchPRsStopsWhenTheContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- GitHubBranchPRs(ctx, "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
+		done <- githubBranchPRs(ctx, "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
 			return add(branches)
 		}, func([]BranchPR) error { return nil })
 	}()
@@ -346,7 +346,7 @@ func TestGitHubBranchPRsStopsTheProducerAfterABatchFailure(t *testing.T) {
 	}
 
 	produced := make(chan struct{})
-	err := GitHubBranchPRs(context.Background(), "owner/repo", func(ctx context.Context, add func([]BranchInfo) error) error {
+	err := githubBranchPRs(context.Background(), "owner/repo", func(ctx context.Context, add func([]BranchInfo) error) error {
 		defer close(produced)
 		for {
 			if err := add(namedBranches("branch")); err != nil {
@@ -362,4 +362,263 @@ func TestGitHubBranchPRsStopsTheProducerAfterABatchFailure(t *testing.T) {
 
 	require.ErrorIs(t, err, assert.AnError)
 	<-produced
+}
+
+// previewReply builds the response the preview query returns. Branches named
+// "<name>-pr<number>" come back carrying that open PR.
+func previewReply(names []string) []byte {
+	nodes := make([]any, 0, len(names))
+	for _, name := range names {
+		prs := []any{}
+		if _, suffix, hasPR := strings.Cut(name, "-pr"); hasPR {
+			number := 0
+			fmt.Sscanf(suffix, "%d", &number)
+			prs = append(prs, map[string]any{"number": number, "title": "title " + name})
+		}
+		nodes = append(nodes, map[string]any{
+			"name":                   name,
+			"target":                 map[string]any{"committedDate": "2026-08-01T10:00:00Z"},
+			"associatedPullRequests": map[string]any{"nodes": prs},
+		})
+	}
+	body, err := json.Marshal(map[string]any{
+		"data": map[string]any{"repository": map[string]any{"refs": map[string]any{"nodes": nodes}}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+// branchPageReply builds one REST branch-list page.
+func branchPageReply(names []string) []byte {
+	page := make([]any, 0, len(names))
+	for _, name := range names {
+		page = append(page, map[string]any{
+			"name":   name,
+			"commit": map[string]any{"commit": map[string]any{"committer": map[string]any{"date": "2026-08-01T10:00:00Z"}}},
+		})
+	}
+	body, err := json.Marshal(page)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+// stubBranchStreamSources answers every request StreamGitHubBranchPRs makes:
+// the preview query, the REST branch pages, and the per-ref enrichment
+// batches. Pages are walked with rel="next", so they are requested one at a
+// time from the caller's goroutine.
+func stubBranchStreamSources(t *testing.T, preview []string, previewErr error, pages [][]string) {
+	t.Helper()
+	previousGraphQL := githubGraphQLCall
+	previousPage := githubPageCall
+	t.Cleanup(func() {
+		githubGraphQLCall = previousGraphQL
+		githubPageCall = previousPage
+	})
+
+	githubGraphQLCall = func(_ context.Context, query string, variables map[string]string) ([]byte, error) {
+		if strings.Contains(query, "refs(refPrefix") {
+			if previewErr != nil {
+				return nil, previewErr
+			}
+			return previewReply(preview), nil
+		}
+		return refBatchReply(variables), nil
+	}
+
+	remaining := pages
+	githubPageCall = func(_ context.Context, _ string) (string, []byte, error) {
+		if len(remaining) == 0 {
+			return "", []byte(`[]`), nil
+		}
+		page := remaining[0]
+		remaining = remaining[1:]
+		link := ""
+		if len(remaining) > 0 {
+			link = `<https://api.github.com/next>; rel="next"`
+		}
+		return link, branchPageReply(page), nil
+	}
+}
+
+func collectBranchStream(ctx context.Context, keep func(BranchInfo) bool) ([]BranchPR, error) {
+	if keep == nil {
+		keep = func(BranchInfo) bool { return true }
+	}
+	var delivered []BranchPR
+	err := StreamGitHubBranchPRs(ctx, "owner/repo", keep, func(group []BranchPR) error {
+		delivered = append(delivered, group...)
+		return nil
+	})
+	return delivered, err
+}
+
+func deliveredNames(delivered []BranchPR) []string {
+	names := make([]string, 0, len(delivered))
+	for _, entry := range delivered {
+		names = append(names, entry.Branch.Name)
+	}
+	return names
+}
+
+// The preview and the branch list overlap on purpose, so the same branch must
+// not reach the caller from both.
+func TestStreamGitHubBranchPRsDeliversEachBranchOnceWithItsPR(t *testing.T) {
+	stubBranchStreamSources(t, []string{"alpha", "beta-pr7"}, nil,
+		[][]string{{"alpha", "beta-pr7", "gamma-pr9"}})
+
+	delivered, err := collectBranchStream(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "beta-pr7", "gamma-pr9"}, deliveredNames(delivered))
+	assert.False(t, delivered[0].HasPR)
+	assert.Equal(t, 7, delivered[1].PR.Number)
+	assert.Equal(t, 9, delivered[2].PR.Number)
+	assert.NotEmpty(t, delivered[0].Branch.Date)
+}
+
+// A branch the caller will not show must cost no enrichment query, whichever
+// source it came from.
+func TestStreamGitHubBranchPRsSkipsBranchesTheCallerRejects(t *testing.T) {
+	stubBranchStreamSources(t, []string{"skipped", "wanted"}, nil,
+		[][]string{{"skipped", "wanted", "other"}})
+
+	var enriched sync.Mutex
+	var asked []string
+	previous := githubGraphQLCall
+	githubGraphQLCall = func(ctx context.Context, query string, variables map[string]string) ([]byte, error) {
+		if strings.Contains(query, "ref(qualifiedName") {
+			enriched.Lock()
+			for i := 0; ; i++ {
+				qualified, ok := variables[refVariable(i)]
+				if !ok {
+					break
+				}
+				asked = append(asked, strings.TrimPrefix(qualified, "refs/heads/"))
+			}
+			enriched.Unlock()
+		}
+		return previous(ctx, query, variables)
+	}
+
+	delivered, err := collectBranchStream(context.Background(), func(branch BranchInfo) bool {
+		return branch.Name != "skipped"
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"wanted", "other"}, deliveredNames(delivered))
+	enriched.Lock()
+	defer enriched.Unlock()
+	assert.NotContains(t, asked, "skipped", "a rejected branch was enriched anyway")
+}
+
+// The preview is only a head start; losing it must not lose the list.
+func TestStreamGitHubBranchPRsFallsBackToTheBranchListWhenThePreviewFails(t *testing.T) {
+	stubBranchStreamSources(t, nil, errors.New("preview unavailable"),
+		[][]string{{"alpha"}, {"beta-pr3"}})
+
+	delivered, err := collectBranchStream(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "beta-pr3"}, deliveredNames(delivered))
+	assert.Equal(t, 3, delivered[1].PR.Number)
+}
+
+// The preview is a head start, not a gate: rows the branch list already has
+// must reach the caller while the preview is still in flight.
+func TestStreamGitHubBranchPRsDoesNotLetASlowPreviewHoldBackEnrichedRows(t *testing.T) {
+	stubBranchStreamSources(t, nil, nil, [][]string{{"alpha-pr4"}})
+	previous := githubGraphQLCall
+	githubGraphQLCall = func(ctx context.Context, query string, variables map[string]string) ([]byte, error) {
+		if strings.Contains(query, "refs(refPrefix") {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return previous(ctx, query, variables)
+	}
+
+	groups := make(chan []BranchPR, 4)
+	done := make(chan error, 1)
+	go func() {
+		done <- StreamGitHubBranchPRs(context.Background(), "owner/repo",
+			func(BranchInfo) bool { return true },
+			func(group []BranchPR) error {
+				groups <- group
+				return nil
+			})
+	}()
+
+	select {
+	case group := <-groups:
+		assert.Equal(t, []string{"alpha-pr4"}, deliveredNames(group))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the preview held back a row the branch list already had")
+	}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream waited for a preview that adds nothing")
+	}
+}
+
+// A caller that stops reading cancels the context, which has to end both
+// sources rather than block on whichever is slowest.
+func TestStreamGitHubBranchPRsStopsWhenTheContextIsCancelled(t *testing.T) {
+	previousGraphQL := githubGraphQLCall
+	previousPage := githubPageCall
+	t.Cleanup(func() {
+		githubGraphQLCall = previousGraphQL
+		githubPageCall = previousPage
+	})
+	githubGraphQLCall = func(ctx context.Context, _ string, _ map[string]string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	githubPageCall = func(ctx context.Context, _ string) (string, []byte, error) {
+		<-ctx.Done()
+		return "", nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := collectBranchStream(ctx, nil)
+		done <- err
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelling did not stop the branch stream")
+	}
+}
+
+func TestStreamGitHubBranchPRsReportsABranchListFailure(t *testing.T) {
+	stubBranchStreamSources(t, nil, errors.New("no preview"), nil)
+	previous := githubPageCall
+	t.Cleanup(func() { githubPageCall = previous })
+	githubPageCall = func(context.Context, string) (string, []byte, error) {
+		return "", nil, errors.New("gh exploded")
+	}
+
+	_, err := collectBranchStream(context.Background(), nil)
+
+	assert.ErrorContains(t, err, "gh exploded")
+}
+
+// A consumer that fails ends the stream with its own error, not a forge one.
+func TestStreamGitHubBranchPRsReportsAConsumerFailure(t *testing.T) {
+	stubBranchStreamSources(t, []string{"alpha"}, nil, [][]string{{"alpha", "beta"}})
+
+	err := StreamGitHubBranchPRs(context.Background(), "owner/repo",
+		func(BranchInfo) bool { return true },
+		func([]BranchPR) error { return errors.New("consumer is gone") })
+
+	assert.ErrorContains(t, err, "consumer is gone")
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"sync"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
@@ -13,14 +12,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The GitHub branch picker's forge and git calls, in one place so tests can
-// stub them.
-var (
-	branchPickerPreview       = forge.GitHubBranchPRPreview
-	branchPickerBranchPRs     = forge.GitHubBranchPRs
-	branchPickerBranchBatches = forge.StreamBranchBatches
-	branchPickerLocalBranches = git.LocalBranchNames
-)
+// branchSources are the queries one branch stream runs.
+//
+// They are values a stream is built with rather than package state it reads,
+// so a test hands a stream its own sources instead of reassigning globals that
+// the stream's goroutines are still reading.
+type branchSources struct {
+	localBranches func() (map[string]struct{}, error)
+	defaultBranch func() (string, error)
+	branchPRs     func(ctx context.Context, repoSlug string, keep func(forge.BranchInfo) bool, onGroup func([]forge.BranchPR) error) error
+}
+
+// githubBranchSources is what the picker runs against a real repository.
+func githubBranchSources() branchSources {
+	return branchSources{
+		localBranches: git.LocalBranchNames,
+		defaultBranch: branchPickerDefaultBranch,
+		branchPRs:     forge.StreamGitHubBranchPRs,
+	}
+}
 
 // pickGitHubBranch opens the picker before the branch list exists and feeds it
 // rows as they are enriched with their open PR.
@@ -36,7 +46,7 @@ func pickGitHubBranch(cmd *cobra.Command, repoSlug, query string) (branchSelecti
 	}
 
 	render := commandRenderer(cmd)
-	stream, err := newBranchStream(render)
+	stream, err := newBranchStream(render, githubBranchSources())
 	if err != nil {
 		return branchSelection{}, err
 	}
@@ -55,69 +65,53 @@ func pickGitHubBranch(cmd *cobra.Command, repoSlug, query string) (branchSelecti
 	return branchSelection{branch: stream.branches[index], prMap: stream.prMap}, nil
 }
 
-// branchStream renders branch/PR pairs into picker rows, keeping the branches
-// it emitted so the selected row index can be resolved back to a branch.
+// branchStream renders the branch/PR pairs the forge delivers into picker
+// rows, keeping the branches it emitted so the selected row index can be
+// resolved back to a branch.
 //
-// Rows arrive from two sources that overlap — a preview query and the enriched
-// branch list — so it drops branches it has already shown.
+// It decides which branches are worth showing; assembling them is the forge's
+// job, so nothing here starts a query or a goroutine of its own.
 type branchStream struct {
 	render        ui.Renderer
+	branchPRs     func(ctx context.Context, repoSlug string, keep func(forge.BranchInfo) bool, onGroup func([]forge.BranchPR) error) error
 	defaultBranch string
 	localBranches map[string]struct{}
-	seen          map[string]struct{}
 	branches      []forge.BranchInfo
 	prMap         map[string]forge.PRInfo
 }
 
-func newBranchStream(render ui.Renderer) (*branchStream, error) {
-	localBranches, err := branchPickerLocalBranches()
+func newBranchStream(render ui.Renderer, sources branchSources) (*branchStream, error) {
+	localBranches, err := sources.localBranches()
 	if err != nil {
 		return nil, err
 	}
 	// A repository with no origin/HEAD still lists fine; it just cannot hide
 	// its default branch.
-	defaultBranch, _ := branchPickerDefaultBranch()
+	defaultBranch, _ := sources.defaultBranch()
 	return &branchStream{
 		render:        render,
+		branchPRs:     sources.branchPRs,
 		defaultBranch: defaultBranch,
 		localBranches: localBranches,
-		seen:          make(map[string]struct{}),
 		prMap:         make(map[string]forge.PRInfo),
 	}, nil
 }
 
 // offered reports whether the picker may show a branch. It reads only fields
-// fixed at construction, so the branch-list goroutine can call it to skip
-// branches before they are enriched.
-func (s *branchStream) offered(name string) bool {
-	if name == "" || name == s.defaultBranch {
+// fixed at construction, so the forge's branch-list goroutine can call it to
+// skip branches before they are enriched.
+func (s *branchStream) offered(branch forge.BranchInfo) bool {
+	if branch.Name == "" || branch.Name == s.defaultBranch {
 		return false
 	}
-	_, existsLocally := s.localBranches[name]
+	_, existsLocally := s.localBranches[branch.Name]
 	return !existsLocally
 }
 
-func (s *branchStream) keep(branches []forge.BranchInfo) []forge.BranchInfo {
-	kept := branches[:0:0]
-	for _, branch := range branches {
-		if s.offered(branch.Name) {
-			kept = append(kept, branch)
-		}
-	}
-	return kept
-}
-
-// emit writes one row per branch the picker has not shown yet.
+// emit writes one row per branch in the group.
 func (s *branchStream) emit(group []forge.BranchPR, write func(string) error) error {
 	for _, entry := range group {
 		name := entry.Branch.Name
-		if !s.offered(name) {
-			continue
-		}
-		if _, shown := s.seen[name]; shown {
-			continue
-		}
-		s.seen[name] = struct{}{}
 		s.branches = append(s.branches, entry.Branch)
 
 		number := 0
@@ -132,91 +126,24 @@ func (s *branchStream) emit(group []forge.BranchPR, write func(string) error) er
 	return nil
 }
 
-// branchGroupBuffer lets enrichment keep running while the picker is still
-// writing earlier rows.
-const branchGroupBuffer = 16
-
 // produce streams every branch the picker can offer.
 //
-// A preview query returns the first branches with their PRs in one round trip,
-// which is what puts rows on screen before the branch list has been paginated.
-// The full list is enriched concurrently, and whichever source has a group
-// ready is written first, so neither can hold the other's rows back. Branches
-// the preview already covered are not shown twice.
-//
-// Both sources run under the picker's context, so a picker that closes early
-// stops them rather than leaving queries running for rows nobody will see.
+// The forge delivers each branch once, already paired with its open PR, under
+// the picker's context — so a picker that closes early stops the queries
+// rather than leaving them running for rows nobody will see.
 func (s *branchStream) produce(repoSlug string) pickerProducer {
 	return func(ctx context.Context, write func(string) error) error {
-		ctx, cancel := context.WithCancel(ctx)
-		// Both sources stop on the context and never block on a send once it
-		// is cancelled, so cancelling and waiting joins them however this
-		// returns: nothing started here outlives the picker it was feeding.
-		var sources sync.WaitGroup
-		sources.Add(2)
-		defer func() {
-			cancel()
-			sources.Wait()
-		}()
-
-		// A failed preview costs nothing but the head start: the full list is
-		// already being fetched and carries the same branches.
-		previews := make(chan []forge.BranchPR, 1)
-		go func() {
-			defer sources.Done()
-			defer close(previews)
-			if group, err := branchPickerPreview(ctx, repoSlug); err == nil {
-				previews <- group
-			}
-		}()
-
-		groups := make(chan []forge.BranchPR, branchGroupBuffer)
-		enriched := make(chan error, 1)
-		go func() {
-			defer sources.Done()
-			defer close(groups)
-			enriched <- branchPickerBranchPRs(ctx, repoSlug, func(batchCtx context.Context, add func([]forge.BranchInfo) error) error {
-				return branchPickerBranchBatches(batchCtx, forge.GitHub, repoSlug, "", func(batch []forge.BranchInfo) error {
-					return add(s.keep(batch))
-				})
-			}, func(group []forge.BranchPR) error {
-				select {
-				case groups <- group:
-					return nil
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			})
-		}()
-
-		// The enriched list is the complete one, so it decides when the
-		// picker has everything; a preview still in flight when it ends can
-		// only repeat branches already shown, and is stopped by the deferred
-		// cancel rather than waited on.
-		for groups != nil {
-			var group []forge.BranchPR
-			select {
-			case preview, open := <-previews:
-				if !open {
-					// A nil channel never fires again, which leaves the
-					// enriched groups as the only case.
-					previews = nil
-					continue
-				}
-				group = preview
-			case enrichedGroup, open := <-groups:
-				if !open {
-					groups = nil
-					continue
-				}
-				group = enrichedGroup
-			}
-			if err := s.emit(group, write); err != nil {
-				return err
-			}
+		// A row that could not be written is the picker closing, not the forge
+		// failing, so it is reported as itself rather than as a list failure.
+		var writeErr error
+		err := s.branchPRs(ctx, repoSlug, s.offered, func(group []forge.BranchPR) error {
+			writeErr = s.emit(group, write)
+			return writeErr
+		})
+		if writeErr != nil {
+			return writeErr
 		}
-
-		if err := <-enriched; err != nil {
+		if err != nil {
 			return fmt.Errorf("failed to list remote branches: %w", err)
 		}
 		return nil
