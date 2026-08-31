@@ -65,7 +65,7 @@ func createRemoteRepoWithNestedModule(t *testing.T) string {
 	parent := t.TempDir()
 	remote := filepath.Join(parent, "remote.git")
 	repo := filepath.Join(parent, "repo")
-	gitTest(t, parent, "init", "--bare", remote)
+	gitTest(t, parent, "init", "--bare", "--initial-branch=main", remote)
 	gitTest(t, parent, "init", "-b", "main", repo)
 	gitTest(t, repo, "config", "user.name", "TreeMan Test")
 	gitTest(t, repo, "config", "user.email", "test@example.com")
