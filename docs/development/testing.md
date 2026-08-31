@@ -35,6 +35,23 @@ The branch benchmark refuses a target that already exists locally or has an
 existing worktree. Review benchmarks leave existing PR/MR branches untouched.
 If cleanup fails, stop and resolve the reported Git error before re-running.
 
+Measure normal worktree and branch deletion with a freshly prepared disposable
+treebranch for every iteration.
+
+```bash
+treeman benchmark delete --warmup 1 --runs 5
+```
+
+The delete benchmark takes no branch argument. Outside the timer, each iteration
+creates `treeman-benchmark-delete`, copies `.env*` files, creates the configured
+branch database, installs dependencies, and runs post-create hooks. Timing starts
+immediately before the equivalent of
+`treeman delete --path <path> --branch treeman-benchmark-delete --yes` and stops
+when deletion returns. Verification that the worktree and local branch are gone
+is also outside the timer. Setup failures abort the benchmark. When database
+setup is configured, PostgreSQL and its configured Docker container must already
+be running.
+
 Measure how long the interactive commands need to load every available picker
 result without opening `fzf` or changing the repository.
 

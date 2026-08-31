@@ -274,6 +274,15 @@ func Clone(remoteURL, path string) error {
 	return nil
 }
 
+// CheckOutHead populates the working tree of dir from its current HEAD without
+// moving any ref. A --no-checkout clone has no files on disk until this runs.
+func CheckOutHead(dir string) error {
+	if _, err := runInDir(dir, "reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("could not check out HEAD in %q: %w", dir, err)
+	}
+	return nil
+}
+
 // FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
 func FetchRemoteBranch(branch string) error {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
@@ -295,10 +304,12 @@ func CreateWorktree(path, branch, startPoint string) (CreatedWorktree, error) {
 // WorktreeList returns the list of all worktrees, parsed from
 // `git worktree list --porcelain`.
 func WorktreeList() ([]WorktreeEntry, error) {
-	return worktreeListInDir("")
+	return WorktreeListInDir("")
 }
 
-func worktreeListInDir(dir string) ([]WorktreeEntry, error) {
+// WorktreeListInDir does the same for the repository at dir. An empty dir uses
+// the current working directory.
+func WorktreeListInDir(dir string) ([]WorktreeEntry, error) {
 	out, err := runInDir(dir, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, fmt.Errorf("could not list worktrees: %w", err)
@@ -558,7 +569,7 @@ func WorktreeRemove(path string, force bool) error {
 // expectedSHA. This prevents deletion from discarding later work.
 func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
 	return withWorktreeMutationLock(dir, func() error {
-		entries, err := worktreeListInDir(dir)
+		entries, err := WorktreeListInDir(dir)
 		if err != nil {
 			return err
 		}
@@ -580,7 +591,7 @@ func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
 func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 	return withWorktreeMutationLock(dir, func() error {
 		var errs []error
-		entries, err := worktreeListInDir(dir)
+		entries, err := WorktreeListInDir(dir)
 		if err != nil {
 			return err
 		}
@@ -598,7 +609,7 @@ func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 			break
 		}
 
-		entries, err = worktreeListInDir(dir)
+		entries, err = WorktreeListInDir(dir)
 		if err != nil {
 			errs = append(errs, err)
 			return errors.Join(errs...)
@@ -773,7 +784,7 @@ func createWorktree(dir, path, branch, startPoint string) (CreatedWorktree, erro
 
 func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 	var errs []error
-	entries, err := worktreeListInDir(dir)
+	entries, err := WorktreeListInDir(dir)
 	if err != nil {
 		return err
 	}
@@ -786,7 +797,7 @@ func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 		}
 	}
 
-	entries, err = worktreeListInDir(dir)
+	entries, err = WorktreeListInDir(dir)
 	if err != nil {
 		return errors.Join(append(errs, err)...)
 	}
