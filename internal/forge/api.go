@@ -2,6 +2,7 @@ package forge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,26 +30,38 @@ type BranchInfo struct {
 }
 
 // PRMetadata fetches metadata for a single PR/MR number via gh or glab.
-func PRMetadata(forge Type, repoSlug, host string, prNumber int) (PRInfo, error) {
+func PRMetadata(ctx context.Context, forge Type, repoSlug, host string, prNumber int) (PRInfo, error) {
 	switch forge {
 	case GitHub:
-		return githubPRMetadata(repoSlug, prNumber)
+		return githubPRMetadata(ctx, repoSlug, prNumber)
 	case GitLab:
-		return gitlabMRMetadata(repoSlug, host, prNumber)
+		return gitlabMRMetadata(ctx, repoSlug, host, prNumber)
 	default:
 		return PRInfo{}, fmt.Errorf("unsupported forge: %q", forge)
 	}
 }
 
 // PRList returns all open PRs/MRs via gh or glab.
-func PRList(forge Type, repoSlug, host string) ([]PRInfo, error) {
+func PRList(ctx context.Context, forge Type, repoSlug, host string) ([]PRInfo, error) {
+	var prs []PRInfo
+	err := StreamPRBatches(ctx, forge, repoSlug, host, func(batch []PRInfo) error {
+		prs = append(prs, batch...)
+		return nil
+	})
+	return prs, err
+}
+
+// StreamPRBatches delivers open PRs/MRs in forge order so callers can render
+// before the whole list arrives. Callback failure or cancellation stops
+// delivery and the CLI requests still in flight.
+func StreamPRBatches(ctx context.Context, forge Type, repoSlug, host string, onBatch func([]PRInfo) error) error {
 	switch forge {
 	case GitHub:
-		return githubPRList(repoSlug)
+		return githubPRBatches(ctx, repoSlug, onBatch)
 	case GitLab:
-		return gitlabMRList(repoSlug, host)
+		return gitlabMRBatches(ctx, repoSlug, host, onBatch)
 	default:
-		return nil, fmt.Errorf("unsupported forge: %q", forge)
+		return fmt.Errorf("unsupported forge: %q", forge)
 	}
 }
 
@@ -57,6 +70,7 @@ var (
 	githubAPICall     = ghAPI
 	githubGraphQLCall = ghGraphQL
 	glabAPICall       = glabAPI
+	glabAPIStreamCall = glabAPIStream
 	gitlabGraphQLCall = glabGraphQL
 )
 
@@ -91,14 +105,26 @@ func FetchRef(forge Type, prNumber int) string {
 
 // BranchList returns all remote branches via gh or glab.
 // Returns branch names and last commit dates.
-func BranchList(forge Type, repoSlug, host string) ([]BranchInfo, error) {
+func BranchList(ctx context.Context, forge Type, repoSlug, host string) ([]BranchInfo, error) {
+	var branches []BranchInfo
+	err := StreamBranchBatches(ctx, forge, repoSlug, host, func(batch []BranchInfo) error {
+		branches = append(branches, batch...)
+		return nil
+	})
+	return branches, err
+}
+
+// StreamBranchBatches delivers remote branches in forge order so callers can
+// render before the whole list arrives. Callback failure or cancellation stops
+// delivery and the CLI requests still in flight.
+func StreamBranchBatches(ctx context.Context, forge Type, repoSlug, host string, onBatch func([]BranchInfo) error) error {
 	switch forge {
 	case GitHub:
-		return githubBranchList(repoSlug)
+		return githubBranchBatches(ctx, repoSlug, onBatch)
 	case GitLab:
-		return gitlabBranchList(repoSlug, host)
+		return gitlabBranchBatches(ctx, repoSlug, host, onBatch)
 	default:
-		return nil, fmt.Errorf("unsupported forge: %q", forge)
+		return fmt.Errorf("unsupported forge: %q", forge)
 	}
 }
 
@@ -114,9 +140,9 @@ func CLITool(forge Type) string {
 	}
 }
 
-func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
+func githubPRMetadata(ctx context.Context, repoSlug string, prNumber int) (PRInfo, error) {
 	endpoint := fmt.Sprintf("repos/%s/pulls/%d", repoSlug, prNumber)
-	out, err := githubAPICall(endpoint)
+	out, err := githubAPICall(ctx, endpoint)
 	if err != nil {
 		return PRInfo{}, err
 	}
@@ -139,13 +165,25 @@ func githubPRMetadata(repoSlug string, prNumber int) (PRInfo, error) {
 	}, nil
 }
 
-func githubPRList(repoSlug string) ([]PRInfo, error) {
-	owner, name, ok := strings.Cut(repoSlug, "/")
-	if !ok || owner == "" || name == "" {
-		return nil, fmt.Errorf("invalid GitHub repository %q", repoSlug)
+func githubPRList(ctx context.Context, repoSlug string) ([]PRInfo, error) {
+	var prs []PRInfo
+	err := githubPRBatches(ctx, repoSlug, func(page []PRInfo) error {
+		prs = append(prs, page...)
+		return nil
+	})
+	return prs, err
+}
+
+// githubPRBatches walks GraphQL cursor pagination, handing each batch to
+// onBatch as it arrives. Cursors are opaque, so batches cannot be requested
+// concurrently; delivering them one at a time is what lets a picker show the
+// first results while the rest are still in flight.
+func githubPRBatches(ctx context.Context, repoSlug string, onBatch func([]PRInfo) error) error {
+	owner, name, err := splitRepoSlug(repoSlug)
+	if err != nil {
+		return err
 	}
 
-	var prs []PRInfo
 	cursor := ""
 	seenCursors := make(map[string]struct{})
 	for {
@@ -153,23 +191,25 @@ func githubPRList(repoSlug string) ([]PRInfo, error) {
 		if cursor != "" {
 			variables["cursor"] = cursor
 		}
-		out, err := githubGraphQLCall(githubPRListQuery, variables)
+		out, err := githubGraphQLCall(ctx, githubPRListQuery, variables)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		page, err := parseGitHubPRListPage(out)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		prs = append(prs, page.prs...)
+		if err := onBatch(page.prs); err != nil {
+			return err
+		}
 		if !page.hasNextPage {
-			return prs, nil
+			return nil
 		}
 		if page.endCursor == "" {
-			return nil, errors.New("gh: PR list pagination cursor did not advance")
+			return errors.New("gh: PR list pagination cursor did not advance")
 		}
 		if _, seen := seenCursors[page.endCursor]; seen {
-			return nil, errors.New("gh: PR list pagination cursor did not advance")
+			return errors.New("gh: PR list pagination cursor did not advance")
 		}
 		seenCursors[page.endCursor] = struct{}{}
 		cursor = page.endCursor
@@ -248,7 +288,9 @@ func parseGitHubPRListPage(data []byte) (githubPRListPage, error) {
 
 func githubMergedHead(repoSlug, defaultBranch, branch, sha string) (bool, error) {
 	endpoint := fmt.Sprintf("repos/%s/commits/%s/pulls?per_page=100", repoSlug, url.PathEscape(sha))
-	out, err := githubAPICall(endpoint)
+	// Cleanup verification is a single short request outside any interactive
+	// picker, so it carries no cancellation of its own.
+	out, err := githubAPICall(context.Background(), endpoint)
 	if err != nil {
 		return false, err
 	}
@@ -278,16 +320,16 @@ func parseGithubMergedHead(data []byte, defaultBranch, branch, sha string) (bool
 	return false, nil
 }
 
-func ghAPI(endpoint string) ([]byte, error) {
-	return runForgeCLI("gh", ghAPIArgs(endpoint), nil, "gh api "+endpoint)
+func ghAPI(ctx context.Context, endpoint string) ([]byte, error) {
+	return runForgeCLI(ctx, "gh", ghAPIArgs(endpoint), nil, "gh api "+endpoint)
 }
 
 func ghAPIArgs(endpoint string) []string {
 	return []string{"api", endpoint, "--paginate"}
 }
 
-func ghGraphQL(query string, variables map[string]string) ([]byte, error) {
-	return runForgeCLI("gh", ghGraphQLArgs(query, variables), nil, "gh api graphql")
+func ghGraphQL(ctx context.Context, query string, variables map[string]string) ([]byte, error) {
+	return runForgeCLI(ctx, "gh", ghGraphQLArgs(query, variables), nil, "gh api graphql")
 }
 
 func ghGraphQLArgs(query string, variables map[string]string) []string {
@@ -303,13 +345,29 @@ func ghGraphQLArgs(query string, variables map[string]string) []string {
 	return args
 }
 
-func githubBranchList(repoSlug string) ([]BranchInfo, error) {
-	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
-	out, err := githubAPICall(endpoint)
-	if err != nil {
-		return nil, err
-	}
+func githubBranchList(ctx context.Context, repoSlug string) ([]BranchInfo, error) {
+	var branches []BranchInfo
+	err := githubBranchBatches(ctx, repoSlug, func(page []BranchInfo) error {
+		branches = append(branches, page...)
+		return nil
+	})
+	return branches, err
+}
 
+// githubBranchBatches hands each ordered REST-derived batch to onBatch. Batches
+// after the first are requested concurrently by fetchGitHubPages.
+func githubBranchBatches(ctx context.Context, repoSlug string, onBatch func([]BranchInfo) error) error {
+	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
+	return fetchGitHubPages(ctx, endpoint, func(raw []byte) error {
+		branches, err := parseGitHubBranchPage(raw)
+		if err != nil {
+			return err
+		}
+		return onBatch(branches)
+	})
+}
+
+func parseGitHubBranchPage(raw []byte) ([]BranchInfo, error) {
 	data, err := decodePaginated[struct {
 		Name   string `json:"name"`
 		Commit struct {
@@ -319,7 +377,7 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 				} `json:"committer"`
 			} `json:"commit"`
 		} `json:"commit"`
-	}](out)
+	}](raw)
 	if err != nil {
 		return nil, fmt.Errorf("gh: parsing branch list: %w", err)
 	}
@@ -338,10 +396,10 @@ func githubBranchList(repoSlug string) ([]BranchInfo, error) {
 // GitLab
 // ---------------------------------------------------------------------------
 
-func gitlabMRMetadata(repoSlug, host string, prNumber int) (PRInfo, error) {
+func gitlabMRMetadata(ctx context.Context, repoSlug, host string, prNumber int) (PRInfo, error) {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests/%d", encoded, prNumber)
-	out, err := glabAPICall(host, endpoint)
+	out, err := glabAPICall(ctx, host, endpoint)
 	if err != nil {
 		return PRInfo{}, err
 	}
@@ -362,77 +420,102 @@ func gitlabMRMetadata(repoSlug, host string, prNumber int) (PRInfo, error) {
 	}, nil
 }
 
-func gitlabMRList(repoSlug, host string) ([]PRInfo, error) {
+// gitlabMRBatches hands each NDJSON record from glab to onBatch immediately.
+func gitlabMRBatches(ctx context.Context, repoSlug, host string, onBatch func([]PRInfo) error) error {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&per_page=100", encoded)
-	out, err := glabAPICall(host, endpoint)
+	return glabAPIStreamCall(ctx, host, endpoint, func(out io.Reader) error {
+		return decodeNDJSONStream(out, func(record struct {
+			IID    int    `json:"iid"`
+			Title  string `json:"title"`
+			Branch string `json:"source_branch"`
+		}) error {
+			return onBatch([]PRInfo{{Number: record.IID, Title: record.Title, Branch: record.Branch}})
+		})
+	})
+}
+
+// decodePaginated reads consecutive JSON arrays emitted by aggregate CLI calls.
+func decodePaginated[T any](data []byte) ([]T, error) {
+	var values []T
+	err := decodePaginatedStream(bytes.NewReader(data), func(page []T) error {
+		values = append(values, page...)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	data, err := decodePaginated[struct {
-		IID    int    `json:"iid"`
-		Title  string `json:"title"`
-		Branch string `json:"source_branch"`
-	}](out)
-	if err != nil {
-		return nil, fmt.Errorf("glab: parsing MR list: %w", err)
-	}
-
-	mrs := make([]PRInfo, 0, len(data))
-	for _, d := range data {
-		mrs = append(mrs, PRInfo{
-			Number: d.IID,
-			Title:  d.Title,
-			Branch: d.Branch,
-		})
-	}
-	return mrs, nil
+	return values, nil
 }
 
-// decodePaginated reads the consecutive JSON arrays emitted by gh and glab
-// when --paginate is used.
-func decodePaginated[T any](data []byte) ([]T, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
+// decodeNDJSONStream delivers each complete JSON record as soon as it arrives.
+// Empty output is a valid empty result set.
+func decodeNDJSONStream[T any](reader io.Reader, onRecord func(T) error) error {
+	decoder := json.NewDecoder(reader)
+	for {
+		var record T
+		if err := decoder.Decode(&record); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if err := onRecord(record); err != nil {
+			return err
+		}
+	}
+}
+
+// decodePaginatedStream decodes the same consecutive JSON arrays from a reader,
+// handing each one to onPage as soon as it is complete. Reading a CLI's stdout
+// this way delivers a page while the CLI is still fetching the next.
+func decodePaginatedStream[T any](reader io.Reader, onPage func([]T) error) error {
+	decoder := json.NewDecoder(reader)
 	pages := 0
-	var values []T
 	for {
 		var page json.RawMessage
 		if err := decoder.Decode(&page); err != nil {
 			if errors.Is(err, io.EOF) {
 				if pages == 0 {
-					return nil, errors.New("empty JSON output")
+					return errors.New("empty JSON output")
 				}
-				return values, nil
+				return nil
 			}
-			return nil, err
+			return err
 		}
 		page = bytes.TrimSpace(page)
 		if bytes.Equal(page, []byte("null")) {
-			return nil, errors.New("expected JSON array, got null")
+			return errors.New("expected JSON array, got null")
 		}
 		if len(page) == 0 || page[0] != '[' {
-			return nil, errors.New("expected JSON array")
+			return errors.New("expected JSON array")
 		}
-		var pageValues []T
-		if err := json.Unmarshal(page, &pageValues); err != nil {
-			return nil, err
+		var values []T
+		if err := json.Unmarshal(page, &values); err != nil {
+			return err
 		}
 		pages++
-		values = append(values, pageValues...)
+		if err := onPage(values); err != nil {
+			return err
+		}
 	}
 }
 
-func glabAPI(host, endpoint string) ([]byte, error) {
-	return runForgeCLI("glab", glabAPIArgs(host, endpoint), nil, "glab api "+endpoint)
+func glabAPI(ctx context.Context, host, endpoint string) ([]byte, error) {
+	return runForgeCLI(ctx, "glab", glabAPIArgs(host, endpoint), nil, "glab api "+endpoint)
 }
 
-func glabGraphQL(host, query string, variables map[string]any) ([]byte, error) {
+// glabAPIStream emits NDJSON while glab is still walking its pagination.
+func glabAPIStream(ctx context.Context, host, endpoint string, consume func(io.Reader) error) error {
+	return runForgeCLIStream(ctx, "glab", glabAPIStreamArgs(host, endpoint), "glab api "+endpoint, consume)
+}
+
+func glabGraphQL(ctx context.Context, host, query string, variables map[string]any) ([]byte, error) {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return nil, fmt.Errorf("glab: encoding GraphQL request: %w", err)
 	}
-	return runForgeCLI("glab", glabGraphQLArgs(host), body, "glab api graphql")
+	return runForgeCLI(ctx, "glab", glabGraphQLArgs(host), body, "glab api graphql")
 }
 
 func glabGraphQLArgs(host string) []string {
@@ -443,32 +526,27 @@ func glabAPIArgs(host, endpoint string) []string {
 	return []string{"api", endpoint, "--hostname", host, "--paginate"}
 }
 
-func gitlabBranchList(repoSlug, host string) ([]BranchInfo, error) {
+func glabAPIStreamArgs(host, endpoint string) []string {
+	return []string{"api", endpoint, "--hostname", host, "--paginate", "--output", "ndjson"}
+}
+
+// gitlabBranchBatches hands each NDJSON record from glab to onBatch immediately.
+func gitlabBranchBatches(ctx context.Context, repoSlug, host string, onBatch func([]BranchInfo) error) error {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/repository/branches?per_page=100", encoded)
-	out, err := glabAPICall(host, endpoint)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := decodePaginated[struct {
-		Name   string `json:"name"`
-		Commit struct {
-			CommittedDate string `json:"committed_date"`
-		} `json:"commit"`
-	}](out)
-	if err != nil {
-		return nil, fmt.Errorf("glab: parsing branch list: %w", err)
-	}
-
-	branches := make([]BranchInfo, 0, len(data))
-	for _, d := range data {
-		branches = append(branches, BranchInfo{
-			Name: d.Name,
-			Date: formatRelativeDate(d.Commit.CommittedDate),
+	return glabAPIStreamCall(ctx, host, endpoint, func(out io.Reader) error {
+		return decodeNDJSONStream(out, func(record struct {
+			Name   string `json:"name"`
+			Commit struct {
+				CommittedDate string `json:"committed_date"`
+			} `json:"commit"`
+		}) error {
+			return onBatch([]BranchInfo{{
+				Name: record.Name,
+				Date: formatRelativeDate(record.Commit.CommittedDate),
+			}})
 		})
-	}
-	return branches, nil
+	})
 }
 
 // ---------------------------------------------------------------------------

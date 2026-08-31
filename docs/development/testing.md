@@ -43,11 +43,18 @@ treeman benchmark branch-results --warmup 3 --runs 10
 treeman benchmark review-results --warmup 3 --runs 10
 ```
 
-`branch-results` measures forge detection, all branch and open-review API
-pages, local-branch filtering, PR/MR association, and complete picker-row
-rendering. `review-results` measures forge detection, all open-review API
-pages, and complete picker-row rendering. Both report result counts and flag
-count changes between timed runs.
+`branch-results` measures forge detection, the branch preview query, all
+branch batches or records, local-branch filtering, per-branch PR/MR association,
+and complete picker-row rendering. `review-results` measures forge detection,
+all open-review batches or records, and complete picker-row rendering. Both report result
+counts and flag count changes between timed runs.
+
+Both targets also report the time to the first picker row: how long after
+forge detection starts the producer hands its first rendered row to the picker
+writer. Both targets start that timer at the same point, and neither runs
+`fzf`, so the number is producer row-ready latency rather than a measurement of
+what `fzf` painted. Use it to compare what the user waits for before the first
+result: both targets stream, so the first row comes seconds before the last.
 
 Install [hyperfine](https://github.com/sharkdp/hyperfine) to run the repeatable development benchmark.
 
@@ -81,5 +88,13 @@ TREEMAN_BIN=/path/to/treeman ./smoke-test.sh
 ```
 
 The smoke test creates temporary Git repositories. It uses mock `gh`, `glab`, and `fzf` programs. It tests installation, uninstallation, create, review, branch, switch, delete, and unit tests.
+
+The mock `fzf` reads the streamed list in one of two modes. By default it reads
+the whole list before answering, which is what a user who waits for every row
+does. With `FZF_MOCK_MODE=stream` it answers as soon as the wanted row arrives
+and exits, leaving the rest unwritten — the picker closing under a running
+producer. The branch picker is covered in both modes, because only the second
+one exercises selecting an early row and cancelling the forge requests that
+were still fetching the rest.
 
 The GitHub [CI workflow](ci.md) runs formatting, static checks, unit tests, a build, and the smoke test on pull requests.

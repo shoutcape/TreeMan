@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 func TestGitHubCompleteSnapshot(t *testing.T) {
 	previous := githubGraphQLCall
-	githubGraphQLCall = func(query string, variables map[string]string) ([]byte, error) {
+	githubGraphQLCall = func(_ context.Context, query string, variables map[string]string) ([]byte, error) {
 		assert.Contains(t, query, "ref0: ref(qualifiedName: $ref0)")
 		assert.Contains(t, query, "ref1: ref(qualifiedName: $ref1)")
 		assert.Contains(t, query, "pullRequests")
@@ -75,7 +76,7 @@ func TestGitHubSnapshotQueriesUseOnlyGeneratedAliases(t *testing.T) {
 func TestGitHubCompleteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
-	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
+	githubGraphQLCall = func(context.Context, string, map[string]string) ([]byte, error) {
 		calls++
 		return githubSnapshotPayload(t, githubSnapshotBatchSize), nil
 	}
@@ -92,7 +93,7 @@ func TestGitHubCompleteSnapshotBatchesOversizedCandidateLists(t *testing.T) {
 func TestGitHubCompleteSnapshotRejectsChangedDefaultBranchAcrossBatches(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
-	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
+	githubGraphQLCall = func(context.Context, string, map[string]string) ([]byte, error) {
 		calls++
 		if calls == 1 {
 			return githubSnapshotPayload(t, githubSnapshotBatchSize), nil
@@ -108,7 +109,7 @@ func TestGitHubCompleteSnapshotRejectsChangedDefaultBranchAcrossBatches(t *testi
 func TestGitHubCompleteSnapshotDiscardsPartialBatchesOnFailure(t *testing.T) {
 	previous := githubGraphQLCall
 	calls := 0
-	githubGraphQLCall = func(string, map[string]string) ([]byte, error) {
+	githubGraphQLCall = func(context.Context, string, map[string]string) ([]byte, error) {
 		calls++
 		if calls == 1 {
 			return githubSnapshotPayload(t, githubSnapshotBatchSize), nil

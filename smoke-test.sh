@@ -231,6 +231,59 @@ set -euo pipefail
 if [[ "${1:-}" == "api" ]]; then
   endpoint="${2:-}"
   if [[ "$endpoint" == "graphql" ]]; then
+    # The branch picker previews the first refs before paginating the branch
+    # list. An empty preview is valid: the full list still follows.
+    if [[ " $* " == *"refPrefix"* ]]; then
+      # Spelled out rather than as a ${VAR:-default}: a default this full of
+      # braces ends the expansion early and leaks the rest into the response,
+      # which reaches TreeMan as unparseable JSON and silently costs the
+      # preview every time.
+      if [[ -n "${MOCK_GH_REFS:-}" ]]; then
+        printf '%s\n' "$MOCK_GH_REFS"
+      else
+        printf '%s\n' '{"data":{"repository":{"refs":{"nodes":[]}}}}'
+      fi
+      exit 0
+    fi
+    # The branch picker asks for each branch's own open PR in aliased batches.
+    # Answer one alias per ref variable, in the order they were passed.
+    if [[ " $* " == *"branch0: ref(qualifiedName:"* ]]; then
+      nodes=""
+      index=0
+      while true; do
+        branch=""
+        for arg in "$@"; do
+          if [[ "$arg" == "ref${index}=refs/heads/"* ]]; then
+            branch="${arg#ref${index}=refs/heads/}"
+            break
+          fi
+        done
+        if [[ -z "$branch" ]]; then
+          break
+        fi
+        number=""
+        if [[ -n "${MOCK_GH_BRANCH_PRS:-}" ]]; then
+          IFS=';' read -ra pairs <<< "$MOCK_GH_BRANCH_PRS"
+          for pair in "${pairs[@]}"; do
+            if [[ "$pair" == "${branch}="* ]]; then
+              number="${pair#*=}"
+            fi
+          done
+        fi
+        if [[ -n "$number" ]]; then
+          node="{\"associatedPullRequests\":{\"nodes\":[{\"number\":${number},\"title\":\"Mock PR ${number}\"}]}}"
+        else
+          node="{\"associatedPullRequests\":{\"nodes\":[]}}"
+        fi
+        if [[ -n "$nodes" ]]; then
+          nodes="${nodes},"
+        fi
+        nodes="${nodes}\"branch${index}\":${node}"
+        index=$((index + 1))
+      done
+      printf '%s\n' "{\"data\":{\"repository\":{${nodes}}}}"
+      exit 0
+    fi
     if [[ -n "${MOCK_GH_GRAPHQL:-}" ]]; then
       printf '%s\n' "$MOCK_GH_GRAPHQL"
     else
@@ -247,7 +300,27 @@ if [[ "${1:-}" == "api" ]]; then
       printf '%s\n' "${MOCK_GH_VIEW_124:-}"
       exit 0
       ;;
-    *"/branches?per_page=100")
+    *"/branches?per_page=100"*)
+      # TreeMan requests branch pages with --include, so answer with the
+      # response headers real gh prints. One page means no Link header;
+      # MOCK_GH_BRANCHES_PAGE2 advertises a second one.
+      if [[ "$endpoint" == *"page=2"* ]]; then
+        # Sleeping without holding stdout, so cancelling the request really
+        # ends it instead of waiting on an orphan that still owns the pipe.
+        sleep "${MOCK_GH_PAGE2_DELAY:-0}" >/dev/null 2>&1
+        if [[ " $* " == *" --include "* ]]; then
+          printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n'
+        fi
+        printf '%s\n' "${MOCK_GH_BRANCHES_PAGE2:-[]}"
+        exit 0
+      fi
+      if [[ " $* " == *" --include "* ]]; then
+        if [[ -n "${MOCK_GH_BRANCHES_PAGE2:-}" ]]; then
+          printf 'HTTP/2.0 200 OK\r\nLink: <https://api.github.com/repositories/1/branches?per_page=100&page=2>; rel="last"\r\nContent-Type: application/json\r\n\r\n'
+        else
+          printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n'
+        fi
+      fi
       printf '%s\n' "${MOCK_GH_BRANCHES:-[]}"
       exit 0
       ;;
@@ -260,10 +333,30 @@ chmod +x "$MOCK_BIN/gh"
 
 # fzf mock: prints the line number given by FZF_CHOICE (1-based).
 # The Go binary pipes display lines to fzf stdin; the mock returns one line.
+#
+# FZF_MOCK_MODE picks how it reads that line:
+#   eof    (default) read the whole list, then answer — what a user who waits
+#          for every row does.
+#   stream answer as soon as the wanted row arrives and exit, leaving the rest
+#          of the list unwritten — what a user who picks an early row does,
+#          and the only mode that closes the pipe under a running producer.
 cat > "$MOCK_BIN/fzf" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-sed -n "${FZF_CHOICE:-1}p"
+choice="${FZF_CHOICE:-1}"
+if [[ "${FZF_MOCK_MODE:-eof}" == "stream" ]]; then
+  line=0
+  while IFS= read -r row; do
+    line=$((line + 1))
+    if (( line == choice )); then
+      printf '%s\n' "$row"
+      exit 0
+    fi
+  done
+  # The list ended before the wanted row: nothing was selected.
+  exit 1
+fi
+sed -n "${choice}p"
 EOF
 chmod +x "$MOCK_BIN/fzf"
 
@@ -559,7 +652,7 @@ git -C "$PR_SOURCE_REPO" push -u origin feature/picker-test >/dev/null
 
 # Mock returns only the new branch (feature/remote-only already exists locally now).
 export MOCK_GH_BRANCHES='[{"name":"feature/picker-test","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-15T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
-export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":99,"title":"Picker test PR","headRefName":"feature/picker-test"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+export MOCK_GH_BRANCH_PRS='feature/picker-test=99'
 
 cd "$MAIN_REPO"
 # FZF_CHOICE=2 picks the first data row (row 1 = header).
@@ -569,7 +662,49 @@ assert_exists "$BRANCH_WT_PICKER"
 [[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected wtb picker to cd into created worktree"
 unset FZF_CHOICE
 unset MOCK_GH_BRANCHES
+unset MOCK_GH_BRANCH_PRS
 unset MOCK_GH_GRAPHQL
+
+# ---------------------------------------------------------------------------
+# branch worktree — wtb (selection while the branch list is still arriving)
+# ---------------------------------------------------------------------------
+
+echo "==> branch worktree (streaming picker, early selection)"
+
+BRANCH_WT_EARLY="$MAIN_REPO/.worktrees/feature-picker-early"
+git -C "$PR_SOURCE_REPO" switch main >/dev/null
+git -C "$PR_SOURCE_REPO" switch -c feature/picker-early >/dev/null
+printf 'picker early\n' > "$PR_SOURCE_REPO/picker-early.txt"
+git -C "$PR_SOURCE_REPO" add picker-early.txt
+git -C "$PR_SOURCE_REPO" commit -m "early picker branch" >/dev/null
+git -C "$PR_SOURCE_REPO" push -u origin feature/picker-early >/dev/null
+
+# The preview query answers first, so a row is selectable while the REST branch
+# list is still paginating. Page 2 sleeps: picking a row has to close the picker
+# and cancel that request rather than wait for it.
+export MOCK_GH_REFS='{"data":{"repository":{"refs":{"nodes":[{"name":"feature/picker-early","target":{"committedDate":"2026-01-15T00:00:00Z"},"associatedPullRequests":{"nodes":[]}}]}}}}'
+export MOCK_GH_BRANCHES='[{"name":"feature/picker-early","protected":false,"commit":{"commit":{"committer":{"date":"2026-01-15T00:00:00Z"}}}},{"name":"main","protected":true,"commit":{"commit":{"committer":{"date":"2026-01-01T00:00:00Z"}}}}]'
+export MOCK_GH_BRANCHES_PAGE2='[]'
+export MOCK_GH_PAGE2_DELAY=10
+export FZF_MOCK_MODE=stream
+# FZF_CHOICE=2 picks the first data row (row 1 = header).
+export FZF_CHOICE=2
+
+cd "$MAIN_REPO"
+picker_started=$SECONDS
+wtb
+picker_elapsed=$((SECONDS - picker_started))
+assert_exists "$BRANCH_WT_EARLY"
+[[ "$(pwd)" == "$BRANCH_WT_EARLY" ]] || fail "Expected wtb to cd into the worktree picked from a streamed row"
+(( picker_elapsed < MOCK_GH_PAGE2_DELAY )) \
+  || fail "Expected the selection to cancel the branch page still in flight (took ${picker_elapsed}s)"
+
+unset FZF_CHOICE
+unset FZF_MOCK_MODE
+unset MOCK_GH_REFS
+unset MOCK_GH_BRANCHES
+unset MOCK_GH_BRANCHES_PAGE2
+unset MOCK_GH_PAGE2_DELAY
 
 # ---------------------------------------------------------------------------
 # protected deletions — treeman delete --path/--branch/--yes

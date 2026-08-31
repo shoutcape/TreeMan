@@ -1,11 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"time"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
@@ -96,12 +97,7 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 		// An exact branch name can be fetched by git without forge discovery or fzf.
 		selected.Name = query
 	} else {
-		data, err := loadBranchPickerData(cmd)
-		if err != nil {
-			return branchWorktreeCreation{}, err
-		}
-		prMap = data.prMap
-		selected, err = pickBranch(cmd, data.branches, query, prMap)
+		selection, err := pickBranchForForge(cmd, query)
 		if err != nil {
 			if errors.Is(err, errPickerCancelled) {
 				fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
@@ -109,6 +105,7 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 			}
 			return branchWorktreeCreation{}, err
 		}
+		selected, prMap = selection.branch, selection.prMap
 	}
 
 	branch := selected.Name
@@ -152,24 +149,60 @@ var (
 	branchPickerDefaultBranch = git.DetectDefaultBranch
 )
 
-// loadBranchPickerData fetches and prepares every branch that wtb can present.
-func loadBranchPickerData(cmd *cobra.Command) (branchPickerData, error) {
+// branchForge is the repository the branch picker will query.
+type branchForge struct {
+	forgeType forge.Type
+	repoSlug  string
+	host      string
+}
+
+func resolveBranchForge() (branchForge, error) {
 	remoteURL, err := git.OriginRemoteURL()
 	if err != nil {
-		return branchPickerData{}, err
+		return branchForge{}, err
 	}
 
 	forgeType, repoSlug, host, err := forge.ResolveFromRemote(remoteURL)
 	if err != nil {
-		return branchPickerData{}, err
+		return branchForge{}, err
 	}
 
 	cliTool := forge.CLITool(forgeType)
 	if _, err := exec.LookPath(cliTool); err != nil {
-		return branchPickerData{}, fmt.Errorf("%s is required for branch listing with %s repos. Install it from %s",
+		return branchForge{}, fmt.Errorf("%s is required for branch listing with %s repos. Install it from %s",
 			cliTool, forgeType, cliInstallURL(forgeType))
 	}
-	return loadBranchPickerDataForForge(cmd, forgeType, repoSlug, host)
+	return branchForge{forgeType: forgeType, repoSlug: repoSlug, host: host}, nil
+}
+
+// branchSelection is the branch the user picked, with the PR metadata that was
+// gathered for the picker so the summary can name the branch's open review.
+type branchSelection struct {
+	branch forge.BranchInfo
+	prMap  map[string]forge.PRInfo
+}
+
+// pickBranchForForge runs the picker that suits the forge. GitHub streams rows
+// as they are enriched; GitLab combines its NDJSON branch stream with the MR
+// list before rendering because the two arrive independently.
+func pickBranchForForge(cmd *cobra.Command, query string) (branchSelection, error) {
+	forgeInfo, err := resolveBranchForge()
+	if err != nil {
+		return branchSelection{}, err
+	}
+	if forgeInfo.forgeType == forge.GitHub {
+		return pickGitHubBranch(cmd, forgeInfo.repoSlug, query)
+	}
+
+	data, err := loadBranchPickerDataForForge(cmd, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
+	if err != nil {
+		return branchSelection{}, err
+	}
+	branch, err := pickBranch(cmd, data.branches, query, data.prMap)
+	if err != nil {
+		return branchSelection{}, err
+	}
+	return branchSelection{branch: branch, prMap: data.prMap}, nil
 }
 
 func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repoSlug, host string) (branchPickerData, error) {
@@ -187,12 +220,13 @@ func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repo
 	}
 	branchResults := make(chan branchListResult, 1)
 	prResults := make(chan prListResult, 1)
+	ctx := commandContext(cmd)
 	go func() {
-		branches, err := branchPickerBranchList(forgeType, repoSlug, host)
+		branches, err := branchPickerBranchList(ctx, forgeType, repoSlug, host)
 		branchResults <- branchListResult{branches: branches, err: err}
 	}()
 	go func() {
-		prs, err := branchPickerPRList(forgeType, repoSlug, host)
+		prs, err := branchPickerPRList(ctx, forgeType, repoSlug, host)
 		prResults <- prListResult{prs: prs, err: err}
 	}()
 
@@ -236,25 +270,48 @@ func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repo
 	return data, nil
 }
 
-// branchPickerResults loads and renders the complete wtb picker payload without
-// starting fzf, returning the number of available branches.
-func branchPickerResults(cmd *cobra.Command) (int, error) {
+// branchPickerResults streams the whole wtb picker payload without starting
+// fzf, returning the number of available branches and how long the first row
+// took.
+func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {
-		return 0, fmt.Errorf("not inside a git repository")
+		return 0, 0, fmt.Errorf("not inside a git repository")
 	}
+	writer := newPickerResultsWriter()
 	if _, err := git.MainWorktreeRoot(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	data, err := loadBranchPickerData(cmd)
+	forgeInfo, err := resolveBranchForge()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	_ = branchPickerPayload(cmd, data.branches, data.prMap)
-	return len(data.branches), nil
+	render := commandRenderer(cmd)
+
+	if forgeInfo.forgeType == forge.GitHub {
+		stream, err := newBranchStream(render, githubBranchSources())
+		if err != nil {
+			return 0, 0, err
+		}
+		count, err := streamPickerRows(commandContext(cmd), writer, render.BranchHeader(), stream.produce(forgeInfo.repoSlug))
+		if err != nil {
+			return 0, 0, err
+		}
+		return count, writer.firstRow(), nil
+	}
+
+	data, err := loadBranchPickerDataForForge(cmd, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := streamPickerRows(commandContext(cmd), writer, render.BranchHeader(), streamBranchRows(render, data.branches, data.prMap)); err != nil {
+		return 0, 0, err
+	}
+	return len(data.branches), writer.firstRow(), nil
 }
 
-// pickBranch opens an fzf picker populated with remote branches and returns
-// the selected branch. If query is provided, it pre-filters the list.
+// pickBranch opens an fzf picker populated with an already-fetched list of
+// remote branches and returns the selected branch. GitHub uses
+// pickGitHubBranch, which streams instead. If query is provided, it pre-filters the list.
 // If query is an exact match, it auto-selects without showing the picker.
 // prMap maps branch names to their associated PR/MR info (may be nil).
 func pickBranch(cmd *cobra.Command, branches []forge.BranchInfo, query string, prMap map[string]forge.PRInfo) (forge.BranchInfo, error) {
@@ -277,50 +334,37 @@ func pickBranch(cmd *cobra.Command, branches []forge.BranchInfo, query string, p
 		return forge.BranchInfo{}, fmt.Errorf("fzf is required to pick a remote branch; pass an exact branch name or install fzf")
 	}
 
-	payload := branchPickerPayload(cmd, branches, prMap)
-
-	// Pipe to fzf.
-	fzfArgs := append(pickerArgs(sessionFor(cmd).errorOutput.Color, " remote branches ", "branch > "), "--header-lines=1")
-	if query != "" {
-		fzfArgs = append(fzfArgs, "--query", query)
-	}
-
-	fzfCmd := exec.Command("fzf", fzfArgs...)
-	fzfCmd.Stdin = strings.NewReader(payload)
-	fzfCmd.Stderr = cmd.ErrOrStderr()
-
-	out, err := fzfCmd.Output()
+	render := commandRenderer(cmd)
+	index, _, err := runStreamingPicker(cmd, pickerRequest{
+		label:  " remote branches ",
+		prompt: "branch > ",
+		query:  query,
+		header: render.BranchHeader(),
+	}, streamBranchRows(render, branches, prMap))
 	if err != nil {
-		if pickerCancelled(err) {
-			return forge.BranchInfo{}, errPickerCancelled
-		}
-		return forge.BranchInfo{}, fmt.Errorf("fzf failed while selecting a branch: %w", err)
-	}
-
-	selection := strings.TrimSpace(string(out))
-	if selection == "" {
-		return forge.BranchInfo{}, errPickerCancelled
-	}
-
-	index := pickerSelectionIndex(selection, len(branches))
-	if index < 0 {
-		return forge.BranchInfo{}, fmt.Errorf("could not map fzf selection to a branch")
+		return forge.BranchInfo{}, err
 	}
 	return branches[index], nil
 }
 
-func branchPickerPayload(cmd *cobra.Command, branches []forge.BranchInfo, prMap map[string]forge.PRInfo) string {
-	var sb strings.Builder
-	render := commandRenderer(cmd)
-	sb.WriteString(render.BranchHeader())
-	sb.WriteByte('\n')
-	for i, b := range branches {
-		mrNumber := 0
-		if pr, ok := prMap[b.Name]; ok {
-			mrNumber = pr.Number
+// streamBranchRows emits one picker row per remote branch from a list that has
+// already been fetched.
+//
+// This is the GitLab path. Its MR column comes from a separate query for every
+// open MR, so no row can be written until that query lands. GitHub instead
+// asks each branch for its own PR and streams rows as they are enriched; see
+// branchStream.
+func streamBranchRows(render ui.Renderer, branches []forge.BranchInfo, prMap map[string]forge.PRInfo) pickerProducer {
+	return func(_ context.Context, emit func(string) error) error {
+		for _, branch := range branches {
+			mrNumber := 0
+			if pr, ok := prMap[branch.Name]; ok {
+				mrNumber = pr.Number
+			}
+			if err := emit(render.BranchRow(branch.Name, branch.Date, mrNumber)); err != nil {
+				return err
+			}
 		}
-		sb.WriteString(pickerRow(render.BranchRow(b.Name, b.Date, mrNumber), i))
-		sb.WriteByte('\n')
+		return nil
 	}
-	return sb.String()
 }

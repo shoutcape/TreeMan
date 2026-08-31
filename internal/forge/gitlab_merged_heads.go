@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,9 @@ const gitlabMergedHeadsBatchSize = 40
 func gitlabMergedHead(repoSlug, host, defaultBranch, branch, sha string) (bool, error) {
 	encoded := remote.URLEncode(repoSlug)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=merged&source_branch=%s&target_branch=%s&per_page=100", encoded, url.QueryEscape(branch), url.QueryEscape(defaultBranch))
-	out, err := glabAPICall(host, endpoint)
+	// Cleanup runs outside any interactive picker, so it carries no
+	// cancellation of its own.
+	out, err := glabAPICall(context.Background(), host, endpoint)
 	if err != nil {
 		return false, err
 	}
@@ -74,7 +77,7 @@ func gitlabMergedHeadsBatch(repoSlug, host, defaultBranch string, sourceBranches
 	}
 	previousCursor := ""
 	for {
-		out, err := gitlabGraphQLCall(host, gitlabMergedHeadsQuery, variables)
+		out, err := gitlabGraphQLCall(context.Background(), host, gitlabMergedHeadsQuery, variables)
 		if err != nil {
 			return nil, err
 		}

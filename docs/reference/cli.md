@@ -50,7 +50,7 @@ Report whether environment file copy, dependency installation, database setup, a
 treeman branch [query] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
-`branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all paginated remote branches from the detected forge and uses `fzf`.
+`branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
 
 TreeMan excludes the default branch and local branches. It does not exclude protected branches.
 
@@ -64,7 +64,7 @@ treeman review [pr-number] [--skip-env] [--skip-database] [--skip-deps] [--skip-
 
 `review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
 
-Give a positive numeric PR or MR number. Without a number, TreeMan uses `fzf` to select an open PR or MR.
+Give a positive numeric PR or MR number. Without a number, TreeMan uses `fzf` to select an open PR or MR. TreeMan opens `fzf` immediately and streams GitHub batches or GitLab NDJSON records as they arrive. You can filter and select before all results arrive. Closing the picker stops the requests that were still fetching the rest.
 
 TreeMan fetches the review head into a new worktree. It runs environment, database, dependency, and hook actions.
 
@@ -111,7 +111,7 @@ List repository worktrees with branch, path, main, current, dirty, stale, and me
 treeman benchmark [list | branch <remote-branch> | review <pr-number> | branch-results | review-results] [--runs <count>] [--warmup <count>]
 ```
 
-Measure execution time for a supported command. The default command is `list`. `branch` requires an exact remote branch name and measures the exact remote-branch lookup, fetch, and worktree creation. `review` requires an explicit GitHub PR or GitLab MR number and also measures forge resolution. Both skip project setup: environment files, dependencies, databases, and hooks. After every warmup and timed iteration, TreeMan force-removes the worktree and exact local branch it created. `branch-results` and `review-results` measure the complete data payload used by interactive `wtb` and `wtmr`, respectively. The payload includes paginated forge API retrieval, filtering and association where applicable, and picker-row rendering. They stop before launching `fzf`, make no repository changes, report the number of available results, and flag changes during timed runs. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
+Measure execution time for a supported command. The default command is `list`. `branch` requires an exact remote branch name and measures the exact remote-branch lookup, fetch, and worktree creation. `review` requires an explicit GitHub PR or GitLab MR number and also measures forge resolution. Both skip project setup: environment files, dependencies, databases, and hooks. After every warmup and timed iteration, TreeMan force-removes the worktree and exact local branch it created. `branch-results` and `review-results` measure the complete data payload used by interactive `wtb` and `wtmr`, respectively. The payload includes streamed forge batches or records, filtering and association where applicable, and picker-row rendering. They stop before launching `fzf`, make no repository changes, report the number of available results, and flag changes during timed runs. Both also report producer row-ready latency: the time from forge detection until the producer hands its first rendered row to the picker writer. This is not `fzf` paint latency. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
 
 ## `clean`
 

@@ -1,11 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"time"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
@@ -100,7 +101,7 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 	}
 
 	// Fetch PR/MR metadata.
-	info, err := forge.PRMetadata(forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, prNumber)
+	info, err := forge.PRMetadata(commandContext(cmd), forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, prNumber)
 	if err != nil {
 		return reviewWorktreeCreation{}, fmt.Errorf("failed to resolve PR/MR #%d with %s: %w", prNumber, forgeInfo.cliTool, err)
 	}
@@ -183,33 +184,50 @@ func resolveReviewForge() (reviewForge, error) {
 	return reviewForge{forgeType: forgeType, repoSlug: repoSlug, host: host, cliTool: cliTool}, nil
 }
 
-func loadReviewPickerData(forgeInfo reviewForge) ([]forge.PRInfo, error) {
-	prs, err := forge.PRList(forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list open PRs/MRs: %w", err)
+var reviewPickerPRBatches = forge.StreamPRBatches
+
+// streamReviewRows emits one picker row per open PR/MR as each forge batch
+// arrives, appending every PR to prs so a selection can be resolved once the
+// picker closes.
+func streamReviewRows(render ui.Renderer, forgeInfo reviewForge, prs *[]forge.PRInfo) pickerProducer {
+	return func(ctx context.Context, emit func(string) error) error {
+		err := reviewPickerPRBatches(ctx, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, func(batch []forge.PRInfo) error {
+			for _, pr := range batch {
+				*prs = append(*prs, pr)
+				if err := emit(render.PRRow(pr.Number, pr.Branch, pr.Title)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil && !consumerClosed(err) {
+			return fmt.Errorf("failed to list open PRs/MRs: %w", err)
+		}
+		return err
 	}
-	if len(prs) == 0 {
-		return nil, fmt.Errorf("no open PRs/MRs found")
-	}
-	return prs, nil
 }
 
-// reviewPickerResults loads and renders the complete wtmr picker payload without
-// starting fzf, returning the number of open reviews.
-func reviewPickerResults(cmd *cobra.Command) (int, error) {
+// reviewPickerResults streams the whole wtmr picker payload without starting
+// fzf, returning the number of open reviews and how long the first row took.
+func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {
-		return 0, fmt.Errorf("not inside a git repository")
+		return 0, 0, fmt.Errorf("not inside a git repository")
 	}
+	writer := newPickerResultsWriter()
 	forgeInfo, err := resolveReviewForge()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	prs, err := loadReviewPickerData(forgeInfo)
+	var prs []forge.PRInfo
+	render := commandRenderer(cmd)
+	count, err := streamPickerRows(commandContext(cmd), writer, render.PRHeader(), streamReviewRows(render, forgeInfo, &prs))
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	_ = reviewPickerPayload(cmd, prs)
-	return len(prs), nil
+	if count == 0 {
+		return 0, 0, fmt.Errorf("no open PRs/MRs found")
+	}
+	return count, writer.firstRow(), nil
 }
 
 // pickPRNumber opens an fzf picker populated with open PRs/MRs and returns
@@ -222,49 +240,22 @@ func pickPRNumber(cmd *cobra.Command, forgeInfo reviewForge) (int, error) {
 		return 0, fmt.Errorf("fzf is required to pick an open PR/MR; pass a PR number or install fzf")
 	}
 
-	prs, err := loadReviewPickerData(forgeInfo)
+	// fzf starts before the first forge batch lands, so the picker is on screen
+	// and filtering while the remaining results are still being fetched.
+	render := commandRenderer(cmd)
+	var prs []forge.PRInfo
+	index, count, err := runStreamingPicker(cmd, pickerRequest{
+		label:  " open prs / mrs ",
+		prompt: "review > ",
+		header: render.PRHeader(),
+	}, streamReviewRows(render, forgeInfo, &prs))
 	if err != nil {
+		if errors.Is(err, errPickerCancelled) && count == 0 {
+			return 0, fmt.Errorf("no open PRs/MRs found")
+		}
 		return 0, err
 	}
-
-	payload := reviewPickerPayload(cmd, prs)
-
-	// Pipe to fzf.
-	fzfArgs := append(pickerArgs(sessionFor(cmd).errorOutput.Color, " open prs / mrs ", "review > "), "--header-lines=1")
-	fzfCmd := exec.Command("fzf", fzfArgs...)
-	fzfCmd.Stdin = strings.NewReader(payload)
-	fzfCmd.Stderr = cmd.ErrOrStderr()
-
-	out, err := fzfCmd.Output()
-	if err != nil {
-		if pickerCancelled(err) {
-			return 0, errPickerCancelled
-		}
-		return 0, fmt.Errorf("fzf failed while selecting a PR/MR: %w", err)
-	}
-
-	selection := strings.TrimSpace(string(out))
-	if selection == "" {
-		return 0, errPickerCancelled
-	}
-
-	index := pickerSelectionIndex(selection, len(prs))
-	if index < 0 {
-		return 0, fmt.Errorf("could not map fzf selection to a PR/MR")
-	}
 	return prs[index].Number, nil
-}
-
-func reviewPickerPayload(cmd *cobra.Command, prs []forge.PRInfo) string {
-	var sb strings.Builder
-	render := commandRenderer(cmd)
-	sb.WriteString(render.PRHeader())
-	sb.WriteByte('\n')
-	for i, pr := range prs {
-		sb.WriteString(pickerRow(render.PRRow(pr.Number, pr.Branch, pr.Title), i))
-		sb.WriteByte('\n')
-	}
-	return sb.String()
 }
 
 func cliInstallURL(f forge.Type) string {

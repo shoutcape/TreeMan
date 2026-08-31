@@ -90,16 +90,66 @@ func runBenchmark(cmd *cobra.Command, target, argument string, warmup, runs int)
 type benchmarkIteration struct {
 	cleanup     func() error
 	resultCount *int
+	firstResult *time.Duration
+}
+
+// firstRowWriter records how long the first picker row took to reach the
+// consumer. A streaming picker is judged by that, not by how long the whole
+// list takes: the header is written before any result is known, so only the
+// write after it counts.
+//
+// The benchmark targets run no fzf, so what this times is when the producer
+// had a row ready, not when a picker painted it.
+type firstRowWriter struct {
+	out    io.Writer
+	now    func() time.Time
+	start  time.Time
+	writes int
+	first  time.Duration
+}
+
+func newFirstRowWriter(out io.Writer, now func() time.Time) *firstRowWriter {
+	return &firstRowWriter{out: out, now: now, start: now()}
+}
+
+// newPickerResultsWriter starts the clock the picker-results targets are
+// judged by. Both targets take it from here — once the command knows it is in
+// a repository, before any forge work — so their numbers are comparable
+// rather than each timing from wherever its own preconditions happened to
+// end.
+func newPickerResultsWriter() *firstRowWriter {
+	return newFirstRowWriter(io.Discard, time.Now)
+}
+
+func (writer *firstRowWriter) Write(payload []byte) (int, error) {
+	writer.writes++
+	if writer.writes == 2 {
+		writer.first = writer.now().Sub(writer.start)
+	}
+	return writer.out.Write(payload)
+}
+
+func (writer *firstRowWriter) firstRow() time.Duration {
+	return writer.first
+}
+
+func formatBenchmarkFirstResults(durations []time.Duration) string {
+	if len(durations) == 0 {
+		return "first result: unavailable"
+	}
+	mean, _, minDuration, maxDuration := calcStats(durations)
+	return fmt.Sprintf("first result: mean %s   min %s   max %s",
+		formatDuration(mean), formatDuration(minDuration), formatDuration(maxDuration))
 }
 
 type benchmarkRunner func(*cobra.Command) (benchmarkIteration, error)
 
-type benchmarkResultRunner func(*cobra.Command) (int, error)
+type benchmarkResultRunner func(*cobra.Command) (int, time.Duration, error)
 
 func resultCountRunner(runner benchmarkResultRunner) benchmarkRunner {
 	return func(runCmd *cobra.Command) (benchmarkIteration, error) {
-		count, err := runner(runCmd)
-		return benchmarkIteration{resultCount: &count}, err
+		count, firstResult, err := runner(runCmd)
+		return benchmarkIteration{resultCount: &count, firstResult: &firstResult}, err
 	}
 }
 
@@ -126,6 +176,7 @@ func runBenchmarkIterations(cmd *cobra.Command, target string, warmup, runs int,
 
 	durations := make([]time.Duration, 0, runs)
 	counts := make([]int, 0, runs)
+	firstResults := make([]time.Duration, 0, runs)
 	for index := range runs {
 		start := time.Now()
 		iteration, err := runner(silenced)
@@ -139,6 +190,10 @@ func runBenchmarkIterations(cmd *cobra.Command, target string, warmup, runs int,
 			counts = append(counts, *iteration.resultCount)
 			result += fmt.Sprintf("  %d results", *iteration.resultCount)
 		}
+		if iteration.firstResult != nil && *iteration.firstResult > 0 {
+			firstResults = append(firstResults, *iteration.firstResult)
+			result += fmt.Sprintf("  first %s", formatDuration(*iteration.firstResult))
+		}
 		fmt.Fprintf(errOut, "  %s\n", render.Status(ui.ToneInfo, "->", result))
 	}
 
@@ -150,6 +205,9 @@ func runBenchmarkIterations(cmd *cobra.Command, target string, warmup, runs int,
 	fmt.Fprintf(errOut, "  %s\n", render.Muted(fmt.Sprintf("max:    %s", formatDuration(maxDuration))))
 	if len(counts) > 0 {
 		fmt.Fprintf(errOut, "  %s\n", render.Muted(formatBenchmarkResultCounts(counts)))
+	}
+	if len(firstResults) > 0 {
+		fmt.Fprintf(errOut, "  %s\n", render.Muted(formatBenchmarkFirstResults(firstResults)))
 	}
 	fmt.Fprintln(errOut)
 	return nil
