@@ -2,6 +2,7 @@ package forge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -159,7 +160,9 @@ func (plan githubCompleteSnapshotPlan) query() string {
 func githubCompleteSnapshotBatch(owner, name, defaultBranch string, candidates []SnapshotCandidate) (GitHubSnapshot, error) {
 	plan := newGitHubCompleteSnapshotPlan(candidates)
 	variables := plan.variables(owner, name, defaultBranch)
-	out, err := githubGraphQLCall(plan.query(), variables)
+	// Cleanup runs outside any interactive picker, so it carries no
+	// cancellation of its own.
+	out, err := githubGraphQLCall(context.Background(), plan.query(), variables)
 	if err != nil {
 		return GitHubSnapshot{}, err
 	}

@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -28,13 +30,13 @@ func stubBranchStreamSources(t *testing.T, local []string, preview []forge.Branc
 	t.Helper()
 	previousPreview := branchPickerPreview
 	previousPRs := branchPickerBranchPRs
-	previousPages := branchPickerBranchPages
+	previousBatches := branchPickerBranchBatches
 	previousLocal := branchPickerLocalBranches
 	previousDefault := branchPickerDefaultBranch
 	t.Cleanup(func() {
 		branchPickerPreview = previousPreview
 		branchPickerBranchPRs = previousPRs
-		branchPickerBranchPages = previousPages
+		branchPickerBranchBatches = previousBatches
 		branchPickerLocalBranches = previousLocal
 		branchPickerDefaultBranch = previousDefault
 	})
@@ -45,17 +47,17 @@ func stubBranchStreamSources(t *testing.T, local []string, preview []forge.Branc
 	}
 	branchPickerLocalBranches = func() (map[string]struct{}, error) { return localBranches, nil }
 	branchPickerDefaultBranch = func() (string, error) { return "main", nil }
-	branchPickerPreview = func(string) ([]forge.BranchPR, error) { return preview, previewErr }
-	branchPickerBranchPages = func(_ forge.Type, _, _ string, onPage func([]forge.BranchInfo) error) error {
-		for _, page := range pages {
-			if err := onPage(page); err != nil {
+	branchPickerPreview = func(context.Context, string) ([]forge.BranchPR, error) { return preview, previewErr }
+	branchPickerBranchBatches = func(_ context.Context, _ forge.Type, _, _ string, onBatch func([]forge.BranchInfo) error) error {
+		for _, batch := range pages {
+			if err := onBatch(batch); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	branchPickerBranchPRs = func(_ string, produce func(func([]forge.BranchInfo) error) error, onGroup func([]forge.BranchPR) error) error {
-		return produce(func(branches []forge.BranchInfo) error {
+	branchPickerBranchPRs = func(ctx context.Context, _ string, produce func(context.Context, func([]forge.BranchInfo) error) error, onGroup func([]forge.BranchPR) error) error {
+		return produce(ctx, func(branches []forge.BranchInfo) error {
 			group := make([]forge.BranchPR, 0, len(branches))
 			for _, branch := range branches {
 				entry := forge.BranchPR{Branch: branch}
@@ -73,7 +75,7 @@ func stubBranchStreamSources(t *testing.T, local []string, preview []forge.Branc
 func streamedBranchNames(t *testing.T, stream *branchStream) []string {
 	t.Helper()
 	out := &bytes.Buffer{}
-	_, err := streamPickerRows(out, "HEADER", stream.produce("owner/repo"))
+	_, err := streamPickerRows(context.Background(), out, "HEADER", stream.produce("owner/repo"))
 	require.NoError(t, err)
 
 	var names []string
@@ -130,7 +132,7 @@ func TestBranchStreamKeepsSelectableBranchesAlignedWithRows(t *testing.T) {
 	stream := newTestBranchStream(t)
 
 	out := &bytes.Buffer{}
-	count, err := streamPickerRows(out, "HEADER", stream.produce("owner/repo"))
+	count, err := streamPickerRows(context.Background(), out, "HEADER", stream.produce("owner/repo"))
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
@@ -154,12 +156,12 @@ func TestBranchStreamReportsABranchListFailure(t *testing.T) {
 	stubBranchStreamSources(t, nil, nil, errors.New("no preview"), nil, nil)
 	previous := branchPickerBranchPRs
 	t.Cleanup(func() { branchPickerBranchPRs = previous })
-	branchPickerBranchPRs = func(string, func(func([]forge.BranchInfo) error) error, func([]forge.BranchPR) error) error {
+	branchPickerBranchPRs = func(context.Context, string, func(context.Context, func([]forge.BranchInfo) error) error, func([]forge.BranchPR) error) error {
 		return errors.New("gh exploded")
 	}
 	stream := newTestBranchStream(t)
 
-	_, err := streamPickerRows(&bytes.Buffer{}, "HEADER", stream.produce("owner/repo"))
+	_, err := streamPickerRows(context.Background(), &bytes.Buffer{}, "HEADER", stream.produce("owner/repo"))
 
 	assert.ErrorContains(t, err, "failed to list remote branches")
 	assert.ErrorContains(t, err, "gh exploded")
@@ -171,4 +173,86 @@ func branchNames(branches []forge.BranchInfo) []string {
 		names = append(names, branch.Name)
 	}
 	return names
+}
+
+// lineWriter hands each written row to a channel, so a test can observe rows
+// arriving while the producer is still running.
+type lineWriter struct{ lines chan<- string }
+
+func (writer lineWriter) Write(payload []byte) (int, error) {
+	writer.lines <- strings.TrimRight(string(payload), "\n")
+	return len(payload), nil
+}
+
+// The preview is a head start, not a gate: rows the enriched branch list
+// already has must reach the picker while the preview is still in flight.
+func TestBranchStreamDoesNotLetASlowPreviewHoldBackEnrichedRows(t *testing.T) {
+	stubBranchStreamSources(t, nil, nil, nil,
+		[][]forge.BranchInfo{{{Name: "alpha"}}},
+		map[string]int{"alpha": 4},
+	)
+	previousPreview := branchPickerPreview
+	t.Cleanup(func() { branchPickerPreview = previousPreview })
+	branchPickerPreview = func(ctx context.Context, _ string) ([]forge.BranchPR, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	stream := newTestBranchStream(t)
+
+	lines := make(chan string, 8)
+	done := make(chan error, 1)
+	go func() {
+		_, err := streamPickerRows(context.Background(), lineWriter{lines: lines}, "HEADER", stream.produce("owner/repo"))
+		done <- err
+	}()
+
+	assert.Equal(t, "HEADER", <-lines)
+	select {
+	case row := <-lines:
+		assert.Contains(t, row, "alpha")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the preview held back a row the branch list already had")
+	}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream waited for a preview that adds nothing")
+	}
+}
+
+// A picker the user closes cancels the context it handed the producer, which
+// has to end both sources rather than block on whichever is slowest.
+func TestBranchStreamStopsWhenTheContextIsCancelled(t *testing.T) {
+	stubBranchStreamSources(t, nil, nil, nil, nil, nil)
+	previousPreview := branchPickerPreview
+	previousBatches := branchPickerBranchBatches
+	t.Cleanup(func() {
+		branchPickerPreview = previousPreview
+		branchPickerBranchBatches = previousBatches
+	})
+	branchPickerPreview = func(ctx context.Context, _ string) ([]forge.BranchPR, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	branchPickerBranchBatches = func(ctx context.Context, _ forge.Type, _, _ string, _ func([]forge.BranchInfo) error) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	stream := newTestBranchStream(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := streamPickerRows(ctx, &bytes.Buffer{}, "HEADER", stream.produce("owner/repo"))
+		done <- err
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelling did not stop the branch stream")
+	}
 }

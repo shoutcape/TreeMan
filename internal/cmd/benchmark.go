@@ -97,6 +97,9 @@ type benchmarkIteration struct {
 // consumer. A streaming picker is judged by that, not by how long the whole
 // list takes: the header is written before any result is known, so only the
 // write after it counts.
+//
+// The benchmark targets run no fzf, so what this times is when the producer
+// had a row ready, not when a picker painted it.
 type firstRowWriter struct {
 	out    io.Writer
 	now    func() time.Time

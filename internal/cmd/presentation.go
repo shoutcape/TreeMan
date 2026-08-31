@@ -19,6 +19,16 @@ type terminalSessionKey struct{}
 
 // sessionFor caches stream capabilities on the Cobra command. Rendering and
 // interaction share this decision rather than probing terminal state ad hoc.
+// commandContext is the context a command's work runs under. cobra leaves it
+// nil until the command is executed, so a command built directly — by a test,
+// or by a helper that never goes through Execute — still needs a parent.
+func commandContext(cmd *cobra.Command) context.Context {
+	if ctx := cmd.Context(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
 func sessionFor(cmd *cobra.Command) terminalSession {
 	ctx := cmd.Context()
 	if ctx == nil {

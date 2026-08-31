@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 func TestGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
-	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
+	gitlabGraphQLCall = func(_ context.Context, host, query string, variables map[string]any) ([]byte, error) {
 		assert.Equal(t, "gitlab.example", host)
 		assert.Contains(t, query, "sourceBranches: $sourceBranches")
 		assert.Contains(t, query, "diffHeadSha")
@@ -36,7 +37,7 @@ func TestGitLabMergedHeadsBatchesAndPaginatesExactMatches(t *testing.T) {
 func TestGitLabMergedHeadsBatchesCandidateInputAndMatchesAcrossBatches(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
-	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
+	gitlabGraphQLCall = func(_ context.Context, host, query string, variables map[string]any) ([]byte, error) {
 		assert.Equal(t, "gitlab.example", host)
 		assert.Contains(t, query, "sourceBranches: $sourceBranches")
 		branches := variables["sourceBranches"].([]string)
@@ -61,7 +62,7 @@ func TestGitLabMergedHeadsBatchesCandidateInputAndMatchesAcrossBatches(t *testin
 func TestGitLabMergedHeadsRejectsOutOfBatchMatches(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
-	gitlabGraphQLCall = func(host, query string, variables map[string]any) ([]byte, error) {
+	gitlabGraphQLCall = func(_ context.Context, host, query string, variables map[string]any) ([]byte, error) {
 		assert.Equal(t, "gitlab.example", host)
 		assert.Contains(t, query, "sourceBranches: $sourceBranches")
 		calls++
@@ -81,7 +82,7 @@ func TestGitLabMergedHeadsRejectsOutOfBatchMatches(t *testing.T) {
 func TestGitLabMergedHeadsDiscardsPartialMatchesWhenABatchFails(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
-	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
+	gitlabGraphQLCall = func(context.Context, string, string, map[string]any) ([]byte, error) {
 		calls++
 		if calls == 1 {
 			return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[{"sourceBranch":"feature/0","targetBranch":"main","diffHeadSha":"sha0"}],"pageInfo":{"endCursor":null,"hasNextPage":false}}}}}`), nil
@@ -97,7 +98,7 @@ func TestGitLabMergedHeadsDiscardsPartialMatchesWhenABatchFails(t *testing.T) {
 
 func TestGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
 	previous := gitlabGraphQLCall
-	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
+	gitlabGraphQLCall = func(context.Context, string, string, map[string]any) ([]byte, error) {
 		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":true}}}}}`), nil
 	}
 	t.Cleanup(func() { gitlabGraphQLCall = previous })
@@ -108,7 +109,7 @@ func TestGitLabMergedHeadsRejectsIncompletePage(t *testing.T) {
 func TestGitLabMergedHeadsRejectsUnchangedCursor(t *testing.T) {
 	previous := gitlabGraphQLCall
 	calls := 0
-	gitlabGraphQLCall = func(string, string, map[string]any) ([]byte, error) {
+	gitlabGraphQLCall = func(context.Context, string, string, map[string]any) ([]byte, error) {
 		calls++
 		return []byte(`{"data":{"project":{"mergeRequests":{"nodes":[],"pageInfo":{"endCursor":"stuck","hasNextPage":true}}}}}`), nil
 	}

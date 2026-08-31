@@ -2,10 +2,12 @@ package forge
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // githubPageConcurrency bounds how many pages of one paginated endpoint are
@@ -16,8 +18,8 @@ const githubPageConcurrency = 8
 var githubPageCall = ghAPIPage
 
 // ghAPIPage requests a single page and returns its Link header with the body.
-func ghAPIPage(endpoint string) (string, []byte, error) {
-	raw, err := runForgeCLI("gh", ghAPIPageArgs(endpoint), nil, "gh api "+endpoint)
+func ghAPIPage(ctx context.Context, endpoint string) (string, []byte, error) {
+	raw, err := runForgeCLI(ctx, "gh", ghAPIPageArgs(endpoint), nil, "gh api "+endpoint)
 	if err != nil {
 		return "", nil, err
 	}
@@ -35,8 +37,8 @@ func ghAPIPageArgs(endpoint string) []string {
 // response, so the remaining pages are requested concurrently instead of
 // walking one "next" link at a time. Endpoints that omit rel="last" fall back
 // to that sequential walk.
-func fetchGitHubPages(endpoint string, onPage func(page []byte) error) error {
-	link, body, err := githubPageCall(endpoint)
+func fetchGitHubPages(ctx context.Context, endpoint string, onPage func(page []byte) error) error {
+	link, body, err := githubPageCall(ctx, endpoint)
 	if err != nil {
 		return err
 	}
@@ -45,11 +47,11 @@ func fetchGitHubPages(endpoint string, onPage func(page []byte) error) error {
 	}
 
 	if last := linkLastPage(link); last >= 2 {
-		return fetchGitHubPageRange(endpoint, last, onPage)
+		return fetchGitHubPageRange(ctx, endpoint, last, onPage)
 	}
 
 	for next := linkRelationURL(link, "next"); next != ""; next = linkRelationURL(link, "next") {
-		link, body, err = githubPageCall(next)
+		link, body, err = githubPageCall(ctx, next)
 		if err != nil {
 			return err
 		}
@@ -60,35 +62,96 @@ func fetchGitHubPages(endpoint string, onPage func(page []byte) error) error {
 	return nil
 }
 
-// fetchGitHubPageRange requests pages 2..last concurrently while still handing
-// them to onPage in page order.
-func fetchGitHubPageRange(endpoint string, last int, onPage func(page []byte) error) error {
+// fetchGitHubPageRange requests pages 2..last with a fixed pool of workers
+// while still handing them to onPage in page order.
+//
+// The page count comes from the forge, so nothing here may scale with it. The
+// scheduling window advances only when the next ordered page is delivered,
+// bounding active requests and retained out-of-order responses. Returning
+// cancels and joins every worker.
+func fetchGitHubPageRange(ctx context.Context, endpoint string, last int, onPage func(page []byte) error) error {
 	type pageResult struct {
+		page int
 		body []byte
 		err  error
 	}
 
-	results := make([]chan pageResult, last+1)
-	limiter := make(chan struct{}, githubPageConcurrency)
-	for page := 2; page <= last; page++ {
-		// Buffered so a goroutine for a page we never read still completes.
-		results[page] = make(chan pageResult, 1)
-		go func(page int, out chan<- pageResult) {
-			limiter <- struct{}{}
-			defer func() { <-limiter }()
-			_, body, err := githubPageCall(pageEndpoint(endpoint, page))
-			out <- pageResult{body: body, err: err}
-		}(page, results[page])
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	workers := min(githubPageConcurrency, last-1)
+	requests := make(chan int)
+	results := make(chan pageResult, workers)
 
-	for page := 2; page <= last; page++ {
-		result := <-results[page]
+	var group sync.WaitGroup
+	group.Add(workers)
+	for range workers {
+		go func() {
+			defer group.Done()
+			for page := range requests {
+				_, body, err := githubPageCall(ctx, pageEndpoint(endpoint, page))
+				select {
+				case results <- pageResult{page: page, body: body, err: err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		group.Wait()
+		close(results)
+	}()
+	// Unblocks every worker and then waits for them, so no request outlives
+	// this call however it returns.
+	defer func() {
+		cancel()
+		close(requests)
+		for range results {
+		}
+	}()
+
+	pending := make(map[int][]byte)
+	next := 2
+	nextToSchedule := 2
+	for nextToSchedule < 2+workers {
+		select {
+		case requests <- nextToSchedule:
+			nextToSchedule++
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	for result := range results {
 		if result.err != nil {
 			return result.err
 		}
-		if err := onPage(result.body); err != nil {
-			return err
+		pending[result.page] = result.body
+		for {
+			body, buffered := pending[next]
+			if !buffered {
+				break
+			}
+			delete(pending, next)
+			next++
+			if err := onPage(body); err != nil {
+				return err
+			}
+			if nextToSchedule <= last {
+				select {
+				case requests <- nextToSchedule:
+					nextToSchedule++
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 		}
+		if next > last {
+			return nil
+		}
+	}
+	if next <= last {
+		// The workers stopped without delivering every page, which only the
+		// caller's context can cause.
+		return ctx.Err()
 	}
 	return nil
 }

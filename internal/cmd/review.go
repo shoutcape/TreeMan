@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -101,7 +102,7 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 	}
 
 	// Fetch PR/MR metadata.
-	info, err := forge.PRMetadata(forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, prNumber)
+	info, err := forge.PRMetadata(commandContext(cmd), forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, prNumber)
 	if err != nil {
 		return reviewWorktreeCreation{}, fmt.Errorf("failed to resolve PR/MR #%d with %s: %w", prNumber, forgeInfo.cliTool, err)
 	}
@@ -184,15 +185,15 @@ func resolveReviewForge() (reviewForge, error) {
 	return reviewForge{forgeType: forgeType, repoSlug: repoSlug, host: host, cliTool: cliTool}, nil
 }
 
-var reviewPickerPRListPages = forge.PRListPages
+var reviewPickerPRBatches = forge.StreamPRBatches
 
-// streamReviewRows emits one picker row per open PR/MR as each API page
+// streamReviewRows emits one picker row per open PR/MR as each forge batch
 // arrives, appending every PR to prs so a selection can be resolved once the
 // picker closes.
-func streamReviewRows(render ui.Renderer, forgeInfo reviewForge, prs *[]forge.PRInfo) func(emit func(string) error) error {
-	return func(emit func(string) error) error {
-		err := reviewPickerPRListPages(forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, func(page []forge.PRInfo) error {
-			for _, pr := range page {
+func streamReviewRows(render ui.Renderer, forgeInfo reviewForge, prs *[]forge.PRInfo) pickerProducer {
+	return func(ctx context.Context, emit func(string) error) error {
+		err := reviewPickerPRBatches(ctx, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, func(batch []forge.PRInfo) error {
+			for _, pr := range batch {
 				*prs = append(*prs, pr)
 				if err := emit(render.PRRow(pr.Number, pr.Branch, pr.Title)); err != nil {
 					return err
@@ -213,6 +214,8 @@ func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {
 		return 0, 0, fmt.Errorf("not inside a git repository")
 	}
+	// Started before forge resolution, the same boundary branchPickerResults
+	// uses, so the two targets report comparable numbers.
 	writer := newFirstRowWriter(io.Discard, time.Now)
 	forgeInfo, err := resolveReviewForge()
 	if err != nil {
@@ -220,7 +223,7 @@ func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	}
 	var prs []forge.PRInfo
 	render := commandRenderer(cmd)
-	count, err := streamPickerRows(writer, render.PRHeader(), streamReviewRows(render, forgeInfo, &prs))
+	count, err := streamPickerRows(commandContext(cmd), writer, render.PRHeader(), streamReviewRows(render, forgeInfo, &prs))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -240,8 +243,8 @@ func pickPRNumber(cmd *cobra.Command, forgeInfo reviewForge) (int, error) {
 		return 0, fmt.Errorf("fzf is required to pick an open PR/MR; pass a PR number or install fzf")
 	}
 
-	// fzf starts before the first API page lands, so the picker is on screen
-	// and filtering while the remaining pages are still being fetched.
+	// fzf starts before the first forge batch lands, so the picker is on screen
+	// and filtering while the remaining results are still being fetched.
 	render := commandRenderer(cmd)
 	var prs []forge.PRInfo
 	index, count, err := runStreamingPicker(cmd, pickerRequest{

@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,7 +51,7 @@ func stubRefBatches(t *testing.T, before func(variables map[string]string)) *ato
 	t.Helper()
 	previous := githubGraphQLCall
 	calls := &atomic.Int64{}
-	githubGraphQLCall = func(_ string, variables map[string]string) ([]byte, error) {
+	githubGraphQLCall = func(_ context.Context, _ string, variables map[string]string) ([]byte, error) {
 		calls.Add(1)
 		if before != nil {
 			before(variables)
@@ -72,7 +73,7 @@ func namedBranches(names ...string) []BranchInfo {
 func collectBranchPRs(t *testing.T, repoSlug string, pages [][]BranchInfo) ([]BranchPR, error) {
 	t.Helper()
 	var collected []BranchPR
-	err := GitHubBranchPRs(repoSlug, func(add func([]BranchInfo) error) error {
+	err := GitHubBranchPRs(context.Background(), repoSlug, func(_ context.Context, add func([]BranchInfo) error) error {
 		for _, page := range pages {
 			if err := add(page); err != nil {
 				return err
@@ -182,7 +183,7 @@ func TestGitHubBranchPRsStopsQueryingWhenTheConsumerFails(t *testing.T) {
 	}
 
 	stop := errors.New("picker closed")
-	err := GitHubBranchPRs("owner/repo", func(add func([]BranchInfo) error) error {
+	err := GitHubBranchPRs(context.Background(), "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
 		return add(branches)
 	}, func([]BranchPR) error { return stop })
 
@@ -195,7 +196,7 @@ func TestGitHubBranchPRsReportsAProducerFailure(t *testing.T) {
 	stubRefBatches(t, nil)
 
 	broken := errors.New("branch list failed")
-	err := GitHubBranchPRs("owner/repo", func(add func([]BranchInfo) error) error {
+	err := GitHubBranchPRs(context.Background(), "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
 		if err := add(namedBranches("feature/one")); err != nil {
 			return err
 		}
@@ -207,7 +208,7 @@ func TestGitHubBranchPRsReportsAProducerFailure(t *testing.T) {
 
 func TestGitHubBranchPRsRejectsAnInvalidRepository(t *testing.T) {
 	for _, slug := range []string{"", "owner", "owner/", "/repo", "owner/repo/extra"} {
-		err := GitHubBranchPRs(slug, func(func([]BranchInfo) error) error { return nil }, func([]BranchPR) error { return nil })
+		err := GitHubBranchPRs(context.Background(), slug, func(context.Context, func([]BranchInfo) error) error { return nil }, func([]BranchPR) error { return nil })
 		assert.ErrorContains(t, err, "invalid GitHub repository", "slug %q", slug)
 	}
 }
@@ -256,7 +257,7 @@ func TestParseGitHubRefBatchRejectsIncompleteResponses(t *testing.T) {
 
 func TestGitHubBranchPRPreviewReturnsBranchesWithTheirPRs(t *testing.T) {
 	previous := githubGraphQLCall
-	githubGraphQLCall = func(query string, variables map[string]string) ([]byte, error) {
+	githubGraphQLCall = func(_ context.Context, query string, variables map[string]string) ([]byte, error) {
 		assert.Contains(t, query, fmt.Sprintf("first: %d", githubBranchPreviewLimit))
 		assert.Contains(t, query, "orderBy: {field: ALPHABETICAL, direction: ASC}")
 		assert.Equal(t, map[string]string{"owner": "owner", "name": "repo"}, variables)
@@ -267,7 +268,7 @@ func TestGitHubBranchPRPreviewReturnsBranchesWithTheirPRs(t *testing.T) {
 	}
 	t.Cleanup(func() { githubGraphQLCall = previous })
 
-	preview, err := GitHubBranchPRPreview("owner/repo")
+	preview, err := GitHubBranchPRPreview(context.Background(), "owner/repo")
 
 	require.NoError(t, err)
 	require.Len(t, preview, 2)
@@ -286,4 +287,79 @@ func TestParseGitHubBranchPreviewRejectsIncompleteResponses(t *testing.T) {
 
 	_, err = parseGitHubBranchPreview([]byte(`{"data":{"repository":{"refs":{"nodes":[{"name":""}]}}}}`))
 	assert.ErrorContains(t, err, "unnamed ref")
+}
+
+// A picker the user closes cancels its context; the enrichment queries it
+// started must end with it rather than run on for rows nobody will see.
+func TestGitHubBranchPRsStopsWhenTheContextIsCancelled(t *testing.T) {
+	previous := githubGraphQLCall
+	t.Cleanup(func() { githubGraphQLCall = previous })
+
+	var active atomic.Int64
+	started := make(chan struct{}, 1)
+	githubGraphQLCall = func(ctx context.Context, _ string, _ map[string]string) ([]byte, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	branches := make([]BranchInfo, 0, githubRefBatchSize*4)
+	for i := range githubRefBatchSize * 4 {
+		branches = append(branches, BranchInfo{Name: fmt.Sprintf("branch-%03d", i)})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- GitHubBranchPRs(ctx, "owner/repo", func(_ context.Context, add func([]BranchInfo) error) error {
+			return add(branches)
+		}, func([]BranchPR) error { return nil })
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no enrichment batch started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelling did not stop the enrichment")
+	}
+	assert.Zero(t, active.Load(), "no batch worker may outlive GitHubBranchPRs")
+}
+
+// The branch list feeding enrichment runs under the context enrichment
+// derives, so a failed batch stops the pagination that was still producing.
+func TestGitHubBranchPRsStopsTheProducerAfterABatchFailure(t *testing.T) {
+	previous := githubGraphQLCall
+	t.Cleanup(func() { githubGraphQLCall = previous })
+	githubGraphQLCall = func(context.Context, string, map[string]string) ([]byte, error) {
+		return nil, assert.AnError
+	}
+
+	produced := make(chan struct{})
+	err := GitHubBranchPRs(context.Background(), "owner/repo", func(ctx context.Context, add func([]BranchInfo) error) error {
+		defer close(produced)
+		for {
+			if err := add(namedBranches("branch")); err != nil {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+	}, func([]BranchPR) error { return nil })
+
+	require.ErrorIs(t, err, assert.AnError)
+	<-produced
 }

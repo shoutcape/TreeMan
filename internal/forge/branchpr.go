@@ -1,11 +1,13 @@
 package forge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // BranchPR pairs a remote branch with the open PR whose head it is.
@@ -40,12 +42,7 @@ const (
 )
 
 // githubGraphQLFunc is the shape of the stubbable GraphQL entry point.
-type githubGraphQLFunc func(query string, variables map[string]string) ([]byte, error)
-
-// errBranchPRStopped unwinds the enrichment goroutines when the consumer stops
-// early, so a cancelled picker does not leave queries running for branches
-// nobody will see.
-var errBranchPRStopped = errors.New("forge: branch enrichment stopped")
+type githubGraphQLFunc func(ctx context.Context, query string, variables map[string]string) ([]byte, error)
 
 // GitHubBranchPRPreview returns the alphabetically first branches together
 // with their open PRs in a single query.
@@ -54,12 +51,12 @@ var errBranchPRStopped = errors.New("forge: branch enrichment stopped")
 // branch list. GitHub orders refs and the REST branch list the same way, so
 // the result is a prefix of the first REST page and the caller can drop the
 // duplicates as the full list arrives.
-func GitHubBranchPRPreview(repoSlug string) ([]BranchPR, error) {
+func GitHubBranchPRPreview(ctx context.Context, repoSlug string) ([]BranchPR, error) {
 	owner, name, err := splitRepoSlug(repoSlug)
 	if err != nil {
 		return nil, err
 	}
-	out, err := githubGraphQLCall(githubBranchPreviewQuery, map[string]string{"owner": owner, "name": name})
+	out, err := githubGraphQLCall(ctx, githubBranchPreviewQuery, map[string]string{"owner": owner, "name": name})
 	if err != nil {
 		return nil, err
 	}
@@ -132,16 +129,21 @@ func parseGitHubBranchPreview(data []byte) ([]BranchPR, error) {
 //
 // produce feeds branches in as they arrive — its caller is usually still
 // paginating the REST branch list — so enriching the first branches overlaps
-// fetching the last ones.
-func GitHubBranchPRs(repoSlug string, produce func(add func([]BranchInfo) error) error, onGroup func([]BranchPR) error) error {
+// fetching the last ones. It is handed the context this call derives, so the
+// branch list it is walking stops with the enrichment it feeds.
+func GitHubBranchPRs(ctx context.Context, repoSlug string, produce func(ctx context.Context, add func([]BranchInfo) error) error, onGroup func([]BranchPR) error) error {
 	owner, name, err := splitRepoSlug(repoSlug)
 	if err != nil {
 		return err
 	}
 
-	// Batches that are still in flight when this call returns keep running to
-	// completion, so that abandoning them never blocks the caller. Resolving
-	// the client once here keeps those goroutines off package state.
+	// Every goroutine started here runs under this context, so returning —
+	// however it happens — kills the queries still in flight instead of
+	// fetching PRs for branches nobody will see.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Resolving the client once keeps the batch goroutines off package state.
 	graphql := githubGraphQLCall
 
 	type batchResult struct {
@@ -152,27 +154,27 @@ func GitHubBranchPRs(repoSlug string, produce func(add func([]BranchInfo) error)
 	// onGroup in branch order however the queries interleave.
 	queued := make(chan chan batchResult, githubRefBatchQueue)
 	limiter := make(chan struct{}, githubRefBatchConcurrency)
-	// Closed once this call returns, so batches that have not started are
-	// abandoned rather than querying rows nobody will see.
-	stopped := make(chan struct{})
-	defer close(stopped)
+	var batches sync.WaitGroup
 
 	dispatch := func(batch []BranchInfo) error {
 		// Buffered so a batch whose result is never read still finishes.
 		result := make(chan batchResult, 1)
 		select {
 		case queued <- result:
-		case <-stopped:
-			return errBranchPRStopped
+		case <-ctx.Done():
+			return ctx.Err()
 		}
+		batches.Add(1)
 		go func() {
+			defer batches.Done()
 			select {
 			case limiter <- struct{}{}:
-			case <-stopped:
+			case <-ctx.Done():
+				result <- batchResult{err: ctx.Err()}
 				return
 			}
 			defer func() { <-limiter }()
-			group, err := githubRefBatch(graphql, owner, name, batch)
+			group, err := githubRefBatch(ctx, graphql, owner, name, batch)
 			result <- batchResult{group: group, err: err}
 		}()
 		return nil
@@ -182,7 +184,7 @@ func GitHubBranchPRs(repoSlug string, produce func(add func([]BranchInfo) error)
 	go func() {
 		defer close(queued)
 		var buffer []BranchInfo
-		err := produce(func(branches []BranchInfo) error {
+		err := produce(ctx, func(branches []BranchInfo) error {
 			buffer = append(buffer, branches...)
 			for len(buffer) >= githubRefBatchSize {
 				batch := make([]BranchInfo, githubRefBatchSize)
@@ -200,31 +202,43 @@ func GitHubBranchPRs(repoSlug string, produce func(add func([]BranchInfo) error)
 		produced <- err
 	}()
 
+	// Every dispatched batch either delivers into its own buffered channel or
+	// gives up on ctx, so this can only block on work that is still coming.
+	var deliverErr error
 	for result := range queued {
-		// stopped is closed only after this loop, so every queued batch is
-		// still on its way and this cannot block forever.
 		batch := <-result
 		if batch.err != nil {
-			return batch.err
+			deliverErr = batch.err
+			break
 		}
 		if err := onGroup(batch.group); err != nil {
-			return err
+			deliverErr = err
+			break
 		}
 	}
-	// Reached only once produce has finished, so this is its real outcome:
-	// errBranchPRStopped can only be raised after this call has returned.
-	return <-produced
+	// Stop the producer and the batches still running, then drain the queue so
+	// the producer is never left blocked on a slot, and join it: no goroutine
+	// started here outlives this call.
+	cancel()
+	for range queued {
+	}
+	produceErr := <-produced
+	batches.Wait()
+	if deliverErr != nil {
+		return deliverErr
+	}
+	return produceErr
 }
 
 // githubRefBatch asks for one batch of refs in a single aliased query. Ref
 // names travel as GraphQL variables rather than being spliced into the query
 // text, so a branch name can never alter the query.
-func githubRefBatch(graphql githubGraphQLFunc, owner, name string, batch []BranchInfo) ([]BranchPR, error) {
+func githubRefBatch(ctx context.Context, graphql githubGraphQLFunc, owner, name string, batch []BranchInfo) ([]BranchPR, error) {
 	variables := map[string]string{"owner": owner, "name": name}
 	for i, branch := range batch {
 		variables[refVariable(i)] = "refs/heads/" + branch.Name
 	}
-	out, err := graphql(githubRefBatchQuery(len(batch)), variables)
+	out, err := graphql(ctx, githubRefBatchQuery(len(batch)), variables)
 	if err != nil {
 		return nil, err
 	}

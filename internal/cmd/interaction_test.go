@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -74,12 +75,12 @@ func TestLoadBranchPickerDataFiltersAndAssociatesConcurrently(t *testing.T) {
 	branchStarted := make(chan struct{})
 	prStarted := make(chan struct{})
 	release := make(chan struct{})
-	branchPickerBranchList = func(forge.Type, string, string) ([]forge.BranchInfo, error) {
+	branchPickerBranchList = func(context.Context, forge.Type, string, string) ([]forge.BranchInfo, error) {
 		close(branchStarted)
 		<-release
 		return []forge.BranchInfo{{Name: "main"}, {Name: "feature/existing"}, {Name: "feature/available"}}, nil
 	}
-	branchPickerPRList = func(forge.Type, string, string) ([]forge.PRInfo, error) {
+	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) {
 		close(prStarted)
 		<-release
 		return []forge.PRInfo{{Number: 42, Branch: "feature/available", Title: "Available"}}, nil
@@ -128,10 +129,10 @@ func TestLoadBranchPickerDataKeepsPRFailuresNonFatal(t *testing.T) {
 		branchPickerDefaultBranch = previousDefaultBranch
 	})
 
-	branchPickerBranchList = func(forge.Type, string, string) ([]forge.BranchInfo, error) {
+	branchPickerBranchList = func(context.Context, forge.Type, string, string) ([]forge.BranchInfo, error) {
 		return []forge.BranchInfo{{Name: "feature/available"}}, nil
 	}
-	branchPickerPRList = func(forge.Type, string, string) ([]forge.PRInfo, error) {
+	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) {
 		return nil, errors.New("API unavailable")
 	}
 	branchPickerDefaultBranch = func() (string, error) { return "main", nil }
@@ -156,10 +157,10 @@ func TestLoadBranchPickerDataFailsWhenBranchListingFails(t *testing.T) {
 		branchPickerPRList = previousPRList
 	})
 
-	branchPickerBranchList = func(forge.Type, string, string) ([]forge.BranchInfo, error) {
+	branchPickerBranchList = func(context.Context, forge.Type, string, string) ([]forge.BranchInfo, error) {
 		return nil, errors.New("API unavailable")
 	}
-	branchPickerPRList = func(forge.Type, string, string) ([]forge.PRInfo, error) { return nil, nil }
+	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) { return nil, nil }
 
 	_, err := loadBranchPickerDataForForge(&cobra.Command{}, forge.GitHub, "owner/repo", "github.com")
 
@@ -176,10 +177,10 @@ func TestLoadBranchPickerDataFailsWhenLocalBranchLookupFails(t *testing.T) {
 		branchPickerBranchSHAs = previousBranchSHAs
 	})
 
-	branchPickerBranchList = func(forge.Type, string, string) ([]forge.BranchInfo, error) {
+	branchPickerBranchList = func(context.Context, forge.Type, string, string) ([]forge.BranchInfo, error) {
 		return []forge.BranchInfo{{Name: "feature/available"}}, nil
 	}
-	branchPickerPRList = func(forge.Type, string, string) ([]forge.PRInfo, error) { return nil, nil }
+	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) { return nil, nil }
 	branchPickerBranchSHAs = func([]string) (map[string]string, error) {
 		return nil, errors.New("git failed")
 	}
@@ -208,24 +209,24 @@ func TestTerminalCapabilitiesAreCachedPerCommandStream(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
-func TestStreamReviewRowsEmitsEachPageAsItArrives(t *testing.T) {
-	previous := reviewPickerPRListPages
-	t.Cleanup(func() { reviewPickerPRListPages = previous })
+func TestStreamReviewRowsEmitsEachBatchAsItArrives(t *testing.T) {
+	previous := reviewPickerPRBatches
+	t.Cleanup(func() { reviewPickerPRBatches = previous })
 
 	var writtenWhenPageRequested []string
 	out := &bytes.Buffer{}
-	reviewPickerPRListPages = func(_ forge.Type, _, _ string, onPage func([]forge.PRInfo) error) error {
+	reviewPickerPRBatches = func(_ context.Context, _ forge.Type, _, _ string, onBatch func([]forge.PRInfo) error) error {
 		writtenWhenPageRequested = append(writtenWhenPageRequested, out.String())
-		if err := onPage([]forge.PRInfo{{Number: 41, Branch: "feature/one", Title: "First"}}); err != nil {
+		if err := onBatch([]forge.PRInfo{{Number: 41, Branch: "feature/one", Title: "First"}}); err != nil {
 			return err
 		}
 		writtenWhenPageRequested = append(writtenWhenPageRequested, out.String())
-		return onPage([]forge.PRInfo{{Number: 42, Branch: "feature/two", Title: "Second"}})
+		return onBatch([]forge.PRInfo{{Number: 42, Branch: "feature/two", Title: "Second"}})
 	}
 
 	var prs []forge.PRInfo
 	render := commandRenderer(&cobra.Command{})
-	count, err := streamPickerRows(out, render.PRHeader(), streamReviewRows(render, reviewForge{}, &prs))
+	count, err := streamPickerRows(context.Background(), out, render.PRHeader(), streamReviewRows(render, reviewForge{}, &prs))
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
@@ -236,7 +237,7 @@ func TestStreamReviewRowsEmitsEachPageAsItArrives(t *testing.T) {
 	assert.Contains(t, out.String(), "41")
 	assert.Contains(t, out.String(), "feature/two")
 
-	// The first page must already be on its way to fzf when the second is fetched.
+	// The first batch must already be on its way to fzf when the second is fetched.
 	require.Len(t, writtenWhenPageRequested, 2)
 	assert.NotContains(t, writtenWhenPageRequested[0], "41")
 	assert.Contains(t, writtenWhenPageRequested[1], "41")
@@ -244,16 +245,16 @@ func TestStreamReviewRowsEmitsEachPageAsItArrives(t *testing.T) {
 }
 
 func TestStreamReviewRowsReportsListingFailure(t *testing.T) {
-	previous := reviewPickerPRListPages
-	t.Cleanup(func() { reviewPickerPRListPages = previous })
+	previous := reviewPickerPRBatches
+	t.Cleanup(func() { reviewPickerPRBatches = previous })
 
-	reviewPickerPRListPages = func(forge.Type, string, string, func([]forge.PRInfo) error) error {
+	reviewPickerPRBatches = func(context.Context, forge.Type, string, string, func([]forge.PRInfo) error) error {
 		return assert.AnError
 	}
 
 	var prs []forge.PRInfo
 	render := commandRenderer(&cobra.Command{})
-	_, err := streamPickerRows(&bytes.Buffer{}, render.PRHeader(), streamReviewRows(render, reviewForge{}, &prs))
+	_, err := streamPickerRows(context.Background(), &bytes.Buffer{}, render.PRHeader(), streamReviewRows(render, reviewForge{}, &prs))
 
 	assert.ErrorContains(t, err, "failed to list open PRs/MRs")
 	assert.ErrorIs(t, err, assert.AnError)
@@ -263,7 +264,7 @@ func TestStreamBranchRowsEmitsEveryBranchWithItsReview(t *testing.T) {
 	out := &bytes.Buffer{}
 	render := commandRenderer(&cobra.Command{})
 
-	count, err := streamPickerRows(out, render.BranchHeader(), streamBranchRows(render,
+	count, err := streamPickerRows(context.Background(), out, render.BranchHeader(), streamBranchRows(render,
 		[]forge.BranchInfo{{Name: "feature/one", Date: "today"}, {Name: "feature/two", Date: "yesterday"}},
 		map[string]forge.PRInfo{"feature/two": {Number: 42}},
 	))

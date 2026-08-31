@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -62,15 +63,16 @@ func pickerSettlesItself(request pickerRequest) bool {
 	return request.query != ""
 }
 
-// stopPicker ends an fzf that is still waiting for a choice.
+// stopPicker ends an fzf that is still waiting for a choice and reports how it
+// exited, taken from the goroutine that owns its Wait.
 //
 // SIGTERM, not Kill: fzf restores the terminal when it is asked to terminate,
 // while a killed fzf leaves the cursor hidden for everything printed after it.
-func stopPicker(fzfCmd *exec.Cmd) {
+func stopPicker(fzfCmd *exec.Cmd, exited <-chan error) error {
 	if err := fzfCmd.Process.Signal(syscall.SIGTERM); err != nil {
 		_ = fzfCmd.Process.Kill()
 	}
-	_ = fzfCmd.Wait()
+	return <-exited
 }
 
 func pickerRow(display string, index int) string {
@@ -103,6 +105,11 @@ type pickerRequest struct {
 	header string
 }
 
+// pickerProducer emits the picker's rows. It is handed the picker's context so
+// that a picker the user closes stops the work that was still fetching rows
+// for it.
+type pickerProducer func(ctx context.Context, emit func(display string) error) error
+
 // streamPickerRows writes the header row and then every row produce emits,
 // numbering rows in emission order so a selection can be mapped back.
 //
@@ -110,7 +117,7 @@ type pickerRequest struct {
 // what lets fzf display results while the rest are still being fetched. A
 // consumer that closes its end of the pipe — fzf does that the moment the user
 // selects — ends the stream without an error.
-func streamPickerRows(out io.Writer, header string, produce func(emit func(display string) error) error) (int, error) {
+func streamPickerRows(ctx context.Context, out io.Writer, header string, produce pickerProducer) (int, error) {
 	if _, err := fmt.Fprintln(out, header); err != nil {
 		if consumerClosed(err) {
 			return 0, nil
@@ -119,7 +126,7 @@ func streamPickerRows(out io.Writer, header string, produce func(emit func(displ
 	}
 
 	count := 0
-	err := produce(func(display string) error {
+	err := produce(ctx, func(display string) error {
 		if _, err := fmt.Fprintln(out, pickerRow(display, count)); err != nil {
 			return err
 		}
@@ -140,10 +147,19 @@ func consumerClosed(err error) bool {
 // runStreamingPicker starts fzf and feeds it rows as produce emits them, so
 // the picker is on screen and usable before every result has arrived.
 //
+// The producer and fzf run concurrently and each one ends the other: a picker
+// the user closes cancels the context the producer's requests run under, and a
+// producer that fails stops the picker whose rows can no longer be trusted.
+// Either way the producer is joined before this returns, so the caller can
+// safely read whatever state it filled in.
+//
 // It returns the zero-based index of the selected row and the number of rows
 // that were streamed. errPickerCancelled is returned when the user aborts.
-func runStreamingPicker(cmd *cobra.Command, request pickerRequest, produce func(emit func(display string) error) error) (int, int, error) {
+func runStreamingPicker(cmd *cobra.Command, request pickerRequest, produce pickerProducer) (int, int, error) {
 	args := streamingPickerArgs(sessionFor(cmd).errorOutput.Color, request)
+
+	ctx, cancel := context.WithCancel(commandContext(cmd))
+	defer cancel()
 
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -164,34 +180,87 @@ func runStreamingPicker(cmd *cobra.Command, request pickerRequest, produce func(
 	// fzf owns the read end now; holding it open would keep fzf from seeing EOF.
 	reader.Close()
 
-	count, produceErr := streamPickerRows(writer, request.header, produce)
-	writer.Close()
-
-	if produceErr != nil {
-		// The rows are incomplete, so whatever fzf shows cannot be trusted.
-		stopPicker(fzfCmd)
-		return 0, count, produceErr
+	type streamed struct {
+		count int
+		err   error
 	}
+	rows := make(chan streamed, 1)
+	go func() {
+		count, err := streamPickerRows(ctx, writer, request.header, produce)
+		// Closing the write end is what tells fzf the list is complete.
+		writer.Close()
+		rows <- streamed{count: count, err: err}
+	}()
 
-	if !pickerSettlesItself(request) && count <= 1 {
-		// Do what --select-1 and --exit-0 would have done at end of input.
-		stopPicker(fzfCmd)
-		if count == 0 {
-			return 0, 0, errPickerCancelled
+	exited := make(chan error, 1)
+	go func() { exited <- fzfCmd.Wait() }()
+
+	select {
+	case <-ctx.Done():
+		// Ending fzf closes the pipe if the producer is blocked writing. Then
+		// cancel and join both sides before reporting the parent cancellation.
+		exitErr := stopPicker(fzfCmd, exited)
+		cancel()
+		result := <-rows
+		if err := commandContext(cmd).Err(); err != nil {
+			return 0, result.count, err
 		}
-		return 0, 1, nil
-	}
+		return pickerSelection(exitErr, selection.String(), result.count)
 
-	if err := fzfCmd.Wait(); err != nil {
-		if pickerCancelled(err) || count == 0 {
+	case result := <-rows:
+		if result.err != nil {
+			// The rows are incomplete, so whatever fzf shows cannot be trusted.
+			cancel()
+			_ = stopPicker(fzfCmd, exited)
+			return 0, result.count, result.err
+		}
+		if !pickerSettlesItself(request) && result.count <= 1 {
+			// Do what --select-1 and --exit-0 would have done at end of input.
+			_ = stopPicker(fzfCmd, exited)
+			if result.count == 0 {
+				return 0, 0, errPickerCancelled
+			}
+			return 0, 1, nil
+		}
+		select {
+		case exitErr := <-exited:
+			return pickerSelection(exitErr, selection.String(), result.count)
+		case <-ctx.Done():
+			_ = stopPicker(fzfCmd, exited)
+			cancel()
+			return 0, result.count, ctx.Err()
+		}
+
+	case exitErr := <-exited:
+		// fzf is gone: the user chose or aborted, so nothing is waiting for the
+		// rest of the rows. Cancelling stops the requests still in flight
+		// instead of blocking on them.
+		cancel()
+		result := <-rows
+		// Cancelling is this function's own doing, so the error it raises is
+		// not news; the user is done either way. A producer that failed on its
+		// own before writing anything is different: its failure is the only
+		// explanation there is for the empty list.
+		if result.err != nil && result.count == 0 && !errors.Is(result.err, context.Canceled) {
+			return 0, 0, result.err
+		}
+		return pickerSelection(exitErr, selection.String(), result.count)
+	}
+}
+
+// pickerSelection maps how fzf exited, and what it printed, onto the selected
+// row index.
+func pickerSelection(exitErr error, selection string, count int) (int, int, error) {
+	if exitErr != nil {
+		if pickerCancelled(exitErr) || count == 0 {
 			return 0, count, errPickerCancelled
 		}
-		return 0, count, fmt.Errorf("fzf failed while selecting: %w", err)
+		return 0, count, fmt.Errorf("fzf failed while selecting: %w", exitErr)
 	}
 
-	index := pickerSelectionIndex(selection.String(), count)
+	index := pickerSelectionIndex(selection, count)
 	if index < 0 {
-		if strings.TrimSpace(selection.String()) == "" {
+		if strings.TrimSpace(selection) == "" {
 			return 0, count, errPickerCancelled
 		}
 		return 0, count, fmt.Errorf("could not map the fzf selection to a result")
