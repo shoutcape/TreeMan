@@ -143,11 +143,3 @@ func TestBranchStreamReportsAClosedPickerAsItself(t *testing.T) {
 type closedWriter struct{}
 
 func (closedWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
-
-func branchNames(branches []forge.BranchInfo) []string {
-	names := make([]string, 0, len(branches))
-	for _, branch := range branches {
-		names = append(names, branch.Name)
-	}
-	return names
-}

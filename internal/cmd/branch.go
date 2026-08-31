@@ -205,15 +205,6 @@ func pickBranchForForge(cmd *cobra.Command, query string) (branchSelection, erro
 	return branchSelection{branch: branch, prMap: data.prMap}, nil
 }
 
-// loadBranchPickerData fetches and prepares every branch that wtb can present.
-func loadBranchPickerData(cmd *cobra.Command) (branchPickerData, error) {
-	forgeInfo, err := resolveBranchForge()
-	if err != nil {
-		return branchPickerData{}, err
-	}
-	return loadBranchPickerDataForForge(cmd, forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host)
-}
-
 func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repoSlug, host string) (branchPickerData, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
