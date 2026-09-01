@@ -41,6 +41,11 @@ func ghAPIPageArgs(endpoint string) []string {
 // response, so the remaining pages are requested concurrently instead of
 // walking one "next" link at a time. Endpoints that omit rel="last" fall back
 // to that sequential walk.
+//
+// Either walk stops at forgePageBudget pages. The page count comes from the
+// forge, so the budget is what keeps a repository with more refs than a picker
+// can show from being fetched without end, and what ends a sequential walk
+// whose next link never clears.
 func fetchGitHubPages(ctx context.Context, endpoint string, onPage func(page []byte) error) error {
 	// Resolving the request function once keeps the page workers off package
 	// state that a test may be reassigning.
@@ -55,10 +60,14 @@ func fetchGitHubPages(ctx context.Context, endpoint string, onPage func(page []b
 	}
 
 	if last := linkLastPage(link); last >= 2 {
-		return fetchGitHubPageRange(ctx, page, endpoint, last, onPage)
+		return fetchGitHubPageRange(ctx, page, endpoint, min(last, forgePageBudget), onPage)
 	}
 
-	for next := linkRelationURL(link, "next"); next != ""; next = linkRelationURL(link, "next") {
+	for requested := 1; requested < forgePageBudget; requested++ {
+		next := linkRelationURL(link, "next")
+		if next == "" {
+			return nil
+		}
 		link, body, err = page(ctx, next)
 		if err != nil {
 			return err
