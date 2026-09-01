@@ -32,6 +32,8 @@ Create a local branch from the fetched default branch. TreeMan supports only `ma
 
 The command fails when the branch or target directory exists. It creates `.worktrees/<branch-slug>`. The branch slug changes `/` to `-`.
 
+If a different branch holds that path, TreeMan adds a slug suffix and creates `.worktrees/<branch-slug>-<slug-suffix>`. Existing worktrees keep their paths.
+
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
 Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.

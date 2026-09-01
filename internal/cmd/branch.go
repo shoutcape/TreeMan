@@ -109,7 +109,14 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 	}
 
 	branch := selected.Name
-	worktreePath := worktree.PathForBranch(mainRoot, branch)
+	existing, err := git.WorktreeList()
+	if err != nil {
+		return branchWorktreeCreation{}, err
+	}
+	worktreePath, err := worktree.ResolvePathForBranch(mainRoot, branch, existing)
+	if err != nil {
+		return branchWorktreeCreation{}, err
+	}
 
 	// Guard: directory must not exist.
 	if _, err := os.Stat(worktreePath); err == nil {

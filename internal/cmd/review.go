@@ -115,7 +115,14 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 		return reviewWorktreeCreation{}, err
 	}
 
-	worktreePath := worktree.PathForBranch(mainRoot, info.Branch)
+	existing, err := git.WorktreeList()
+	if err != nil {
+		return reviewWorktreeCreation{}, err
+	}
+	worktreePath, err := worktree.ResolvePathForBranch(mainRoot, info.Branch, existing)
+	if err != nil {
+		return reviewWorktreeCreation{}, err
+	}
 
 	// Guard: branch must not already exist locally.
 	if git.BranchExists(info.Branch) {

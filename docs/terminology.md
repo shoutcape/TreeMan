@@ -7,6 +7,7 @@ Use these terms with the specified meaning.
 | Agent Skill | Directory with instructions that extend an AI agent behavior |
 | branch database | PostgreSQL database for one worktree branch |
 | branch slug | Branch name with `/` changed to `-` for a worktree path |
+| slug suffix | Six hex characters computed from the full branch name, added to a branch slug that another branch uses |
 | default branch | `main` or `master` branch detected from `origin` |
 | formula | Ruby file that defines a Homebrew package |
 | global configuration | `config.toml` in the TreeMan user configuration directory |

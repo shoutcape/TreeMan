@@ -26,7 +26,7 @@
 | Package | Responsibility |
 | --- | --- |
 | `internal/git` | Git process calls and worktree data |
-| `internal/worktree` | Branch slugs, paths, and ignore-file changes |
+| `internal/worktree` | Branch slugs, collision-free worktree paths, and ignore-file changes |
 | `internal/config` | Project and global TOML configuration |
 | `internal/envfile` | Root-level `.env*` file copies |
 | `internal/deps` | Lockfile detection and dependency commands |
