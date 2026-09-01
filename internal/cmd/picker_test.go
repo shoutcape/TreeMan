@@ -205,9 +205,8 @@ func TestPickerSelectionMapsHowFzfExited(t *testing.T) {
 // never be displayed or matched, and rows that look the same must still carry
 // the index of the row that produced them.
 func TestStreamedRowsKeepTheirOwnIndexBehindTheHeaderLine(t *testing.T) {
-	if _, err := exec.LookPath("fzf"); err != nil {
-		t.Skip("fzf is not installed")
-	}
+	requireRealFZF(t)
+
 	payload := &bytes.Buffer{}
 	count, err := streamPickerRows(context.Background(), payload, "HEADER", func(_ context.Context, emit func(string) error) error {
 		for _, display := range []string{"dup", "dup", "other"} {
@@ -239,6 +238,27 @@ func TestStreamedRowsKeepTheirOwnIndexBehindTheHeaderLine(t *testing.T) {
 	require.Len(t, duplicates, 2)
 	assert.Equal(t, 0, pickerSelectionIndex(duplicates[0], count))
 	assert.Equal(t, 1, pickerSelectionIndex(duplicates[1], count))
+}
+
+// requireRealFZF skips unless the fzf on PATH answers a --filter query the way
+// fzf does.
+//
+// A test that shells out to whatever binary is named fzf is only testing what
+// that binary happens to do. Test environments do put a stand-in there — the
+// smoke suite installs one that ignores its arguments and always returns the
+// same row — and a stand-in would fail the assertions below for a reason that
+// says nothing about the picker.
+func requireRealFZF(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("fzf"); err != nil {
+		t.Skip("fzf is not installed")
+	}
+	probe := exec.Command("fzf", "--filter=second")
+	probe.Stdin = strings.NewReader("first\nsecond\n")
+	out, err := probe.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "second" {
+		t.Skip("the fzf on PATH does not filter like fzf")
+	}
 }
 
 // Two worktrees can render the same picker row: the display shows only the

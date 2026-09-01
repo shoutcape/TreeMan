@@ -83,9 +83,12 @@ wait_for_missing() {
 mkdir -p "$TEST_HOME"
 touch "$TEST_HOME/.bashrc"
 
-# Preserve real HOME/GOPATH before overriding, needed for unit test step.
+# Preserve real HOME/GOPATH/PATH before overriding, needed for unit test step.
 REAL_HOME="$HOME"
 REAL_GOPATH="${GOPATH:-$HOME/go}"
+# PATH is overridden below to put mock tools ahead of the real ones. Unit tests
+# that shell out to a real tool must not find a mock, so they run with this.
+REAL_PATH="$PATH"
 
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$HOME/.config"
@@ -794,10 +797,12 @@ fi
 
 echo "==> unit tests"
 cd "$SCRIPT_DIR"
-# Run with the real HOME/GOPATH and without smoke-test env overrides that
-# would interfere with forge detection tests (_TREEMAN_FORGE, etc.).
+# Run with the real HOME/GOPATH/PATH and without smoke-test env overrides that
+# would interfere with forge detection tests (_TREEMAN_FORGE, etc.). The real
+# PATH matters for the same reason: the mock tools this script installs are
+# stand-ins for its own runs, not for a test that asks for the real tool.
 env -u _TREEMAN_FORGE -u _TREEMAN_GH_REPO -u _TREEMAN_REMOTE_URL \
-  HOME="$REAL_HOME" GOPATH="${REAL_GOPATH:-$REAL_HOME/go}" \
+  HOME="$REAL_HOME" GOPATH="${REAL_GOPATH:-$REAL_HOME/go}" PATH="$REAL_PATH" \
   go test ./... >/dev/null
 
 echo "PASS"
