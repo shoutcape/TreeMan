@@ -29,7 +29,7 @@
 | `internal/worktree` | Branch slugs, paths, and ignore-file changes |
 | `internal/config` | Project and global TOML configuration |
 | `internal/envfile` | Root-level `.env*` file copies |
-| `internal/deps` | Lockfile detection and dependency commands |
+| `internal/deps` | Dependency detection from package metadata and lockfiles, plus command execution |
 | `internal/hooks` | Post-create shell commands |
 | `internal/database` | PostgreSQL URI, environment rewrite, Docker, and cleanup |
 | `internal/forge` | GitHub and GitLab detection, CLI calls, REST calls, and GraphQL snapshots |

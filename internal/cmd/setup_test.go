@@ -32,6 +32,23 @@ func TestSetupDependenciesReportsSilentCargoSuccess(t *testing.T) {
 	assert.Contains(t, plainOutput, "Completed cargo fetch.")
 }
 
+func TestSetupDependenciesUsesCorepackForModernYarn(t *testing.T) {
+	project := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(project, "package.json"), []byte(`{"packageManager":"yarn@4.9.2"}`), 0o644))
+
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "corepack"), []byte("#!/bin/sh\n"), 0o755))
+	t.Setenv("PATH", binDir)
+
+	var output bytes.Buffer
+	status := setupDependencies(&output, ui.NewRenderer(&output, terminal.Capabilities{}), project)
+	plainOutput := ui.StripANSI(output.String())
+
+	assert.Equal(t, completedStatus("completed: installed with corepack"), status)
+	assert.Contains(t, plainOutput, "Detected package.json, running corepack yarn install...")
+	assert.Contains(t, plainOutput, "Completed corepack yarn install.")
+}
+
 func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) {
 	for _, newCommand := range []struct {
 		name string

@@ -31,10 +31,12 @@ REMOTE_REPO="$TMP_DIR/remote.git"
 MAIN_REPO="$TMP_DIR/project"
 PR_SOURCE_REPO="$TMP_DIR/pr-source"
 WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-test"
+YARN_WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-yarn-smoke"
 REVIEW_WT_ALPHA="$MAIN_REPO/.worktrees/feature-review-alpha"
 REVIEW_WT_BETA="$MAIN_REPO/.worktrees/feature-review-beta"
 SKIP_WT="$MAIN_REPO/.worktrees/feature-skip-setup"
 NPM_CALLS="$TMP_DIR/npm-calls"
+COREPACK_CALLS="$TMP_DIR/corepack-calls"
 DOCKER_CALLS="$TMP_DIR/docker-calls"
 
 cleanup() {
@@ -95,6 +97,7 @@ export GIT_AUTHOR_EMAIL="test@example.com"
 export GIT_COMMITTER_NAME="TreeMan Test"
 export GIT_COMMITTER_EMAIL="test@example.com"
 export NPM_CALLS
+export COREPACK_CALLS
 export DOCKER_CALLS
 
 # Forge/repo overrides — injected into the treeman binary via env vars so that
@@ -365,6 +368,12 @@ cat > "$MOCK_BIN/npm" <<'EOF'
 printf '%s\n' "$*" >> "$NPM_CALLS"
 EOF
 chmod +x "$MOCK_BIN/npm"
+
+cat > "$MOCK_BIN/corepack" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$COREPACK_CALLS"
+EOF
+chmod +x "$MOCK_BIN/corepack"
 
 cat > "$MOCK_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -787,6 +796,22 @@ assert_missing "$CURRENT_WORKTREE"
 if git -C "$MAIN_REPO" show-ref --verify --quiet "refs/heads/$CURRENT_BRANCH"; then
   fail "Expected $CURRENT_BRANCH branch to be deleted"
 fi
+
+# ---------------------------------------------------------------------------
+# Corepack-managed Yarn setup
+# ---------------------------------------------------------------------------
+
+echo "==> worktree create for Corepack-managed Yarn"
+
+cd "$MAIN_REPO"
+git rm package-lock.json >/dev/null
+printf '{"packageManager":"yarn@4.9.2"}\n' > package.json
+git add package.json
+git commit -m "use Corepack-managed Yarn" >/dev/null
+git push origin main >/dev/null
+wt feature/yarn-smoke --skip-env --skip-database --skip-hooks
+assert_exists "$YARN_WORKTREE_REPO"
+assert_file_contains "$COREPACK_CALLS" "yarn install"
 
 # ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)
