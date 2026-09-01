@@ -23,7 +23,6 @@ This document describes current behavior. It is not a product roadmap.
 ## User Interface
 
 - Identical picker display rows can map to the wrong worktree.
-- `switch` compares raw directory paths. Symlinked or equivalent paths can differ.
 
 ## Platform Support
 

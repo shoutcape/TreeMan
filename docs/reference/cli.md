@@ -76,7 +76,9 @@ treeman switch [query]
 
 `switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
 
-It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. Shell integration changes directory when it receives a path.
+A path query resolves its symlinks before the comparison. Therefore a symlinked path selects the same worktree as its real path.
+
+It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. A symlinked current directory counts as the current worktree. Shell integration changes directory when it receives a path.
 
 ## `delete`
 
