@@ -63,7 +63,13 @@ func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox
 		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), sandbox.repo, created, creationSetupOptions{})
 		failures := summary.failures()
 		if len(failures) == 0 {
-			return nil
+			// Setup can legitimately write to tracked files -- npm rewriting
+			// package-lock.json is enough -- and the deletion being measured
+			// refuses a dirty worktree without --force. Clearing that drift
+			// here, outside the clock, keeps the timed path the same
+			// non-forced deletion a user runs; passing --force instead would
+			// also skip the merge check and measure a different path.
+			return git.DiscardWorktreeChanges(created.Path)
 		}
 		setupErr := fmt.Errorf("benchmark worktree setup failed: %s", strings.Join(failures, "; "))
 		if output := strings.TrimSpace(setupOutput.String()); output != "" {

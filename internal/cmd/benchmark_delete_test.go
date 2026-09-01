@@ -60,6 +60,34 @@ func TestDeleteBenchmarkPreparesArtifactsBeforeTimedDeletion(t *testing.T) {
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 }
 
+func TestDeleteBenchmarkClearsSetupDriftBeforeTimedDeletion(t *testing.T) {
+	fixture := newDeleteBenchmarkFixture(t, false)
+
+	runner, sandbox, err := newDeleteBenchmarkRunner()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
+
+	iteration, err := runner(&cobra.Command{})
+	require.NoError(t, err)
+
+	// Setup rewrote a tracked file. The deletion being measured refuses a dirty
+	// worktree without --force, so preparation has to hand the clock a clean
+	// one or the benchmark could never run on a project like that.
+	preparedPath := fixture.lastPreparedPath(t)
+	assert.Empty(t, gitTestOutput(t, preparedPath, "status", "--porcelain", "--untracked-files=all"))
+
+	// Ignored setup output must survive that cleanup: the deletion reads
+	// DATABASE_URL from .env to drop the branch database, and node_modules is
+	// bulk the deletion genuinely has to remove.
+	assert.FileExists(t, filepath.Join(preparedPath, ".env"))
+	assert.FileExists(t, filepath.Join(preparedPath, "node_modules", "installed"))
+	assert.FileExists(t, filepath.Join(preparedPath, ".benchmark-hook"))
+
+	require.NoError(t, finishBenchmarkIteration(iteration.run(), iteration.cleanup))
+	assert.NoDirExists(t, preparedPath)
+	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
+}
+
 func TestDeleteBenchmarkCleansUpPreparationFailure(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, true)
 
@@ -182,7 +210,14 @@ func installDeleteBenchmarkTools(t *testing.T, dockerLog string) {
 	require.NoError(t, err)
 	binDir := t.TempDir()
 	require.NoError(t, os.Symlink(gitPath, filepath.Join(binDir, "git")))
-	npmScript := "#!/bin/sh\nmkdir -p node_modules\ntouch node_modules/installed\n"
+	// Real npm rewrites package-lock.json, a tracked file, whenever the local
+	// npm disagrees with the committed lockfile. The stub does the same so the
+	// fixture reproduces the drift setup leaves behind.
+	npmScript := `#!/bin/sh
+mkdir -p node_modules
+touch node_modules/installed
+printf '{"lockfileVersion": 3}\n' > package-lock.json
+`
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "npm"), []byte(npmScript), 0o755))
 	dockerScript := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "ps" ]; then

@@ -283,6 +283,21 @@ func CheckOutHead(dir string) error {
 	return nil
 }
 
+// DiscardWorktreeChanges returns a worktree to its committed state: tracked
+// files are restored and untracked files are removed. Ignored files are
+// deliberately kept, because a worktree's dependency directories and
+// environment files are part of the setup a caller asked for, not part of the
+// drift this clears.
+func DiscardWorktreeChanges(path string) error {
+	if _, err := runInDir(path, "reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("could not restore tracked files in %q: %w", path, err)
+	}
+	if _, err := runInDir(path, "clean", "--force", "-d"); err != nil {
+		return fmt.Errorf("could not remove untracked files in %q: %w", path, err)
+	}
+	return nil
+}
+
 // FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
 func FetchRemoteBranch(branch string) error {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
