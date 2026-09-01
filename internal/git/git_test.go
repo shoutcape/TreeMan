@@ -127,7 +127,7 @@ func TestDetectDefaultBranchFallsBackToOriginHeads(t *testing.T) {
 	}{
 		{name: "main", branch: "main", push: true, want: "main"},
 		{name: "master", branch: "master", push: true, want: "master"},
-		{name: "unsupported", branch: "trunk", wantErr: "could not find 'main' or 'master' on origin"},
+		{name: "unsupported", branch: "tree", wantErr: "could not find 'main' or 'master' on origin"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -330,6 +330,25 @@ func TestCreatedWorktreeLifecycleIsAtomic(t *testing.T) {
 		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
 	})
 
+	t.Run("removal is idempotent once the artifacts are gone", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := filepath.Join(t.TempDir(), "feature")
+		previousDir, err := os.Getwd()
+		require.NoError(t, err)
+		require.NoError(t, os.Chdir(repo))
+		t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+		created, err := CreateWorktree(worktree, "feature", "HEAD")
+		require.NoError(t, err)
+
+		// Callers that clean up after an operation which may or may not have
+		// completed the deletion itself get the same end state either way.
+		require.NoError(t, RemoveCreatedWorktree(repo, created))
+		require.NoError(t, RemoveCreatedWorktree(repo, created))
+		assert.NoDirExists(t, worktree)
+		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
+	})
+
 	t.Run("failed worktree add rolls back reserved branch", func(t *testing.T) {
 		repo := createGitTestRepo(t)
 		worktree := filepath.Join(t.TempDir(), "feature")
@@ -504,4 +523,50 @@ func TestLocalBranchNamesListsEveryLocalBranch(t *testing.T) {
 		"feature/one": {},
 		"feature/two": {},
 	}, names)
+}
+
+func TestDiscardWorktreeChangesReportsWhatItRemoved(t *testing.T) {
+	repo := createGitTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored/\n"), 0o644))
+	gitTest(t, repo, "add", ".gitignore")
+	gitTest(t, repo, "commit", "-m", "ignore build output")
+
+	// Drift a caller's setup can leave behind: a rewritten tracked file,
+	// output the project ignores, and output it does not.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("rewritten\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "ignored"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "ignored", "artifact"), []byte("kept\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "generated"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "generated", "artifact"), []byte("removed\n"), 0o644))
+
+	removed, err := DiscardWorktreeChanges(repo)
+	require.NoError(t, err)
+
+	// The untracked paths are reported so a caller that populated the worktree
+	// can tell how much of its own output this cleared.
+	assert.Equal(t, []string{"generated" + string(os.PathSeparator)}, removed)
+	assert.Equal(t, "base\n", readGitTestFile(t, filepath.Join(repo, "file")))
+	assert.FileExists(t, filepath.Join(repo, "ignored", "artifact"))
+	assert.NoDirExists(t, filepath.Join(repo, "generated"))
+	assert.Empty(t, gitTestOutput(t, repo, "status", "--porcelain", "--untracked-files=all"))
+}
+
+func readGitTestFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(content)
+}
+
+func TestHasCommitsDistinguishesAnEmptyRepository(t *testing.T) {
+	empty := t.TempDir()
+	gitTest(t, empty, "init", "--initial-branch=main")
+
+	hasCommits, err := HasCommits(empty)
+	require.NoError(t, err)
+	assert.False(t, hasCommits)
+
+	hasCommits, err = HasCommits(createGitTestRepo(t))
+	require.NoError(t, err)
+	assert.True(t, hasCommits)
 }

@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	removeWorktree    = git.WorktreeRemove
-	deleteBranchAtSHA = git.DeleteBranchAtSHA
-	newCleanupBatch   = func() databaseCleanupBatch { return database.NewCleanupBatch() }
+	removeWorktree      = git.WorktreeRemove
+	deleteBranchAtSHA   = git.DeleteBranchAtSHA
+	fetchUpstreamBranch = git.FetchUpstreamBranch
+	newCleanupBatch     = func() databaseCleanupBatch { return database.NewCleanupBatch() }
 )
 
 type databaseCleanupPreparer interface {
@@ -249,6 +250,11 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 	}
 	if !force && !skipMergeCheck {
+		// The merge check reads the branch's remote-tracking ref, so refresh it
+		// before deciding. Work pushed from another machine, or by anyone since
+		// the last fetch here, is otherwise invisible, and the deletion refuses
+		// a branch whose commits are safely on the remote.
+		refreshUpstreamForMergeCheck(cmd, mainRoot, branch)
 		canDelete, err := git.BranchCanDeleteAtSHA(mainRoot, branch, branchSHA)
 		if err != nil {
 			return deleteWorktreeOutcome{}, err
@@ -296,6 +302,21 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		}
 	}
 	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path)}, nil
+}
+
+// refreshUpstreamForMergeCheck updates the ref the merge check reads. A fetch
+// that cannot run -- offline, or a remote branch that no longer exists -- is
+// reported rather than fatal: the check still runs against the last fetched
+// state, which can only make it refuse more often, never accept a branch it
+// would otherwise protect. A branch that tracks nothing has nothing to
+// refresh, and the check falls back to local ancestry as before.
+func refreshUpstreamForMergeCheck(cmd *cobra.Command, mainRoot, branch string) {
+	tracked, err := fetchUpstreamBranch(mainRoot, branch)
+	if !tracked || err == nil {
+		return
+	}
+	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!",
+		fmt.Sprintf("could not refresh branch %q from its remote, deciding on the last fetched state: %v", branch, err)))
 }
 
 func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {

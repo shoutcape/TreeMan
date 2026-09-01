@@ -10,20 +10,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDeleteBenchmarkRunsSetupAndDeletesEveryPreparedWorktree(t *testing.T) {
-	fixture := newDeleteBenchmarkFixture(t, false)
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
 	fetchHeadPath := filepath.Join(fixture.repo, ".git", "FETCH_HEAD")
 	require.NoError(t, os.WriteFile(fetchHeadPath, []byte("source fetch state\n"), 0o644))
 	refsBefore := gitTestOutput(t, fixture.repo, "show-ref")
 	worktreesBefore := gitTestOutput(t, fixture.repo, "worktree", "list", "--porcelain")
 
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "delete", "", 1, 2))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "delete"}, 1, 2))
 
 	preparedPaths := fixture.preparedPaths(t)
 	require.Len(t, preparedPaths, 3)
@@ -40,13 +41,13 @@ func TestDeleteBenchmarkRunsSetupAndDeletesEveryPreparedWorktree(t *testing.T) {
 }
 
 func TestDeleteBenchmarkPreparesArtifactsBeforeTimedDeletion(t *testing.T) {
-	fixture := newDeleteBenchmarkFixture(t, false)
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner()
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
-	iteration, err := runner(&cobra.Command{})
+	run, err := runner(&cobra.Command{})
 	require.NoError(t, err)
 
 	preparedPath := fixture.lastPreparedPath(t)
@@ -55,19 +56,20 @@ func TestDeleteBenchmarkPreparesArtifactsBeforeTimedDeletion(t *testing.T) {
 	assert.FileExists(t, filepath.Join(preparedPath, ".benchmark-hook"))
 	assert.Contains(t, readTestFile(t, filepath.Join(preparedPath, ".env")), "DATABASE_URL=postgres://payload:secret@localhost:5432/payload_")
 
-	require.NoError(t, finishBenchmarkIteration(iteration.run(), iteration.cleanup))
+	measurement, runErr := run()
+	require.NoError(t, finishBenchmarkIteration(runErr, measurement.cleanup))
 	assert.NoDirExists(t, preparedPath)
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 }
 
 func TestDeleteBenchmarkClearsSetupDriftBeforeTimedDeletion(t *testing.T) {
-	fixture := newDeleteBenchmarkFixture(t, false)
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner()
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
-	iteration, err := runner(&cobra.Command{})
+	run, err := runner(&cobra.Command{})
 	require.NoError(t, err)
 
 	// Setup rewrote a tracked file. The deletion being measured refuses a dirty
@@ -76,27 +78,31 @@ func TestDeleteBenchmarkClearsSetupDriftBeforeTimedDeletion(t *testing.T) {
 	preparedPath := fixture.lastPreparedPath(t)
 	assert.Empty(t, gitTestOutput(t, preparedPath, "status", "--porcelain", "--untracked-files=all"))
 
-	// Ignored setup output must survive that cleanup: the deletion reads
-	// DATABASE_URL from .env to drop the branch database, and node_modules is
-	// bulk the deletion genuinely has to remove.
+	// Ignored setup output must survive that cleanup: .env and node_modules are
+	// bulk the deletion genuinely has to remove, and a real worktree still has
+	// them when it is deleted.
 	assert.FileExists(t, filepath.Join(preparedPath, ".env"))
 	assert.FileExists(t, filepath.Join(preparedPath, "node_modules", "installed"))
 	assert.FileExists(t, filepath.Join(preparedPath, ".benchmark-hook"))
 
-	require.NoError(t, finishBenchmarkIteration(iteration.run(), iteration.cleanup))
+	measurement, runErr := run()
+	require.NoError(t, finishBenchmarkIteration(runErr, measurement.cleanup))
 	assert.NoDirExists(t, preparedPath)
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 }
 
 func TestDeleteBenchmarkCleansUpPreparationFailure(t *testing.T) {
-	fixture := newDeleteBenchmarkFixture(t, true)
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{failingHook: true})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner()
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
 	_, err = runner(&cobra.Command{})
 	require.ErrorContains(t, err, "benchmark worktree setup failed: hooks")
+	// A project whose setup cannot complete here is still worth measuring
+	// without that step, so the abort names the flag that skips it.
+	require.ErrorContains(t, err, "rerun with --skip-hooks")
 
 	assert.NoDirExists(t, fixture.lastPreparedPath(t))
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
@@ -108,13 +114,13 @@ func TestDeleteBenchmarkCleansUpPreparationFailure(t *testing.T) {
 }
 
 func TestDeleteBenchmarkCleansUpDeletionFailure(t *testing.T) {
-	fixture := newDeleteBenchmarkFixture(t, false)
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner()
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
-	iteration, err := runner(&cobra.Command{})
+	run, err := runner(&cobra.Command{})
 	require.NoError(t, err)
 
 	previousRemove := removeWorktree
@@ -128,15 +134,89 @@ func TestDeleteBenchmarkCleansUpDeletionFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { removeWorktree = previousRemove })
 
-	runErr := iteration.run()
+	measurement, runErr := run()
 	require.ErrorContains(t, runErr, "injected removal failure")
-	require.NoError(t, iteration.cleanup())
+	require.NoError(t, measurement.cleanup())
 
 	assert.NoDirExists(t, fixture.lastPreparedPath(t))
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 	assert.Equal(t, 1, strings.Count(fixture.dockerCalls(t), "DROP DATABASE"))
 	require.NoError(t, sandbox.close())
 	assert.NoDirExists(t, sandbox.root)
+}
+
+func TestDeleteBenchmarkRunsInARepositoryWithoutARemote(t *testing.T) {
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
+	// Nothing the delete benchmark measures comes from the remote, so a
+	// repository that has none -- or none reachable -- still gets a number.
+	gitTest(t, fixture.repo, "remote", "remove", "origin")
+
+	var stderr bytes.Buffer
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete"}, 0, 1))
+
+	preparedPaths := fixture.preparedPaths(t)
+	require.Len(t, preparedPaths, 1)
+	assert.NoDirExists(t, preparedPaths[0])
+	assert.Contains(t, stderr.String(), "run  1/1")
+}
+
+func TestDeleteBenchmarkRejectsARepositoryWithNoCommits(t *testing.T) {
+	empty := t.TempDir()
+	gitTest(t, empty, "init", "--initial-branch=main")
+	chdirForTest(t, empty)
+
+	err := runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "delete"}, 0, 1)
+	require.ErrorContains(t, err, "has no commits to create a worktree from")
+}
+
+func TestDeleteBenchmarkReportsWhatEachIterationWasPrepared(t *testing.T) {
+	newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
+
+	var stderr bytes.Buffer
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete"}, 0, 1))
+
+	// What a deletion costs is decided by what setup put in the worktree, so
+	// the report says which steps ran rather than leaving the number to be
+	// compared against one prepared differently.
+	assert.Contains(t, stderr.String(),
+		"prepared: environment completed, dependencies completed, database completed, hooks completed")
+}
+
+func TestDeleteBenchmarkReportsSetupOutputItHadToClear(t *testing.T) {
+	newDeleteBenchmarkFixture(t, deleteBenchmarkProject{unignoredOutput: true})
+
+	var stderr bytes.Buffer
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete"}, 0, 1))
+
+	// Setup output the project does not ignore has to go before the timed,
+	// non-forced deletion can run, which leaves that deletion less to remove
+	// than the same deletion faces in the project itself. The report says so.
+	assert.Contains(t, stderr.String(), "cleared 1 untracked setup path(s)")
+}
+
+func TestDeleteBenchmarkSkipsRequestedSetupSteps(t *testing.T) {
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{failingHook: true})
+
+	// The hook cannot succeed here, but the deletion of everything else is
+	// still worth measuring.
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{skipHooks: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
+
+	run, err := runner(&cobra.Command{})
+	require.NoError(t, err)
+
+	measurement, runErr := run()
+	require.NoError(t, finishBenchmarkIteration(runErr, measurement.cleanup))
+	assert.Contains(t, measurement.preparation, "hooks skipped")
+	assert.Contains(t, measurement.preparation, "dependencies completed")
+	assert.NoDirExists(t, worktree.PathForBranch(sandbox.repo, deleteBenchmarkBranch))
+	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
+	// Skipping one step leaves the rest of the measured path intact: the
+	// branch database is still created and still dropped by the deletion.
+	dockerCalls := fixture.dockerCalls(t)
+	assert.Equal(t, 1, strings.Count(dockerCalls, "CREATE DATABASE"))
+	assert.Equal(t, 1, strings.Count(dockerCalls, "DROP DATABASE"))
 }
 
 // deleteBenchmarkFixture is a repository configured for the delete benchmark
@@ -147,10 +227,22 @@ type deleteBenchmarkFixture struct {
 	dockerLog      string
 }
 
-func newDeleteBenchmarkFixture(t *testing.T, failingHook bool) deleteBenchmarkFixture {
+// deleteBenchmarkProject describes the project the fixture repository stands
+// for, so a test can pick the shape of project whose behaviour it is about.
+type deleteBenchmarkProject struct {
+	// failingHook makes the post-create hook fail, the shape of project whose
+	// setup cannot complete on this machine.
+	failingHook bool
+	// unignoredOutput makes the post-create hook write output the project does
+	// not ignore, the shape of project where clearing setup drift also removes
+	// what the deletion would have had to remove.
+	unignoredOutput bool
+}
+
+func newDeleteBenchmarkFixture(t *testing.T, project deleteBenchmarkProject) deleteBenchmarkFixture {
 	t.Helper()
 	fixture := deleteBenchmarkFixture{
-		repo:           createDeleteBenchmarkRepo(t, failingHook),
+		repo:           createDeleteBenchmarkRepo(t, project),
 		preparationLog: filepath.Join(t.TempDir(), "preparations.log"),
 		dockerLog:      filepath.Join(t.TempDir(), "docker.log"),
 	}
@@ -179,11 +271,14 @@ func (fixture deleteBenchmarkFixture) dockerCalls(t *testing.T) string {
 	return readTestFile(t, fixture.dockerLog)
 }
 
-func createDeleteBenchmarkRepo(t *testing.T, failingHook bool) string {
+func createDeleteBenchmarkRepo(t *testing.T, project deleteBenchmarkProject) string {
 	t.Helper()
 	repo := createRemoteRepoWithNestedModule(t)
 	hook := `test -f node_modules/installed && touch .benchmark-hook && pwd >> "$PREPARATION_LOG"`
-	if failingHook {
+	if project.unignoredOutput {
+		hook += " && mkdir -p generated && touch generated/artifact"
+	}
+	if project.failingHook {
 		hook += " && false"
 	}
 	config := fmt.Sprintf(`[database]
