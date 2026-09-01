@@ -35,6 +35,56 @@ The branch benchmark refuses a target that already exists locally or has an
 existing worktree. Review benchmarks leave existing PR/MR branches untouched.
 If cleanup fails, stop and resolve the reported Git error before re-running.
 
+Measure normal worktree and branch deletion with a freshly prepared disposable
+treebranch for every iteration.
+
+```bash
+treeman benchmark delete --warmup 1 --runs 5
+```
+
+The delete benchmark takes no branch argument. Outside the timer, each iteration
+creates `treeman-benchmark-delete`, copies `.env*` files, creates the configured
+branch database, installs dependencies, and runs post-create hooks. Timing starts
+immediately before the equivalent of
+`treeman delete --path <path> --branch treeman-benchmark-delete --yes` and stops
+when deletion returns. Verification that the worktree and local branch are gone
+is also outside the timer. When database setup is configured, PostgreSQL and its
+configured Docker container must already be running.
+
+Iterations run in a temporary clone of the repository's own main worktree, not of
+`origin`, so the target works in any repository on disk: one with no remote, one
+whose remote is unreachable, and one large enough that cloning it over the network
+would cost more than the benchmark.
+
+Every prepared worktree is reported, and the line repeats whenever it changes.
+
+```text
+prepared: environment completed, dependencies completed, database completed, hooks completed
+```
+
+The timed deletion includes the fetch that refreshes the branch's remote-tracking
+ref before the merge check. In the benchmark that fetch is served by the local
+clone the sandbox was made from, so it costs a few milliseconds of disk work
+rather than the network round trip a deletion in a real checkout pays. Treat the
+reported number as the local floor for a deletion, not as what a user waits for
+against a remote.
+
+Read the number next to that line, never on its own: what a deletion costs is
+decided by what setup put in the worktree, so two repositories are only
+comparable when they were prepared the same way. The same line reports untracked
+setup output the project does not ignore, as `cleared N untracked setup path(s)`.
+That output has to go before the timed, non-forced deletion can run, which leaves
+that deletion less to remove than the project itself would.
+
+A setup step that fails aborts the benchmark rather than measuring an incomplete
+worktree, and the error names the flag that skips it. Use those flags where a
+step cannot run on this machine -- a dependency install that needs credentials,
+a database whose container is not running, a hook that needs a service.
+
+```bash
+treeman benchmark delete --warmup 1 --runs 5 --skip-deps
+```
+
 Measure how long the interactive commands need to load every available picker
 result without opening `fzf` or changing the repository.
 

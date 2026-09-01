@@ -175,6 +175,22 @@ func BranchMissing(dir, branch string) (bool, error) {
 	return false, nil
 }
 
+// HasCommits reports whether HEAD in dir resolves to a commit. An initialised
+// repository that has none can still be cloned, but there is nothing in it to
+// check out or branch from.
+func HasCommits(dir string) (bool, error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("could not resolve HEAD in %q: %w", dir, err)
+	}
+	return true, nil
+}
+
 // BranchSHA returns the commit SHA at the tip of the given local branch.
 func BranchSHA(branch string) (string, error) {
 	sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
@@ -272,6 +288,73 @@ func Clone(remoteURL, path string) error {
 		return fmt.Errorf("git clone: %w", err)
 	}
 	return nil
+}
+
+// CheckOutHead populates the working tree of dir from its current HEAD without
+// moving any ref. A --no-checkout clone has no files on disk until this runs.
+func CheckOutHead(dir string) error {
+	if _, err := runInDir(dir, "reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("could not check out HEAD in %q: %w", dir, err)
+	}
+	return nil
+}
+
+// DiscardWorktreeChanges returns a worktree to its committed state: tracked
+// files are restored and untracked files are removed. Ignored files are
+// deliberately kept, because a worktree's dependency directories and
+// environment files are part of the setup a caller asked for, not part of the
+// drift this clears. The removed untracked paths are returned, so a caller
+// that populated the worktree itself can see how much of that output the
+// project does not ignore.
+func DiscardWorktreeChanges(path string) ([]string, error) {
+	removed, err := UntrackedPaths(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := runInDir(path, "reset", "--hard", "HEAD"); err != nil {
+		return nil, fmt.Errorf("could not restore tracked files in %q: %w", path, err)
+	}
+	if _, err := runInDir(path, "clean", "--force", "-d"); err != nil {
+		return nil, fmt.Errorf("could not remove untracked files in %q: %w", path, err)
+	}
+	return removed, nil
+}
+
+// UntrackedPaths returns the paths in dir that Git neither tracks nor ignores,
+// relative to dir. A wholly untracked directory collapses to one path, the
+// same way the clean that removes it treats the subtree.
+func UntrackedPaths(dir string) ([]string, error) {
+	output, err := runInDirRaw(dir, "ls-files", "--others", "--exclude-standard", "--directory", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("could not list untracked paths in %q: %w", dir, err)
+	}
+	var paths []string
+	for _, path := range bytes.Split(output, []byte{0}) {
+		if len(path) == 0 {
+			continue
+		}
+		paths = append(paths, filepath.FromSlash(string(path)))
+	}
+	return paths, nil
+}
+
+// FetchUpstreamBranch refreshes the remote-tracking ref that branch tracks in
+// dir. It reports whether the branch tracks a remote branch at all, so a
+// caller can tell "nothing to fetch" from "the fetch failed".
+func FetchUpstreamBranch(dir, branch string) (bool, error) {
+	remote, err := runInDir(dir, "config", "--get", "branch."+branch+".remote")
+	if err != nil || remote == "" || remote == "." {
+		return false, nil
+	}
+	upstream, err := runInDir(dir, "config", "--get", "branch."+branch+".merge")
+	if err != nil || !strings.HasPrefix(upstream, "refs/heads/") {
+		return false, nil
+	}
+	tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(upstream, "refs/heads/")
+	if _, err := runInDir(dir, "fetch", remote, "+"+upstream+":"+tracking); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
@@ -576,7 +659,9 @@ func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
 }
 
 // RemoveCreatedWorktree removes a worktree and its unchanged branch while
-// holding the repository mutation lock for the complete operation.
+// holding the repository mutation lock for the complete operation. It is
+// idempotent: a worktree or branch that is already gone leaves nothing to do
+// rather than failing.
 func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 	return withWorktreeMutationLock(dir, func() error {
 		var errs []error
@@ -608,6 +693,16 @@ func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 				errs = append(errs, fmt.Errorf("branch %q is still checked out at worktree %q", created.Branch, entry.Path))
 				return errors.Join(errs...)
 			}
+		}
+		// A caller may be cleaning up after an operation that already removed
+		// the branch. There is nothing left to compare-and-delete, so the
+		// absent ref is the state being asked for, not a failure.
+		missing, err := BranchMissing(dir, created.Branch)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		if missing {
+			return errors.Join(errs...)
 		}
 		if _, err := runInDir(dir, "update-ref", "-d", "refs/heads/"+created.Branch, created.SHA); err != nil {
 			errs = append(errs, fmt.Errorf("branch %q could not be deleted at expected SHA %s: %w", created.Branch, created.SHA, err))

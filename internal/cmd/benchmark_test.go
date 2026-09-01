@@ -21,21 +21,24 @@ func TestBenchmarkCommandIsRegistered(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "benchmark", command.Name())
-	assert.Equal(t, []string{"list", "branch", "review", "branch-results", "review-results"}, command.ValidArgs)
+	assert.Equal(t, []string{"list", "branch", "review", "delete", "branch-results", "review-results"}, command.ValidArgs)
 }
 
 func TestBenchmarkValidatesTargetAndCounts(t *testing.T) {
 	cmd := &cobra.Command{}
 
-	require.EqualError(t, runBenchmark(cmd, "unknown", "", 0, 1), `unknown benchmark target "unknown" (available: list, branch, review, branch-results, review-results)`)
-	require.EqualError(t, runBenchmark(cmd, "list", "target", 0, 1), "benchmark target list does not accept an argument")
-	require.EqualError(t, runBenchmark(cmd, "branch", "", 0, 1), "benchmark target branch requires an exact remote branch name")
-	require.EqualError(t, runBenchmark(cmd, "review", "", 0, 1), "benchmark target review requires a PR or MR number")
-	require.EqualError(t, runBenchmark(cmd, "review", "invalid", 0, 1), "benchmark target review: PR/MR number must be numeric")
-	require.EqualError(t, runBenchmark(cmd, "branch-results", "target", 0, 1), "benchmark target branch-results does not accept an argument")
-	require.EqualError(t, runBenchmark(cmd, "review-results", "target", 0, 1), "benchmark target review-results does not accept an argument")
-	require.EqualError(t, runBenchmark(cmd, "list", "", 0, 0), "benchmark runs must be at least 1")
-	require.EqualError(t, runBenchmark(cmd, "list", "", -1, 1), "benchmark warmup cannot be negative")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "unknown"}, 0, 1), `unknown benchmark target "unknown" (available: list, branch, review, delete, branch-results, review-results)`)
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list", argument: "target"}, 0, 1), "benchmark target list does not accept an argument")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "branch"}, 0, 1), "benchmark target branch requires an exact remote branch name")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "review"}, 0, 1), "benchmark target review requires a PR or MR number")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "review", argument: "invalid"}, 0, 1), "benchmark target review: PR/MR number must be numeric")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "delete", argument: "target"}, 0, 1), "benchmark target delete does not accept an argument")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "branch-results", argument: "target"}, 0, 1), "benchmark target branch-results does not accept an argument")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "review-results", argument: "target"}, 0, 1), "benchmark target review-results does not accept an argument")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list", setupRequested: true}, 0, 1),
+		"benchmark target list runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks do not apply")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list"}, 0, 0), "benchmark runs must be at least 1")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list"}, -1, 1), "benchmark warmup cannot be negative")
 }
 
 func TestBenchmarkReportsResultCounts(t *testing.T) {
@@ -44,10 +47,12 @@ func TestBenchmarkReportsResultCounts(t *testing.T) {
 	cmd.SetErr(&stderr)
 	calls := 0
 
-	require.NoError(t, runBenchmarkIterations(cmd, "branch-results", 1, 2, resultCountRunner(func(*cobra.Command) (int, time.Duration, error) {
+	target := benchmarkTarget{label: "branch-results", runner: resultCountRunner(func(*cobra.Command) (int, time.Duration, error) {
 		calls++
 		return calls, time.Duration(calls) * 100 * time.Millisecond, nil
-	})))
+	})}
+
+	require.NoError(t, runBenchmarkIterations(cmd, target, 1, 2, time.Now))
 
 	assert.Contains(t, stderr.String(), "run  1/2")
 	assert.Contains(t, stderr.String(), "2 results")
@@ -64,14 +69,16 @@ func TestBenchmarkRunsTargetAndSuppressesItsOutput(t *testing.T) {
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 	calls := 0
-	runner := func(runCmd *cobra.Command) (benchmarkIteration, error) {
-		calls++
-		fmt.Fprint(runCmd.OutOrStdout(), "target stdout")
-		fmt.Fprint(runCmd.ErrOrStderr(), "target stderr")
-		return benchmarkIteration{}, nil
+	runner := func(runCmd *cobra.Command) (measuredRun, error) {
+		return func() (benchmarkMeasurement, error) {
+			calls++
+			fmt.Fprint(runCmd.OutOrStdout(), "target stdout")
+			fmt.Fprint(runCmd.ErrOrStderr(), "target stderr")
+			return benchmarkMeasurement{}, nil
+		}, nil
 	}
 
-	require.NoError(t, runBenchmarkIterations(cmd, "list", 1, 2, runner))
+	require.NoError(t, runBenchmarkIterations(cmd, benchmarkTarget{label: "list", runner: runner}, 1, 2, time.Now))
 
 	assert.Equal(t, 3, calls)
 	assert.Empty(t, stdout.String())
@@ -85,18 +92,52 @@ func TestBenchmarkRunsTargetAndSuppressesItsOutput(t *testing.T) {
 	assert.Contains(t, stderr.String(), "max:")
 }
 
+func TestBenchmarkPreparesEveryIterationOutsideTiming(t *testing.T) {
+	var stderr bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetErr(&stderr)
+	preparations := 0
+	runs := 0
+
+	// A clock the iteration itself advances, so the reported duration shows
+	// exactly which phases the benchmark measured.
+	now := time.Unix(0, 0)
+	runner := func(*cobra.Command) (measuredRun, error) {
+		preparations++
+		now = now.Add(time.Hour)
+		return func() (benchmarkMeasurement, error) {
+			runs++
+			now = now.Add(50 * time.Millisecond)
+			return benchmarkMeasurement{}, nil
+		}, nil
+	}
+
+	require.NoError(t, runBenchmarkIterations(cmd, benchmarkTarget{label: "delete", runner: runner}, 1, 2, func() time.Time { return now }))
+
+	assert.Equal(t, 3, preparations, "every warmup and measured run prepares its own iteration")
+	assert.Equal(t, 3, runs)
+	// Each iteration spends an hour preparing and 50ms running, so a reported
+	// duration of 50ms is proof that only the run step was measured.
+	assert.Contains(t, stderr.String(), "run  1/2  50.0 ms")
+	assert.Contains(t, stderr.String(), "run  2/2  50.0 ms")
+	assert.Contains(t, stderr.String(), "mean:   50.0 ms")
+	assert.NotContains(t, stderr.String(), "3600", "preparation must stay outside the clock")
+}
+
 func TestBenchmarkCleansUpEveryIteration(t *testing.T) {
 	calls := 0
 	cleanups := 0
-	runner := func(*cobra.Command) (benchmarkIteration, error) {
+	runner := func(*cobra.Command) (measuredRun, error) {
 		calls++
-		return benchmarkIteration{cleanup: func() error {
-			cleanups++
-			return nil
-		}}, nil
+		return func() (benchmarkMeasurement, error) {
+			return benchmarkMeasurement{cleanup: func() error {
+				cleanups++
+				return nil
+			}}, nil
+		}, nil
 	}
 
-	require.NoError(t, runBenchmarkIterations(&cobra.Command{}, "branch feature/test", 1, 2, runner))
+	require.NoError(t, runBenchmarkIterations(&cobra.Command{}, benchmarkTarget{label: "branch feature/test", runner: runner}, 1, 2, time.Now))
 
 	assert.Equal(t, 3, calls)
 	assert.Equal(t, 3, cleanups)
@@ -104,12 +145,16 @@ func TestBenchmarkCleansUpEveryIteration(t *testing.T) {
 
 func TestBenchmarkCleansUpFailedIteration(t *testing.T) {
 	cleanups := 0
-	err := runBenchmarkIterations(&cobra.Command{}, "branch feature/test", 0, 1, func(*cobra.Command) (benchmarkIteration, error) {
-		return benchmarkIteration{cleanup: func() error {
-			cleanups++
-			return nil
-		}}, errors.New("failed")
-	})
+	runner := func(*cobra.Command) (measuredRun, error) {
+		return func() (benchmarkMeasurement, error) {
+			return benchmarkMeasurement{cleanup: func() error {
+				cleanups++
+				return nil
+			}}, errors.New("failed")
+		}, nil
+	}
+
+	err := runBenchmarkIterations(&cobra.Command{}, benchmarkTarget{label: "branch feature/test", runner: runner}, 0, 1, time.Now)
 
 	require.EqualError(t, err, "run 1 failed: failed")
 	assert.Equal(t, 1, cleanups)
@@ -134,7 +179,7 @@ func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
 	chdirForTest(t, repo)
 	pathWithOnlyGit(t)
 
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "branch", "feature/benchmark-branch", 1, 2))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "branch", argument: "feature/benchmark-branch"}, 1, 2))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/benchmark-branch")
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/remotes/origin/feature/benchmark-branch")
@@ -155,7 +200,7 @@ func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
 
 	fetchHeadPath := filepath.Join(repo, ".git", "FETCH_HEAD")
 	require.NoError(t, os.WriteFile(fetchHeadPath, []byte("user state\n"), 0o644))
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "review", "1", 1, 2))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "review", argument: "1"}, 1, 2))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/review")
 	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-review"))
@@ -165,11 +210,35 @@ func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
 }
 
 func TestBenchmarkReportsRunnerFailure(t *testing.T) {
-	err := runBenchmarkIterations(&cobra.Command{}, "list", 1, 1, func(*cobra.Command) (benchmarkIteration, error) {
-		return benchmarkIteration{}, errors.New("failed")
-	})
+	runner := func(*cobra.Command) (measuredRun, error) {
+		return func() (benchmarkMeasurement, error) {
+			return benchmarkMeasurement{}, errors.New("failed")
+		}, nil
+	}
+
+	err := runBenchmarkIterations(&cobra.Command{}, benchmarkTarget{label: "list", runner: runner}, 1, 1, time.Now)
 
 	require.EqualError(t, err, "warmup run 1 failed: failed")
+}
+
+func TestBenchmarkReportsPreparationFailure(t *testing.T) {
+	runs := 0
+	preparations := 0
+	runner := func(*cobra.Command) (measuredRun, error) {
+		preparations++
+		if preparations > 1 {
+			return nil, errors.New("setup failed")
+		}
+		return func() (benchmarkMeasurement, error) {
+			runs++
+			return benchmarkMeasurement{}, nil
+		}, nil
+	}
+
+	err := runBenchmarkIterations(&cobra.Command{}, benchmarkTarget{label: "delete", runner: runner}, 0, 2, time.Now)
+
+	require.EqualError(t, err, "run 2 failed: preparation failed: setup failed")
+	assert.Equal(t, 1, runs, "an iteration that could not be prepared is never measured")
 }
 
 func TestSilentCommandPreservesContextAndInput(t *testing.T) {

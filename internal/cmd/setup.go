@@ -43,11 +43,49 @@ func setupCreatedWorktree(w io.Writer, render ui.Renderer, mainRoot string, crea
 	})
 }
 
+// creationSetupFlag is one flag that turns a single setup action off.
+type creationSetupFlag struct {
+	name  string
+	usage string
+	value *bool
+}
+
+// creationSetupFlags declares those flags. Registration and the check for
+// whether a caller set any of them both come from this list, so a new setup
+// flag is one entry and nothing else.
+func creationSetupFlags(options *creationSetupOptions) []creationSetupFlag {
+	return []creationSetupFlag{
+		{name: "skip-env", usage: "Skip copying .env* files", value: &options.skipEnv},
+		{name: "skip-database", usage: "Skip branch database setup", value: &options.skipDatabase},
+		{name: "skip-deps", usage: "Skip dependency installation", value: &options.skipDeps},
+		{name: "skip-hooks", usage: "Skip post-create hooks", value: &options.skipHooks},
+	}
+}
+
 func addCreationSetupFlags(cmd *cobra.Command, options *creationSetupOptions) {
-	cmd.Flags().BoolVar(&options.skipEnv, "skip-env", false, "Skip copying .env* files")
-	cmd.Flags().BoolVar(&options.skipDatabase, "skip-database", false, "Skip branch database setup")
-	cmd.Flags().BoolVar(&options.skipDeps, "skip-deps", false, "Skip dependency installation")
-	cmd.Flags().BoolVar(&options.skipHooks, "skip-hooks", false, "Skip post-create hooks")
+	for _, flag := range creationSetupFlags(options) {
+		cmd.Flags().BoolVar(flag.value, flag.name, false, flag.usage)
+	}
+}
+
+func creationSetupFlagNames() []string {
+	flags := creationSetupFlags(&creationSetupOptions{})
+	names := make([]string, 0, len(flags))
+	for _, flag := range flags {
+		names = append(names, flag.name)
+	}
+	return names
+}
+
+// creationSetupFlagsChanged reports whether the caller turned any setup action
+// off explicitly, as opposed to leaving every action enabled by default.
+func creationSetupFlagsChanged(cmd *cobra.Command) bool {
+	for _, name := range creationSetupFlagNames() {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
 }
 
 type worktreeSetup struct {
@@ -90,6 +128,40 @@ type setupSummary struct {
 	dependencies     setupStatus
 	database         setupStatus
 	hooks            setupStatus
+}
+
+// setupStep pairs one setup action with its reported result. Environment
+// carries the detected tools because they describe that step's outcome, and
+// every step names the flag that turns it off, so a caller reporting a step
+// can say how to skip it.
+type setupStep struct {
+	name     string
+	skipFlag string
+	status   setupStatus
+	tools    []envrc.ToolStatus
+}
+
+// steps lists the setup actions in report order. Every reader of a summary
+// goes through this, so a new setup action only has to be added here.
+func (summary setupSummary) steps() []setupStep {
+	return []setupStep{
+		{name: "Environment", skipFlag: "skip-env", status: summary.environment, tools: summary.environmentTools},
+		{name: "Dependencies", skipFlag: "skip-deps", status: summary.dependencies},
+		{name: "Database", skipFlag: "skip-database", status: summary.database},
+		{name: "Hooks", skipFlag: "skip-hooks", status: summary.hooks},
+	}
+}
+
+// failures describes every setup action that failed, using the lowercased step
+// name so the text reads as a sentence fragment.
+func (summary setupSummary) failures() []string {
+	var failures []string
+	for _, step := range summary.steps() {
+		if step.status.kind == setupStatusFailed {
+			failures = append(failures, strings.ToLower(step.name)+" "+step.status.text)
+		}
+	}
+	return failures
 }
 
 // runWorktreeSetup performs the common best-effort setup actions for every
@@ -158,13 +230,12 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 
 func printSetupSummary(w io.Writer, render ui.Renderer, summary setupSummary) {
 	fmt.Fprintln(w, render.Title("SETUP"))
-	writeSetupStatus(w, render, "Environment", summary.environment)
-	for _, tool := range summary.environmentTools {
-		writeEnvironmentToolStatus(w, render, tool)
+	for _, step := range summary.steps() {
+		writeSetupStatus(w, render, step.name, step.status)
+		for _, tool := range step.tools {
+			writeEnvironmentToolStatus(w, render, tool)
+		}
 	}
-	writeSetupStatus(w, render, "Dependencies", summary.dependencies)
-	writeSetupStatus(w, render, "Database", summary.database)
-	writeSetupStatus(w, render, "Hooks", summary.hooks)
 }
 
 func summarizeHooks(results []hooks.RunResult) setupStatus {
@@ -200,6 +271,19 @@ func writeSetupStatus(w io.Writer, render ui.Renderer, name string, status setup
 func writeEnvironmentToolStatus(w io.Writer, render ui.Renderer, tool envrc.ToolStatus) {
 	tone, symbol := environmentToolAppearance(tool.Status)
 	fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(tone, symbol), tool.Name, render.Tone(tone, render.Fit(tool.Status, 20)))
+}
+
+// setupStatusWord names an outcome in one word, for callers that report what a
+// setup run consisted of rather than its full per-step text.
+func setupStatusWord(kind setupStatusKind) string {
+	switch kind {
+	case setupStatusFailed:
+		return "failed"
+	case setupStatusCompleted:
+		return "completed"
+	default:
+		return "skipped"
+	}
 }
 
 func setupStatusAppearance(kind setupStatusKind) (ui.Tone, string) {

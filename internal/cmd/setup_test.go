@@ -126,3 +126,15 @@ func TestReportNestedModules(t *testing.T) {
 
 	assert.Equal(t, "○ Nested module apps/web (package-lock.json): skipped; not installed automatically.\n", ui.StripANSI(output.String()))
 }
+
+// Every setup step names the flag that turns it off, and a caller that reports
+// a step tells the user to pass that exact flag, so the two lists must agree.
+func TestSetupStepsNameARegisteredSkipFlag(t *testing.T) {
+	cmd := &cobra.Command{}
+	addCreationSetupFlags(cmd, &creationSetupOptions{})
+
+	for _, step := range (setupSummary{}).steps() {
+		assert.NotNilf(t, cmd.Flags().Lookup(step.skipFlag), "setup step %s names unregistered flag --%s", step.name, step.skipFlag)
+	}
+	assert.Len(t, (setupSummary{}).steps(), len(creationSetupFlagNames()))
+}
