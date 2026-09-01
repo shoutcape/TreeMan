@@ -4,7 +4,7 @@ This document describes current behavior. It is not a product roadmap.
 
 ## Git and Worktrees
 
-- Default branch detection supports only `main` and `master`.
+- Default branch detection reads `refs/remotes/origin/HEAD` first. If that ref is absent, TreeMan finds only `main` or `master` on `origin`.
 - Branch validation does not implement all Git ref rules.
 - Branch names with `/` can collide after slug conversion to `-`.
 - Do not run direct `git worktree` mutations concurrently with `treeman clean` or `treeman delete`. TreeMan serializes its own worktree additions and guarded deletions, but direct Git commands do not participate in that lock.
