@@ -91,9 +91,19 @@ treeman delete --path <path> --branch <branch> [--yes] [--force]
 
 TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion loads the worktree's durable database ownership record, removes the worktree and branch, marks the owned database pending, then drops it before the command returns. It never derives deletion authority from `.env`.
 
-The merge check reads the branch's remote-tracking ref, so TreeMan refreshes that ref from its remote before deciding. Without it, commits pushed from another machine, or by anyone since the last fetch here, are invisible and deletion refuses a branch whose work is safely on the remote. A fetch that cannot run, whether offline or because the remote branch is gone, is reported and not fatal: the check falls back to the last fetched state, which can only make it refuse more often. `--force` skips the merge check and therefore the fetch, and a branch that tracks no remote branch has nothing to refresh.
+`delete` does not check whether the branch is merged. You named the treebranch and confirmed it, and the worktree being clean is what protects work that is not recoverable. `treeman clean` is the merge-aware command: it deletes only what it can prove is merged, using forge evidence for squash and rebase merges that local history cannot show. Deciding merge status here would only duplicate that with a weaker local check, and would push you toward `--force` for the ordinary case of a squash-merged branch.
 
-TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files. `--yes` skips the confirmation prompt but does not bypass safety checks.
+Unmerged commits are still reported. The confirmation prompt annotates the branch with how many of its commits the default branch cannot reach, because deleting a branch drops its reflog along with the worktree's, and those commits become unreachable. `--yes` skips the prompt and therefore that annotation.
+
+The whole path is local. `delete` contacts no remote.
+
+TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files -- it means that and nothing else. `--yes` skips the confirmation prompt but does not bypass safety checks.
+
+A locked worktree is never removed, and `--force` does not override the lock: `git worktree lock` is how you mark a worktree whose directory is legitimately absent sometimes, such as one on removable media. Unlock it first.
+
+A worktree whose directory was removed outside TreeMan is still deleted: the registration is unregistered and the branch goes through the same compare-and-delete as any other deletion, rather than leaving both behind with nothing able to remove them. Its recorded database cannot be resolved without the directory, so any drop it had already recorded is left to the pending-cleanup retry.
+
+Removal renames the worktree directory into `.git/treeman/trash/` and hands the unlinking to a background process, so the command returns as soon as the workspace is clear rather than waiting on a dependency tree. Before the rename, TreeMan verifies the directory is still the worktree the repository registered there -- the check `git worktree remove` would have made, which renaming past it would otherwise skip. A worktree on a different filesystem cannot be renamed and is removed directly instead.
 
 When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so shell integration can change directory safely.
 

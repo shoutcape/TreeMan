@@ -80,8 +80,8 @@ func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox
 		// package-lock.json is enough -- and the deletion being measured
 		// refuses a dirty worktree without --force. Clearing that drift here,
 		// outside the clock, keeps the timed path the same non-forced deletion
-		// a user runs; passing --force instead would also skip the merge check
-		// and measure a different path.
+		// a user runs; passing --force instead would waive the clean check the
+		// timed path is supposed to be running.
 		cleared, err := git.DiscardWorktreeChanges(created.Path)
 		if err != nil {
 			return err

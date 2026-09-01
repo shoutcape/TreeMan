@@ -162,7 +162,7 @@ func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/remove-failure")
 	chdirForTest(t, repo)
 	restoreRemove := removeWorktree
-	removeWorktree = func(string, bool) error { return assert.AnError }
+	removeWorktree = func(string, string, bool) error { return assert.AnError }
 	t.Cleanup(func() { removeWorktree = restoreRemove })
 
 	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/remove-failure", true, false)
@@ -207,7 +207,7 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		deleteBranchAtSHA = func(string, string, string) error { events = append(events, "branch"); return assert.AnError }
 		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
 
-		err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-failure", repo, true, true, "")
+		err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-failure", repo, true, "")
 
 		require.ErrorIs(t, err, assert.AnError)
 		assert.Equal(t, []string{"prepare", "branch"}, events)
@@ -227,7 +227,7 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		}
 		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
 
-		require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-success", repo, true, true, ""))
+		require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-success", repo, true, ""))
 		assert.Equal(t, []string{"prepare", "branch", "flush"}, events)
 	})
 }
@@ -240,7 +240,7 @@ func TestDeleteWorktreeAtSHAAdvancesDatabaseCleanupLifecycle(t *testing.T) {
 	newCleanupBatch = func() databaseCleanupBatch { return &transitionCleanupSession{events: &events} }
 	t.Cleanup(func() { newCleanupBatch = restoreBatch })
 
-	require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/database-lifecycle", repo, true, true, ""))
+	require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/database-lifecycle", repo, true, ""))
 	assert.Equal(t, []string{"active", "pending_cleanup", "removed"}, events)
 }
 
@@ -265,7 +265,7 @@ func TestDeleteVerifiedWorktreeRequiresExpectedSHA(t *testing.T) {
 
 	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, true, "")
 
-	require.EqualError(t, err, "cannot skip merge check for branch \"feature/verified\" without an expected SHA")
+	require.EqualError(t, err, "cannot delete verified branch \"feature/verified\" without an expected SHA")
 	assert.DirExists(t, worktree)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature/verified")
 }
@@ -277,8 +277,8 @@ func TestDeleteVerifiedWorktreePreservesBranchOnCompareAndDeleteMismatch(t *test
 	chdirForTest(t, repo)
 
 	originalRemove := removeWorktree
-	removeWorktree = func(path string, force bool) error {
-		if err := originalRemove(path, force); err != nil {
+	removeWorktree = func(mainRoot, path string, force bool) error {
+		if err := originalRemove(mainRoot, path, force); err != nil {
 			return err
 		}
 		gitTest(t, repo, "update-ref", "refs/heads/feature/verified", movedSHA)
@@ -311,8 +311,8 @@ func TestRunDeleteDirect_PreservesBranchMovedDuringDeletion(t *testing.T) {
 			chdirForTest(t, repo)
 
 			originalRemove := removeWorktree
-			removeWorktree = func(path string, removeForce bool) error {
-				if err := originalRemove(path, removeForce); err != nil {
+			removeWorktree = func(mainRoot, path string, removeForce bool) error {
+				if err := originalRemove(mainRoot, path, removeForce); err != nil {
 					return err
 				}
 				gitTest(t, repo, "update-ref", "refs/heads/feature/moved", replacementSHA)
@@ -353,17 +353,19 @@ func TestRunDeleteDirect_RejectsMismatchedBranch(t *testing.T) {
 	assert.DirExists(t, worktree)
 }
 
-func TestRunDeleteDirect_RejectsDeletionWhenDefaultBranchDetectionFails(t *testing.T) {
+// A repository with no remote named origin still deletes. The default-branch
+// guard falls back to the main worktree's branch rather than refusing every
+// deletion, which is what it used to do here.
+func TestRunDeleteDirect_DeletesWhenDefaultBranchDetectionFallsBack(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/no-origin")
 	gitTest(t, repo, "remote", "remove", "origin")
+	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
 	chdirForTest(t, repo)
 
-	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/no-origin", true, true)
+	require.NoError(t, runDeleteDirect(&cobra.Command{}, worktree, "feature/no-origin", true, true))
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "default branch could not be detected")
-	assert.DirExists(t, worktree)
-	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/no-origin")
+	assert.NoDirExists(t, worktree)
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/no-origin")
 }
 
 func TestRunDeleteDirect_RejectsKnownDefaultBranch(t *testing.T) {
@@ -383,19 +385,21 @@ func TestRunDeleteDirect_RejectsKnownDefaultBranch(t *testing.T) {
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/master")
 }
 
-func TestRunDeleteDirect_RejectsUnmergedBranchBeforeRemovingWorktree(t *testing.T) {
+// An unmerged branch is the user's to delete once they have named and
+// confirmed it. Committed work is not at risk from a clean worktree the way
+// uncommitted work is, and `treeman clean` is the command that declines to
+// touch anything it cannot prove is merged.
+func TestRunDeleteDirect_DeletesUnmergedBranchWhenWorktreeIsClean(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/unmerged")
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "feature.txt"), []byte("feature\n"), 0o644))
 	gitTest(t, worktree, "add", "feature.txt")
 	gitTest(t, worktree, "commit", "-m", "feature work")
 	chdirForTest(t, repo)
 
-	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/unmerged", true, false)
+	require.NoError(t, runDeleteDirect(&cobra.Command{}, worktree, "feature/unmerged", true, false))
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not fully merged")
-	assert.DirExists(t, worktree)
-	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/unmerged")
+	assert.NoDirExists(t, worktree)
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/unmerged")
 }
 
 func TestRunList_ReportsRepositoryState(t *testing.T) {

@@ -14,10 +14,9 @@ import (
 )
 
 var (
-	removeWorktree      = git.WorktreeRemove
-	deleteBranchAtSHA   = git.DeleteBranchAtSHA
-	fetchUpstreamBranch = git.FetchUpstreamBranch
-	newCleanupBatch     = func() databaseCleanupBatch { return database.NewCleanupBatch() }
+	removeWorktree    = git.WorktreeRemove
+	deleteBranchAtSHA = git.DeleteBranchAtSHA
+	newCleanupBatch   = func() databaseCleanupBatch { return database.NewCleanupBatch() }
 )
 
 type databaseCleanupPreparer interface {
@@ -73,7 +72,7 @@ func newDeleteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagPath, "path", "", "Worktree path to delete (skips fzf picker)")
 	cmd.Flags().StringVar(&flagBranch, "branch", "", "Branch to delete (skips fzf picker)")
 	cmd.Flags().BoolVarP(&flagYes, "yes", "y", false, "Skip confirmation prompt")
-	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a dirty worktree or unmerged branch")
+	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a worktree with uncommitted or untracked changes")
 	return cmd
 }
 
@@ -89,7 +88,7 @@ func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force
 		return err
 	}
 	if !skipConfirm {
-		printDeleteConfirmation(cmd, path, branch)
+		printDeleteConfirmation(cmd, mainRoot, path, branch)
 		confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
 		if err != nil {
 			return err
@@ -166,7 +165,7 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 		return fmt.Errorf("could not map fzf selection to a worktree")
 	}
 	if !skipConfirm {
-		printDeleteConfirmation(cmd, paths[idx], branches[idx])
+		printDeleteConfirmation(cmd, mainRoot, paths[idx], branches[idx])
 		confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
 		if err != nil {
 			return err
@@ -180,24 +179,26 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 }
 
 func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
-	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, false, "")
+	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, "")
 }
 
 // deleteVerifiedWorktree preserves the exact-SHA cleanup helper used by the
-// merge classifier while routing it through database-aware deletion.
+// merge classifier while routing it through database-aware deletion. The
+// classifier authorized one specific tip, so a branch that has moved since is
+// no longer the branch it verified.
 func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string) error {
 	if expectedSHA == "" {
-		return fmt.Errorf("cannot skip merge check for branch %q without an expected SHA", branch)
+		return fmt.Errorf("cannot delete verified branch %q without an expected SHA", branch)
 	}
-	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, true, expectedSHA)
+	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, expectedSHA)
 }
 
 // deleteWorktreeAtSHA removes a worktree and its branch. An expected SHA makes
 // cleanup conditional on the exact commit whose merge was verified. Every
 // deletion snapshots its branch SHA and compare-and-deletes that exact ref.
-func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string) error {
+func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string) error {
 	batch := newCleanupBatch()
-	outcome, err := deleteWorktreeAtSHAWithDatabase(cmd, dest, branch, mainRoot, force, skipMergeCheck, expectedSHA, batch)
+	outcome, err := deleteWorktreeAtSHAWithDatabase(cmd, dest, branch, mainRoot, force, expectedSHA, batch)
 	if err != nil {
 		return err
 	}
@@ -217,8 +218,12 @@ func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome 
 
 // deleteWorktreeAtSHAWithDatabase lets clean share one cleanup batch across
 // worktrees while keeping ownership transitions inside the database package.
-func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force, skipMergeCheck bool, expectedSHA string, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
-	entry, err := findWorktree(dest)
+func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
+	entries, err := git.WorktreeList()
+	if err != nil {
+		return deleteWorktreeOutcome{}, err
+	}
+	entry, err := worktreeEntryAt(entries, dest)
 	if err != nil {
 		return deleteWorktreeOutcome{}, err
 	}
@@ -228,7 +233,20 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	if entry.Branch != branch {
 		return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
 	}
-	defaultBranch, err := git.DetectDefaultBranch()
+	// A lock says "do not remove this", and --force is the user waiving their
+	// own uncommitted changes, never a claim about the lock. Git refuses a
+	// locked worktree too, so the guard is here for the message rather than
+	// the outcome -- and it has to precede the staleness check below, because
+	// a legitimately absent directory (removable media, an unmounted share) is
+	// the case the lock exists for and must not be read as an abandoned one.
+	if entry.Locked {
+		reason := ""
+		if entry.LockReason != "" {
+			reason = ": " + entry.LockReason
+		}
+		return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
+	}
+	defaultBranch, err := resolveDefaultBranch(entries, mainRoot)
 	if err != nil {
 		return deleteWorktreeOutcome{}, fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
 	}
@@ -242,25 +260,27 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	if expectedSHA != "" && branchSHA != expectedSHA {
 		return deleteWorktreeOutcome{}, fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
 	}
-	dirty, err := git.WorktreeDirty(entry.Path)
-	if err != nil {
-		return deleteWorktreeOutcome{}, err
-	}
-	if dirty && !force {
-		return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
-	}
-	if !force && !skipMergeCheck {
-		// The merge check reads the branch's remote-tracking ref, so refresh it
-		// before deciding. Work pushed from another machine, or by anyone since
-		// the last fetch here, is otherwise invisible, and the deletion refuses
-		// a branch whose commits are safely on the remote.
-		refreshUpstreamForMergeCheck(cmd, mainRoot, branch)
-		canDelete, err := git.BranchCanDeleteAtSHA(mainRoot, branch, branchSHA)
+	// A registration whose directory is gone has no working tree to protect
+	// and nothing to identify, so both checks below are skipped rather than
+	// failed on. `git worktree remove` still unregisters it and the branch
+	// still goes through the same compare-and-delete, so this reaches the same
+	// end state as a normal deletion instead of leaving behind a registration
+	// and a branch that nothing can remove.
+	directoryMissing := git.WorktreeDirectoryMissing(entry.Path)
+	if !directoryMissing {
+		// Identity before contents. Reading the working tree of a directory
+		// that is no longer this worktree reports a foreign repository's
+		// changes as this one's, and answers them with --force -- the one flag
+		// that would carry the removal through.
+		if err := git.EnsureHoldsWorktree(mainRoot, entry.Path); err != nil {
+			return deleteWorktreeOutcome{}, err
+		}
+		state, err := git.InspectWorktree(entry.Path)
 		if err != nil {
 			return deleteWorktreeOutcome{}, err
 		}
-		if !canDelete {
-			return deleteWorktreeOutcome{}, fmt.Errorf("branch %q is not fully merged; use --force to delete it", branch)
+		if state == git.WorktreeStateDirty && !force {
+			return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 		}
 	}
 	currentRoot, err := git.CurrentWorktreeRoot()
@@ -276,7 +296,14 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	if batch == nil {
 		batch = newCleanupBatch()
 	}
-	if commitDatabaseCleanup, databaseName, err = batch.Prepare(entry.Path); err != nil {
+	// A worktree whose directory is gone cannot be asked which database it
+	// owned -- the lookup resolves the record through the worktree's own Git
+	// directory -- so there is nothing to prepare, and reporting that as a
+	// failure would make an expected cleanup look broken. A drop it had
+	// already recorded is still collected by the pending-cleanup retry.
+	if directoryMissing {
+		cleanupOutcome.status = databaseCleanupAbsent
+	} else if commitDatabaseCleanup, databaseName, err = batch.Prepare(entry.Path); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 	} else if commitDatabaseCleanup == nil {
 		cleanupOutcome.status = databaseCleanupAbsent
@@ -284,7 +311,7 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		cleanupOutcome.status = databaseCleanupPending
 		cleanupOutcome.database = databaseName
 	}
-	if err := removeWorktree(entry.Path, force); err != nil {
+	if err := removeWorktree(mainRoot, entry.Path, force); err != nil {
 		return deleteWorktreeOutcome{}, deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
 	}
 	if err := deleteBranchAtSHA(mainRoot, branch, branchSHA); err != nil {
@@ -304,21 +331,6 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path)}, nil
 }
 
-// refreshUpstreamForMergeCheck updates the ref the merge check reads. A fetch
-// that cannot run -- offline, or a remote branch that no longer exists -- is
-// reported rather than fatal: the check still runs against the last fetched
-// state, which can only make it refuse more often, never accept a branch it
-// would otherwise protect. A branch that tracks nothing has nothing to
-// refresh, and the check falls back to local ancestry as before.
-func refreshUpstreamForMergeCheck(cmd *cobra.Command, mainRoot, branch string) {
-	tracked, err := fetchUpstreamBranch(mainRoot, branch)
-	if !tracked || err == nil {
-		return
-	}
-	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!",
-		fmt.Sprintf("could not refresh branch %q from its remote, deciding on the last fetched state: %v", branch, err)))
-}
-
 func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {
 	return fmt.Errorf("%w\nCompleted: %s.\nRemaining: %s.\nRecovery: %s", err, completed, remaining, recovery)
 }
@@ -335,12 +347,54 @@ func findWorktree(path string) (git.WorktreeEntry, error) {
 	if err != nil {
 		return git.WorktreeEntry{}, err
 	}
+	return worktreeEntryAt(entries, path)
+}
+
+func worktreeEntryAt(entries []git.WorktreeEntry, path string) (git.WorktreeEntry, error) {
 	for _, entry := range entries {
 		if samePath(entry.Path, path) {
 			return entry, nil
 		}
 	}
 	return git.WorktreeEntry{}, fmt.Errorf("path %q is not a linked worktree", path)
+}
+
+// resolveDefaultBranch names the branch the default-branch guard protects.
+// origin/HEAD answers locally in every clone, and since Git 2.49 every fetch
+// creates it too, so the remote is almost never consulted. When it cannot be
+// read at all -- an older Git in a repository that was never cloned, or a
+// remote that is not named origin -- the main worktree's own branch is the
+// local answer, and it is free: the worktree list is already in hand. Falling
+// back matters because the guard is not worth refusing every deletion over;
+// before this, a repository whose remote is named anything but origin could
+// not delete a worktree at all.
+func resolveDefaultBranch(entries []git.WorktreeEntry, mainRoot string) (string, error) {
+	branch, detectErr := git.DetectDefaultBranch()
+	if detectErr == nil {
+		return branch, nil
+	}
+	if branch, ok := mainWorktreeBranch(entries, mainRoot); ok {
+		return branch, nil
+	}
+	return "", detectErr
+}
+
+// localDefaultBranch is resolveDefaultBranch without the remote round trip, for
+// callers that only decorate output.
+func localDefaultBranch(entries []git.WorktreeEntry, mainRoot string) (string, bool) {
+	if branch, ok := git.LocalDefaultBranch(); ok {
+		return branch, true
+	}
+	return mainWorktreeBranch(entries, mainRoot)
+}
+
+func mainWorktreeBranch(entries []git.WorktreeEntry, mainRoot string) (string, bool) {
+	for _, entry := range entries {
+		if samePath(entry.Path, mainRoot) && entry.Branch != "" {
+			return entry.Branch, true
+		}
+	}
+	return "", false
 }
 
 func samePath(a, b string) bool {
@@ -359,12 +413,37 @@ func canonicalPath(path string) string {
 	return filepath.Clean(abs)
 }
 
-func printDeleteConfirmation(cmd *cobra.Command, path, branch string) {
+func printDeleteConfirmation(cmd *cobra.Command, mainRoot, path, branch string) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", "About to delete:"))
 	fmt.Fprintf(out, "  Worktree: %s\n", render.Path(path))
-	fmt.Fprintf(out, "  Branch:   %s\n\n", render.Branch(branch))
+	fmt.Fprintf(out, "  Branch:   %s%s\n\n", render.Branch(branch), describeUnmergedCommits(mainRoot, branch))
+}
+
+// describeUnmergedCommits annotates the branch line with the work that would
+// stop being reachable. It is decoration, so every failure to work it out --
+// no default branch, an unreadable ref -- returns an empty string instead of
+// an error: nothing here decides whether the deletion may proceed, and a
+// prompt that cannot render a count is still a usable prompt.
+func describeUnmergedCommits(mainRoot, branch string) string {
+	entries, err := git.WorktreeList()
+	if err != nil {
+		return ""
+	}
+	defaultBranch, ok := localDefaultBranch(entries, mainRoot)
+	if !ok || defaultBranch == branch {
+		return ""
+	}
+	count, err := git.UnmergedCommitCount(mainRoot, branch, defaultBranch)
+	if err != nil || count == 0 {
+		return ""
+	}
+	commits := "commits"
+	if count == 1 {
+		commits = "commit"
+	}
+	return fmt.Sprintf("  (%d %s not on %s)", count, commits, defaultBranch)
 }
 
 func confirmYN(cmd *cobra.Command, prompt string) (bool, error) {

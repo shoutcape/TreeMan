@@ -62,12 +62,13 @@ Every prepared worktree is reported, and the line repeats whenever it changes.
 prepared: environment completed, dependencies completed, database completed, hooks completed
 ```
 
-The timed deletion includes the fetch that refreshes the branch's remote-tracking
-ref before the merge check. In the benchmark that fetch is served by the local
-clone the sandbox was made from, so it costs a few milliseconds of disk work
-rather than the network round trip a deletion in a real checkout pays. Treat the
-reported number as the local floor for a deletion, not as what a user waits for
-against a remote.
+The timed deletion contacts no remote, so the number is not hiding a network
+round trip. It also does not include unlinking the worktree's files: deletion
+renames the directory into `.git/treeman/trash/` and hands the unlinking to a
+background process, and the clock stops when the rename lands. That is what a
+user waits for, but it means the number is nearly independent of how large the
+worktree is -- so the reported figure measures the checks and the rename, not
+the size of what was removed.
 
 Read the number next to that line, never on its own: what a deletion costs is
 decided by what setup put in the worktree, so two repositories are only
