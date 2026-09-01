@@ -5,11 +5,14 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -194,4 +197,122 @@ func TestPickerSelectionMapsHowFzfExited(t *testing.T) {
 
 	_, _, err = pickerSelection(assert.AnError, "", 3)
 	assert.ErrorContains(t, err, "fzf failed while selecting")
+}
+
+// The streamed picker numbers rows after a header line fzf is told to hold
+// out of the list. This runs the real fzf over a streamed payload to hold it
+// to that: the header must never come back as a selection, the index must
+// never be displayed or matched, and rows that look the same must still carry
+// the index of the row that produced them.
+func TestStreamedRowsKeepTheirOwnIndexBehindTheHeaderLine(t *testing.T) {
+	if _, err := exec.LookPath("fzf"); err != nil {
+		t.Skip("fzf is not installed")
+	}
+	payload := &bytes.Buffer{}
+	count, err := streamPickerRows(context.Background(), payload, "HEADER", func(_ context.Context, emit func(string) error) error {
+		for _, display := range []string{"dup", "dup", "other"} {
+			if err := emit(display); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, count)
+
+	filter := func(query string) []string {
+		t.Helper()
+		args := append(streamingPickerArgs(false, pickerRequest{label: " rows ", prompt: "row > "}), "--filter="+query)
+		fzf := exec.Command("fzf", args...)
+		fzf.Stdin = bytes.NewReader(payload.Bytes())
+		out, _ := fzf.Output()
+		if strings.TrimSpace(string(out)) == "" {
+			return nil
+		}
+		return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	}
+
+	assert.Empty(t, filter("HEADER"), "the header is not a row the user can pick")
+	assert.Empty(t, filter("2"), "the row index is neither displayed nor matched")
+
+	duplicates := filter("dup")
+	require.Len(t, duplicates, 2)
+	assert.Equal(t, 0, pickerSelectionIndex(duplicates[0], count))
+	assert.Equal(t, 1, pickerSelectionIndex(duplicates[1], count))
+}
+
+// Two worktrees can render the same picker row: the display shows only the
+// last two path components and the branch, so nested directories that repeat
+// those names look identical. The row a picker returns therefore has to be
+// resolved by the index the row carries, never by the text the user saw.
+func TestSwitchResolvesIdenticalDisplayRowsToTheirOwnWorktree(t *testing.T) {
+	repo, first, second := repoWithIdenticalWorktreeRows(t)
+	chdirForTest(t, repo)
+
+	// Row 1 is the repository's own worktree; the two identical rows follow it.
+	assert.Equal(t, first, switchWithPickedRow(t, 2), "the first duplicate row must resolve to the first worktree")
+	assert.Equal(t, second, switchWithPickedRow(t, 3), "the second duplicate row must resolve to the second worktree")
+}
+
+// switchWithPickedRow runs switch against a picker that always answers with
+// the given one-based row of the list it was handed, and returns the worktree
+// path switch printed for the shell wrapper.
+func switchWithPickedRow(t *testing.T, row int) string {
+	t.Helper()
+	stubFZFPicksRow(t, row)
+
+	var stdout, stderr bytes.Buffer
+	cmd := interactiveCommand(&stdout, &stderr)
+	require.NoError(t, runSwitch(cmd, ""))
+
+	return strings.TrimSpace(stdout.String())
+}
+
+// repoWithIdenticalWorktreeRows builds a repository whose two added worktrees
+// render the same picker row: same last two path components, and no branch
+// name to tell them apart because both are detached.
+func repoWithIdenticalWorktreeRows(t *testing.T) (repo, first, second string) {
+	t.Helper()
+	parent := t.TempDir()
+	repo = filepath.Join(parent, "repo")
+	require.NoError(t, os.Mkdir(repo, 0o755))
+	gitTest(t, repo, "init", "-b", "main")
+	gitTest(t, repo, "config", "user.name", "TreeMan Test")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644))
+	gitTest(t, repo, "add", "README.md")
+	gitTest(t, repo, "commit", "-m", "initial")
+
+	first = filepath.Join(parent, "one", "nested", "work")
+	second = filepath.Join(parent, "two", "nested", "work")
+	gitTest(t, repo, "worktree", "add", "--detach", first)
+	gitTest(t, repo, "worktree", "add", "--detach", second)
+
+	render := commandRenderer(interactiveCommand(&bytes.Buffer{}, &bytes.Buffer{}))
+	require.Equal(t, render.WorktreeRow(first, ""), render.WorktreeRow(second, ""),
+		"the test needs two worktrees the picker cannot tell apart by display text")
+	return repo, first, second
+}
+
+// stubFZFPicksRow puts an fzf on PATH that returns the given one-based line of
+// its input unchanged, which is what fzf prints for a selected row.
+func stubFZFPicksRow(t *testing.T, row int) {
+	t.Helper()
+	directory := t.TempDir()
+	stub := filepath.Join(directory, "fzf")
+	script := "#!/bin/sh\nsed -n '" + strconv.Itoa(row) + "p'\n"
+	require.NoError(t, os.WriteFile(stub, []byte(script), 0o700))
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// interactiveCommand is a command whose streams report a terminal, so the
+// picker paths run instead of refusing to interact.
+func interactiveCommand(stdout, stderr *bytes.Buffer) *cobra.Command {
+	cmd := commandWithOutput(stdout, stderr)
+	interactive := terminal.Capabilities{InputTTY: true, OutputTTY: true, Interactive: true, Width: 120}
+	cmd.SetContext(context.WithValue(context.Background(), terminalSessionKey{}, terminalSession{
+		errorOutput: interactive,
+		standardOut: interactive,
+	}))
+	return cmd
 }
