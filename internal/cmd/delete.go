@@ -72,7 +72,7 @@ func newDeleteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagPath, "path", "", "Worktree path to delete (skips fzf picker)")
 	cmd.Flags().StringVar(&flagBranch, "branch", "", "Branch to delete (skips fzf picker)")
 	cmd.Flags().BoolVarP(&flagYes, "yes", "y", false, "Skip confirmation prompt")
-	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a worktree with uncommitted or untracked changes")
+	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a worktree with uncommitted changes, or a branch whose commits exist nowhere else")
 	return cmd
 }
 
@@ -283,6 +283,26 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 			return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 		}
 	}
+	// Committing work does not make it safe. Deleting a branch drops its
+	// reflog along with the worktree's, so a commit that no remote and not the
+	// default branch can reach has nothing left pointing at it -- the same
+	// unrecoverable loss the dirty check refuses, one commit later. It is
+	// checked whether or not the directory survives, because the loss is the
+	// branch's, not the directory's.
+	//
+	// An expected SHA is a caller that already proved this exact commit merged
+	// -- `clean` asks the forge, which sees the squash merge local history
+	// cannot. Its evidence outranks this one, so the gate steps aside for it
+	// rather than sending users back to --force for the ordinary case.
+	if !force && expectedSHA == "" {
+		unpushed, err := git.UnpushedCommitCount(mainRoot, branch, defaultBranch)
+		if err != nil {
+			return deleteWorktreeOutcome{}, fmt.Errorf("cannot tell whether branch %q has commits that exist nowhere else: %w; use --force to delete it anyway", branch, err)
+		}
+		if unpushed > 0 {
+			return deleteWorktreeOutcome{}, fmt.Errorf("branch %q has %d %s on no remote and not on %s; push the branch or use --force to delete it", branch, unpushed, commitsWord(unpushed), defaultBranch)
+		}
+	}
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return deleteWorktreeOutcome{}, err
@@ -445,11 +465,14 @@ func describeUnmergedCommits(mainRoot, branch string) string {
 	if err != nil || count == 0 {
 		return ""
 	}
-	commits := "commits"
+	return fmt.Sprintf("  (%d %s not on %s)", count, commitsWord(count), defaultBranch)
+}
+
+func commitsWord(count int) string {
 	if count == 1 {
-		commits = "commit"
+		return "commit"
 	}
-	return fmt.Sprintf("  (%d %s not on %s)", count, commits, defaultBranch)
+	return "commits"
 }
 
 func confirmYN(cmd *cobra.Command, prompt string) (bool, error) {

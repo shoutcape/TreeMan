@@ -97,7 +97,7 @@ Use `treeman switch` or `wts` to select a worktree. Shell integration changes th
 Use `treeman clean` or `wtc` to remove clean worktrees whose branches are merged into the default branch. TreeMan can also recognize verified squash or rebase merges after the remote branch is deleted. It retains branches that it cannot verify.
 
 > [!NOTE]
-> TreeMan never removes the main worktree, the default branch, or detached worktrees during cleanup. `treeman delete` also refuses dirty worktrees and unmerged branches unless you explicitly use `--force`.
+> TreeMan never removes the main worktree, the default branch, or detached worktrees during cleanup. `treeman delete` also refuses dirty worktrees, and branches whose commits are on no remote and not on the default branch, unless you explicitly use `--force`.
 
 ### Use TreeMan in Agents and Scripts
 

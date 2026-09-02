@@ -44,20 +44,90 @@ func TestPickerArgs_PreservePrompt(t *testing.T) {
 	assert.NotContains(t, plainArgs, "--color="+ui.FZFColors())
 }
 
-// Deleting a treebranch the user named and confirmed is gated on the worktree
-// being clean, and on nothing else. Unmerged commits are reported at the
-// confirmation prompt rather than refused here: `treeman clean` is the
-// merge-aware command, and it has exact forge evidence where this would only
-// have local ancestry.
-func TestDeleteRemovesACleanUnmergedTreebranch(t *testing.T) {
+// Merge status is not the question here -- `treeman clean` is the merge-aware
+// command, and it has exact forge evidence where this would only have local
+// ancestry. Survival is: a pushed branch leaves its commits on the remote, so
+// an unmerged one the user named and confirmed is deleted.
+func TestDeleteRemovesACleanPushedUnmergedTreebranch(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/unmerged")
 	chdirForTest(t, repo)
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work nobody merged")
+	gitTest(t, worktree, "push", "-u", "origin", "feature/unmerged")
 
 	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unmerged", repo, false))
 
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/unmerged")
+}
+
+// Committing work does not make it safe. Deleting the branch drops its reflog
+// along with the worktree's, so a commit no remote and not the default branch
+// can reach has nothing left pointing at it -- the same unrecoverable loss the
+// dirty check refuses, one commit later.
+func TestDeleteRefusesCommitsThatExistNowhereElse(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/unpushed")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work only this branch has")
+
+	err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unpushed", repo, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has 1 commit on no remote and not on main")
+	assert.Contains(t, err.Error(), "--force")
+	assert.DirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/unpushed")
+
+	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unpushed", repo, true))
+	assert.NoDirExists(t, worktree)
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/unpushed")
+}
+
+// Pushing once is not pushing. The commits added since the last push exist
+// only here, and they are counted on their own.
+func TestDeleteRefusesCommitsAddedAfterThePush(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/ahead")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "pushed")
+	gitTest(t, worktree, "push", "-u", "origin", "feature/ahead")
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "after the push")
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "after that")
+
+	err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/ahead", repo, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has 2 commits on no remote and not on main")
+	assert.DirExists(t, worktree)
+}
+
+// The default branch is the other place work survives. A repository that
+// pushes nowhere still deletes a branch whose commits main already reaches,
+// so the gate does not make local-only repositories force every deletion.
+func TestDeleteRemovesABranchMergedIntoALocalOnlyDefaultBranch(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/local-merge")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work")
+	gitTest(t, repo, "merge", "--no-ff", "-m", "merge feature/local-merge", "feature/local-merge")
+	gitTest(t, repo, "remote", "remove", "origin")
+
+	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/local-merge", repo, false))
+
+	assert.NoDirExists(t, worktree)
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/local-merge")
+}
+
+// `clean` asks the forge whether the PR merged, which sees the squash merge
+// local history cannot. That evidence outranks this gate, so a verified
+// deletion is not sent back to --force over commits the remote already took.
+func TestDeleteOfAVerifiedBranchIgnoresUnpushedCommits(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/verified")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "squashed upstream")
+	verifiedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")
+
+	require.NoError(t, deleteVerifiedWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/verified", repo, false, verifiedSHA))
+
+	assert.NoDirExists(t, worktree)
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/verified")
 }
 
 func TestDeleteRefusesADirtyTreebranchWithoutForce(t *testing.T) {

@@ -386,14 +386,15 @@ func TestRunDeleteDirect_RejectsKnownDefaultBranch(t *testing.T) {
 }
 
 // An unmerged branch is the user's to delete once they have named and
-// confirmed it. Committed work is not at risk from a clean worktree the way
-// uncommitted work is, and `treeman clean` is the command that declines to
-// touch anything it cannot prove is merged.
-func TestRunDeleteDirect_DeletesUnmergedBranchWhenWorktreeIsClean(t *testing.T) {
+// confirmed it, as long as the work survives the deletion: pushed, the commits
+// are on the remote whatever happens to the branch, and `treeman clean` is the
+// command that declines to touch anything it cannot prove is merged.
+func TestRunDeleteDirect_DeletesPushedUnmergedBranchWhenWorktreeIsClean(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/unmerged")
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "feature.txt"), []byte("feature\n"), 0o644))
 	gitTest(t, worktree, "add", "feature.txt")
 	gitTest(t, worktree, "commit", "-m", "feature work")
+	gitTest(t, worktree, "push", "-u", "origin", "feature/unmerged")
 	chdirForTest(t, repo)
 
 	require.NoError(t, runDeleteDirect(&cobra.Command{}, worktree, "feature/unmerged", true, false))

@@ -60,7 +60,7 @@ sequenceDiagram
     TreeMan-->>TreeMan: return success or error
 ```
 
-TreeMan records database ownership before setup completes and reads that durable record before Git removes the worktree. It drops the database only after worktree and branch deletion succeed, retaining a pending record for retry if Docker cleanup fails. Branch deletion compares the current ref with the SHA that passed deletion checks. TreeMan serializes its own worktree additions and guarded deletions, preserving a branch that another TreeMan process checks out before deletion. Direct Git worktree mutation is not coordinated. `--force` permits deletion of dirty worktrees and unmerged branches.
+TreeMan records database ownership before setup completes and reads that durable record before Git removes the worktree. It drops the database only after worktree and branch deletion succeed, retaining a pending record for retry if Docker cleanup fails. Branch deletion compares the current ref with the SHA that passed deletion checks. TreeMan serializes its own worktree additions and guarded deletions, preserving a branch that another TreeMan process checks out before deletion. Direct Git worktree mutation is not coordinated. `--force` permits deletion of dirty worktrees and of branches whose commits no remote-tracking ref and not the default branch can reach.
 
 ## List and Clean
 

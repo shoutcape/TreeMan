@@ -56,13 +56,13 @@ Use `treeman list --json` to discover existing worktrees. It reports stable path
 
 ## Delete a Worktree
 
-Do not delete a worktree unless the user explicitly asks. TreeMan refuses dirty worktrees and unmerged branches unless `--force` is specified.
+Do not delete a worktree unless the user explicitly asks. TreeMan refuses dirty worktrees, and branches whose commits are on no remote and not on the default branch, unless `--force` is specified.
 
 Before direct deletion:
 
 1. Use `treeman list --json` to identify the exact path and branch.
 2. Confirm the target is not the main worktree or default branch.
-3. Do not add `--force` unless the user explicitly accepts removal of changed and untracked files.
+3. Do not add `--force` unless the user explicitly accepts losing changed and untracked files, or commits that exist nowhere else.
 
 After confirmation, run:
 
