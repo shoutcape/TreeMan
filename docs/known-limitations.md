@@ -11,7 +11,7 @@ This document describes current behavior. It is not a product roadmap.
 
 ## Forge Data
 
-- Branch and PR or MR lists have a 100-item limit.
+- Branch and PR or MR lists stop at 5000 items or 50 pages. The picker does not show a message when a list stops at one of these limits.
 - Protected remote branches are not filtered.
 
 ## Database Actions
@@ -19,11 +19,6 @@ This document describes current behavior. It is not a product roadmap.
 - A failed database drop remains pending until a later `treeman clean` can reach its configured container.
 - Legacy branch databases created before ownership records are not removed automatically.
 - Docker container identity is not durable across external container replacement. Cleanup requires the exact recorded container ID, so the database remains pending until that container is available again or is handled manually.
-
-## User Interface
-
-- Identical picker display rows can map to the wrong worktree.
-- `switch` compares raw directory paths. Symlinked or equivalent paths can differ.
 
 ## Platform Support
 

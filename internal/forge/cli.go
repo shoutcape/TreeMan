@@ -3,11 +3,17 @@ package forge
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 )
+
+// errStopStream tells runForgeCLIStream that its consumer wants no more
+// output. The CLI is stopped and the call reports success: a consumer that
+// reached its row budget is done rather than broken.
+var errStopStream = errors.New("forge: stream consumer is done")
 
 // runForgeCLI executes a forge CLI request while keeping stdout separate from
 // diagnostics. Forge-specific wrappers own argument and payload construction.
@@ -33,6 +39,7 @@ func runForgeCLI(ctx context.Context, tool string, args []string, input []byte, 
 // before the CLI has finished fetching the rest.
 //
 // consume is expected to read until EOF. Returning early stops the CLI.
+// Returning errStopStream stops it without reporting a failure.
 func runForgeCLIStream(ctx context.Context, tool string, args []string, label string, consume func(io.Reader) error) error {
 	parentCtx := ctx
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -50,6 +57,7 @@ func runForgeCLIStream(ctx context.Context, tool string, args []string, label st
 	}
 
 	consumeErr := consume(stdout)
+	stopped := errors.Is(consumeErr, errStopStream)
 	if consumeErr != nil {
 		// Nothing further is wanted from the CLI, so stop it rather than let
 		// it keep fetching pages nobody will read.
@@ -63,6 +71,10 @@ func runForgeCLIStream(ctx context.Context, tool string, args []string, label st
 	// Report the cause rather than that secondary parse or empty-output error.
 	if err := parentCtx.Err(); err != nil {
 		return fmt.Errorf("%s: %w", label, err)
+	}
+	// The consumer stopped on purpose, so the killed CLI is not a failure.
+	if stopped {
+		return nil
 	}
 	if consumeErr != nil {
 		// A CLI that printed a diagnostic explains the failure better than the

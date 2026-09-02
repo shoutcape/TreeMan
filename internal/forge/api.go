@@ -16,6 +16,40 @@ import (
 	"github.com/shoutcape/treeman/internal/remote"
 )
 
+const (
+	// forgePageSize is how many rows one page of a forge list asks for. It is
+	// the largest page GitHub and GitLab serve, so it is also the fewest
+	// requests a full list can take.
+	forgePageSize = 100
+
+	// forgeRowBudget bounds how many rows one branch or PR/MR list delivers.
+	// The lists follow pagination to its end, so the one walk that does not
+	// stop on its own is over a repository with more refs or reviews than a
+	// picker can be used with. This is where TreeMan stops asking for more.
+	forgeRowBudget = 5000
+
+	// forgePageBudget bounds how many pages one list walks. It covers
+	// forgeRowBudget rows at forgePageSize each, and it also ends a walk whose
+	// pages come back short, empty, or with a next link that never clears.
+	forgePageBudget = forgeRowBudget / forgePageSize
+)
+
+// rowBudget tracks how much of forgeRowBudget one list has delivered.
+type rowBudget struct{ delivered int }
+
+// take claims room for size rows and returns how many of them fit.
+func (b *rowBudget) take(size int) int {
+	room := forgeRowBudget - b.delivered
+	if size > room {
+		size = room
+	}
+	b.delivered += size
+	return size
+}
+
+// exhausted reports whether the budget has no room left.
+func (b *rowBudget) exhausted() bool { return b.delivered >= forgeRowBudget }
+
 // PRInfo holds the metadata returned for a single PR or MR.
 type PRInfo struct {
 	Number int
@@ -174,10 +208,12 @@ func githubPRList(ctx context.Context, repoSlug string) ([]PRInfo, error) {
 	return prs, err
 }
 
-// githubPRBatches walks GraphQL cursor pagination, handing each batch to
-// onBatch as it arrives. Cursors are opaque, so batches cannot be requested
-// concurrently; delivering them one at a time is what lets a picker show the
-// first results while the rest are still in flight.
+// githubPRBatches walks GraphQL cursor pagination to the last page, handing
+// each batch to onBatch as it arrives. Cursors are opaque, so batches cannot
+// be requested concurrently; delivering them one at a time is what lets a
+// picker show the first results while the rest are still in flight.
+//
+// The walk stops early at forgeRowBudget rows or forgePageBudget pages.
 func githubPRBatches(ctx context.Context, repoSlug string, onBatch func([]PRInfo) error) error {
 	owner, name, err := splitRepoSlug(repoSlug)
 	if err != nil {
@@ -185,8 +221,9 @@ func githubPRBatches(ctx context.Context, repoSlug string, onBatch func([]PRInfo
 	}
 
 	cursor := ""
+	budget := rowBudget{}
 	seenCursors := make(map[string]struct{})
-	for {
+	for requested := 0; requested < forgePageBudget; requested++ {
 		variables := map[string]string{"owner": owner, "name": name}
 		if cursor != "" {
 			variables["cursor"] = cursor
@@ -199,10 +236,10 @@ func githubPRBatches(ctx context.Context, repoSlug string, onBatch func([]PRInfo
 		if err != nil {
 			return err
 		}
-		if err := onBatch(page.prs); err != nil {
+		if err := onBatch(page.prs[:budget.take(len(page.prs))]); err != nil {
 			return err
 		}
-		if !page.hasNextPage {
+		if !page.hasNextPage || budget.exhausted() {
 			return nil
 		}
 		if page.endCursor == "" {
@@ -214,16 +251,17 @@ func githubPRBatches(ctx context.Context, repoSlug string, onBatch func([]PRInfo
 		seenCursors[page.endCursor] = struct{}{}
 		cursor = page.endCursor
 	}
+	return nil
 }
 
-const githubPRListQuery = `query($owner: String!, $name: String!, $cursor: String) {
+var githubPRListQuery = fmt.Sprintf(`query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(first: 100, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+    pullRequests(first: %d, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes { number title headRefName }
       pageInfo { hasNextPage endCursor }
     }
   }
-}`
+}`, forgePageSize)
 
 type githubPRListPage struct {
 	prs         []PRInfo
@@ -355,9 +393,10 @@ func githubBranchList(ctx context.Context, repoSlug string) ([]BranchInfo, error
 }
 
 // githubBranchBatches hands each ordered REST-derived batch to onBatch. Batches
-// after the first are requested concurrently by fetchGitHubPages.
+// after the first are requested concurrently by fetchGitHubPages, which walks
+// the whole branch list within forgePageBudget pages.
 func githubBranchBatches(ctx context.Context, repoSlug string, onBatch func([]BranchInfo) error) error {
-	endpoint := fmt.Sprintf("repos/%s/branches?per_page=100", repoSlug)
+	endpoint := fmt.Sprintf("repos/%s/branches?per_page=%d", repoSlug, forgePageSize)
 	return fetchGitHubPages(ctx, endpoint, func(raw []byte) error {
 		branches, err := parseGitHubBranchPage(raw)
 		if err != nil {
@@ -421,15 +460,21 @@ func gitlabMRMetadata(ctx context.Context, repoSlug, host string, prNumber int) 
 }
 
 // gitlabMRBatches hands each NDJSON record from glab to onBatch immediately.
+// glab walks the pagination itself, so forgeRowBudget is enforced here: the
+// record that does not fit stops glab instead of being delivered.
 func gitlabMRBatches(ctx context.Context, repoSlug, host string, onBatch func([]PRInfo) error) error {
 	encoded := remote.URLEncode(repoSlug)
-	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&per_page=100", encoded)
+	endpoint := fmt.Sprintf("projects/%s/merge_requests?state=opened&per_page=%d", encoded, forgePageSize)
+	budget := rowBudget{}
 	return glabAPIStreamCall(ctx, host, endpoint, func(out io.Reader) error {
 		return decodeNDJSONStream(out, func(record struct {
 			IID    int    `json:"iid"`
 			Title  string `json:"title"`
 			Branch string `json:"source_branch"`
 		}) error {
+			if budget.take(1) == 0 {
+				return errStopStream
+			}
 			return onBatch([]PRInfo{{Number: record.IID, Title: record.Title, Branch: record.Branch}})
 		})
 	})
@@ -530,10 +575,12 @@ func glabAPIStreamArgs(host, endpoint string) []string {
 	return []string{"api", endpoint, "--hostname", host, "--paginate", "--output", "ndjson"}
 }
 
-// gitlabBranchBatches hands each NDJSON record from glab to onBatch immediately.
+// gitlabBranchBatches hands each NDJSON record from glab to onBatch
+// immediately, within the same forgeRowBudget as gitlabMRBatches.
 func gitlabBranchBatches(ctx context.Context, repoSlug, host string, onBatch func([]BranchInfo) error) error {
 	encoded := remote.URLEncode(repoSlug)
-	endpoint := fmt.Sprintf("projects/%s/repository/branches?per_page=100", encoded)
+	endpoint := fmt.Sprintf("projects/%s/repository/branches?per_page=%d", encoded, forgePageSize)
+	budget := rowBudget{}
 	return glabAPIStreamCall(ctx, host, endpoint, func(out io.Reader) error {
 		return decodeNDJSONStream(out, func(record struct {
 			Name   string `json:"name"`
@@ -541,6 +588,9 @@ func gitlabBranchBatches(ctx context.Context, repoSlug, host string, onBatch fun
 				CommittedDate string `json:"committed_date"`
 			} `json:"commit"`
 		}) error {
+			if budget.take(1) == 0 {
+				return errStopStream
+			}
 			return onBatch([]BranchInfo{{
 				Name: record.Name,
 				Date: formatRelativeDate(record.Commit.CommittedDate),
