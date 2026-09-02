@@ -51,7 +51,7 @@ func runSwitch(cmd *cobra.Command, query string) error {
 
 	if query != "" {
 		for _, entry := range entries {
-			if entry.Path == query || entry.Branch == query {
+			if entry.Branch == query || samePath(entry.Path, query) {
 				return printSwitchDestination(cmd, entry.Path)
 			}
 		}
@@ -109,8 +109,10 @@ func runSwitch(cmd *cobra.Command, query string) error {
 
 func printSwitchDestination(cmd *cobra.Command, dest string) error {
 	// Determine current directory to detect same-worktree selection.
+	// Compare resolved paths because a symlinked directory reaches the same
+	// worktree through a different raw path.
 	cwd, _ := os.Getwd()
-	if dest == cwd {
+	if samePath(dest, cwd) {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Already in this worktree.")
 		return nil
 	}
