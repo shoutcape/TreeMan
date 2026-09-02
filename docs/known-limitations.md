@@ -20,10 +20,6 @@ This document describes current behavior. It is not a product roadmap.
 - Legacy branch databases created before ownership records are not removed automatically.
 - Docker container identity is not durable across external container replacement. Cleanup requires the exact recorded container ID, so the database remains pending until that container is available again or is handled manually.
 
-## User Interface
-
-- Identical picker display rows can map to the wrong worktree.
-
 ## Platform Support
 
 - Release binaries support Linux and macOS only.
