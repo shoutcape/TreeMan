@@ -34,6 +34,8 @@ The command fails when the branch or target directory exists. It creates `.workt
 
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
+Dependency installation supports `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `go.mod`, and `Cargo.toml`. A `package.json` that declares `"packageManager": "yarn@<version>"` takes priority and runs `corepack yarn install`; otherwise `yarn.lock` runs `yarn install`. Corepack must already be available on `PATH`. TreeMan does not enable it or modify global package-manager configuration.
+
 Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.
 
 ## `preflight`
@@ -42,7 +44,7 @@ Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists r
 treeman preflight
 ```
 
-Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
+Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. For Corepack-managed Yarn projects, it reports `corepack yarn install` and warns when `corepack` is unavailable. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
 
 ## `branch`
 

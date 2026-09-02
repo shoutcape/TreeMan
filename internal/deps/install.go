@@ -26,9 +26,19 @@ func Detect(dir string) (Detection, error) {
 	}
 
 	files := make([]string, 0, len(entries))
+	hasPackageJSON := false
 	for _, e := range entries {
 		if !e.IsDir() {
 			files = append(files, e.Name())
+			hasPackageJSON = hasPackageJSON || e.Name() == "package.json"
+		}
+	}
+	if hasPackageJSON {
+		contents, err := os.ReadFile(filepath.Join(dir, "package.json"))
+		if err == nil {
+			if installer := declaredYarnInstaller(contents); installer != nil {
+				return Detection{Installer: installer}, nil
+			}
 		}
 	}
 
@@ -52,7 +62,7 @@ func Run(dir string, installer *Installer, output io.Writer) error {
 		// Not installed - warn but do not fail.
 		return fmt.Errorf(
 			"%s found but %s is not installed, skipping",
-			installer.Lockfile, installer.Binary,
+			installer.Manifest, installer.Binary,
 		)
 	}
 
