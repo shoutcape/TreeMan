@@ -28,7 +28,7 @@ Shell integration uses stdout destinations to change the current interactive she
 treeman create <branch-name> [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
-Create a local branch from the fetched default branch. TreeMan supports only `main` and `master` as default branch names.
+Create a local branch from the fetched default branch. TreeMan reads `refs/remotes/origin/HEAD` to detect that branch. If that ref is absent, TreeMan looks for `main` or `master` on `origin`. The command fails when it finds neither name.
 
 The command fails when the branch or target directory exists. It creates `.worktrees/<branch-slug>`. The branch slug changes `/` to `-`.
 

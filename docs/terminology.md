@@ -7,7 +7,7 @@ Use these terms with the specified meaning.
 | Agent Skill | Directory with instructions that extend an AI agent behavior |
 | branch database | PostgreSQL database for one worktree branch |
 | branch slug | Branch name with `/` changed to `-` for a worktree path |
-| default branch | `main` or `master` branch detected from `origin` |
+| default branch | Branch named by `refs/remotes/origin/HEAD`, or `main` or `master` found on `origin` |
 | formula | Ruby file that defines a Homebrew package |
 | global configuration | `config.toml` in the TreeMan user configuration directory |
 | Homebrew | Package manager for macOS and Linux |

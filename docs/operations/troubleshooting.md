@@ -2,7 +2,15 @@
 
 ## TreeMan Cannot Find the Default Branch
 
-TreeMan detects only `main` and `master`. Set `origin` to a reachable remote. Rename the default branch to one supported name, or create the worktree with Git.
+TreeMan reads `refs/remotes/origin/HEAD` to find the default branch. If that ref is absent, TreeMan looks for `main` or `master` on `origin`. TreeMan stops with an error when it finds neither name.
+
+Set `origin` to a reachable remote. Then write the missing ref.
+
+```bash
+git remote set-head origin --auto
+```
+
+If the default branch has a different name, this command records it. As an alternative, create the worktree with Git.
 
 ## TreeMan Cannot Select an Item
 

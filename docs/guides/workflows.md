@@ -7,7 +7,7 @@
 3. Work in `.worktrees/feature-name`.
 4. Run `wts` to return to another worktree.
 
-TreeMan fetches the default branch before it creates the branch. It detects only `main` and `master`.
+TreeMan fetches the default branch before it creates the branch. It reads `refs/remotes/origin/HEAD` to find that branch. If that ref is absent, it looks for `main` or `master` on `origin`.
 
 ## Work on a Remote Branch
 
