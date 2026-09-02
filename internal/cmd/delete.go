@@ -343,10 +343,16 @@ func findWorktree(path string) (git.WorktreeEntry, error) {
 	return git.WorktreeEntry{}, fmt.Errorf("path %q is not a linked worktree", path)
 }
 
+// samePath reports whether two paths name the same directory. Symlinked or
+// relative paths reach one directory through different raw text, therefore
+// TreeMan compares canonical paths.
 func samePath(a, b string) bool {
 	return canonicalPath(a) == canonicalPath(b)
 }
 
+// canonicalPath makes path absolute and resolves its symlinks. A path that the
+// operating system cannot resolve keeps its cleaned absolute form, therefore a
+// missing directory does not cause a failure.
 func canonicalPath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {

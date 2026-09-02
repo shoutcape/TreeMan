@@ -34,6 +34,8 @@ The command fails when the branch or target directory exists. It creates `.workt
 
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
+Dependency installation supports `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `go.mod`, and `Cargo.toml`. A `package.json` that declares `"packageManager": "yarn@<version>"` takes priority and runs `corepack yarn install`; otherwise `yarn.lock` runs `yarn install`. Corepack must already be available on `PATH`. TreeMan does not enable it or modify global package-manager configuration.
+
 Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.
 
 ## `preflight`
@@ -42,7 +44,7 @@ Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists r
 treeman preflight
 ```
 
-Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
+Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. For Corepack-managed Yarn projects, it reports `corepack yarn install` and warns when `corepack` is unavailable. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
 
 ## `branch`
 
@@ -51,6 +53,8 @@ treeman branch [query] [--skip-env] [--skip-database] [--skip-deps] [--skip-hook
 ```
 
 `branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
+
+TreeMan stops a branch or review list at 5000 items or at 50 pages. Read [known limitations](../known-limitations.md).
 
 TreeMan excludes the default branch and local branches. It does not exclude protected branches.
 
@@ -76,7 +80,9 @@ treeman switch [query]
 
 `switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
 
-It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. Shell integration changes directory when it receives a path.
+A path query resolves its symlinks before the comparison. Therefore a symlinked path selects the same worktree as its real path.
+
+It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. A symlinked current directory counts as the current worktree. Shell integration changes directory when it receives a path.
 
 ## `delete`
 

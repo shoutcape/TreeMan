@@ -39,7 +39,11 @@ TreeMan passes the remote host to `glab`. This supports GitLab hosts with `gitla
 
 ## Branch List Rules
 
-TreeMan requests at most 100 remote branches. It also requests at most 100 open PRs or MRs for picker data.
+TreeMan reads all pages of the remote branch list and the open PR or MR list. Each page has at most 100 items. TreeMan sends each page to the picker when the page arrives. The first rows show before the last page arrives.
+
+TreeMan stops a list at 5000 items or at 50 pages. The first limit that TreeMan reaches stops the list. These limits keep the number of requests low on a very large repository.
+
+If you close the picker, TreeMan stops the requests that are still in progress.
 
 TreeMan excludes the detected default branch and existing local branches. It gets protected-branch data but does not use it to filter branches.
 

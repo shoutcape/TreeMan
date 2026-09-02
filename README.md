@@ -59,6 +59,21 @@ After creation, TreeMan performs these steps in order:
 
 Shell integration changes the current shell directory to the new worktree. Setup failures are warnings. The worktree remains available. Use the related `--skip-*` flag to omit an optional setup action.
 
+### Supported Dependency Managers
+
+TreeMan detects dependency setup from files at the repository root:
+
+| Project marker | Command |
+| --- | --- |
+| `package.json` with `"packageManager": "yarn@<version>"` | `corepack yarn install` |
+| `pnpm-lock.yaml` | `pnpm install` |
+| `yarn.lock` | `yarn install` |
+| `package-lock.json` | `npm install` |
+| `go.mod` | `go mod download` |
+| `Cargo.toml` | `cargo fetch` |
+
+An explicit Yarn `packageManager` declaration takes priority over lockfiles and requires `corepack` on `PATH`. TreeMan invokes Corepack directly so the project selects its declared Yarn version; it never runs `corepack enable` or changes global package-manager configuration. A Yarn project without that declaration keeps the classic `yarn.lock` behavior and requires `yarn` on `PATH`.
+
 ### Nested Modules and Tests
 
 Dependency setup checks only files in the worktree root. TreeMan does not recursively install dependencies for nested modules and does not run project tests automatically. This avoids unexpected commands in subdirectories. Use a trusted `hooks.post_create` command when a nested module needs installation or tests.
