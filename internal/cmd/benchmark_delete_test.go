@@ -125,12 +125,12 @@ func TestDeleteBenchmarkCleansUpDeletionFailure(t *testing.T) {
 
 	previousRemove := removeWorktree
 	failedOnce := false
-	removeWorktree = func(path string, force bool) error {
+	removeWorktree = func(mainRoot, path string, force bool) error {
 		if !failedOnce {
 			failedOnce = true
 			return errors.New("injected removal failure")
 		}
-		return previousRemove(path, force)
+		return previousRemove(mainRoot, path, force)
 	}
 	t.Cleanup(func() { removeWorktree = previousRemove })
 

@@ -570,3 +570,38 @@ func TestHasCommitsDistinguishesAnEmptyRepository(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, hasCommits)
 }
+
+func TestParseWorktreePorcelainReadsLockAndPrunable(t *testing.T) {
+	out := strings.Join([]string{
+		"worktree /repo",
+		"branch refs/heads/main",
+		"",
+		"worktree /repo/.worktrees/locked",
+		"branch refs/heads/feature/locked",
+		"locked on a removable disk",
+		"",
+		"worktree /repo/.worktrees/bare-lock",
+		"branch refs/heads/feature/bare-lock",
+		"locked",
+		"",
+		"worktree /repo/.worktrees/gone",
+		"branch refs/heads/feature/gone",
+		"prunable gitdir file points to non-existent location",
+		"",
+	}, "\n")
+
+	entries := parseWorktreePorcelain(out)
+
+	require.Len(t, entries, 4)
+	assert.False(t, entries[0].Locked)
+	assert.False(t, entries[0].Prunable)
+
+	assert.True(t, entries[1].Locked)
+	assert.Equal(t, "on a removable disk", entries[1].LockReason)
+
+	assert.True(t, entries[2].Locked)
+	assert.Equal(t, "", entries[2].LockReason)
+
+	assert.True(t, entries[3].Prunable)
+	assert.False(t, entries[3].Locked)
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -20,6 +21,16 @@ import (
 type WorktreeEntry struct {
 	Path   string
 	Branch string // empty string for detached HEAD
+	// Locked records `git worktree lock`. A locked worktree is one the user
+	// asked not to be removed -- the flag exists for a worktree on removable
+	// media or a network mount, whose directory is legitimately absent
+	// sometimes -- so it is never removed and never inferred to be stale.
+	Locked bool
+	// LockReason is the optional message passed to `git worktree lock`.
+	LockReason string
+	// Prunable records Git's own judgement that the registration no longer
+	// describes a usable worktree.
+	Prunable bool
 }
 
 // CreatedWorktree identifies a worktree and branch created by one operation.
@@ -131,12 +142,8 @@ func CurrentWorktreeRoot() (string, error) {
 // or master when that ref is unavailable.
 func DetectDefaultBranch() (string, error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
-	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
-	if err == nil {
-		b := strings.TrimPrefix(originHead, "origin/")
-		if b != "" {
-			return b, nil
-		}
+	if branch, ok := LocalDefaultBranch(); ok {
+		return branch, nil
 	}
 
 	// Slow path: ask origin directly.
@@ -153,6 +160,20 @@ func DetectDefaultBranch() (string, error) {
 	}
 
 	return "", fmt.Errorf("could not find 'main' or 'master' on origin")
+}
+
+// LocalDefaultBranch reads the default branch from origin/HEAD without
+// touching the network. Git writes that ref on clone, and since 2.49 every
+// fetch creates it too, so this answers in almost every repository. Callers
+// that must not stall -- anything decorating a prompt -- use this rather than
+// DetectDefaultBranch, whose fallback asks the remote.
+func LocalDefaultBranch() (string, bool) {
+	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", false
+	}
+	branch := strings.TrimPrefix(originHead, "origin/")
+	return branch, branch != ""
 }
 
 // BranchExists reports whether a local branch with the given name exists.
@@ -338,25 +359,6 @@ func UntrackedPaths(dir string) ([]string, error) {
 	return paths, nil
 }
 
-// FetchUpstreamBranch refreshes the remote-tracking ref that branch tracks in
-// dir. It reports whether the branch tracks a remote branch at all, so a
-// caller can tell "nothing to fetch" from "the fetch failed".
-func FetchUpstreamBranch(dir, branch string) (bool, error) {
-	remote, err := runInDir(dir, "config", "--get", "branch."+branch+".remote")
-	if err != nil || remote == "" || remote == "." {
-		return false, nil
-	}
-	upstream, err := runInDir(dir, "config", "--get", "branch."+branch+".merge")
-	if err != nil || !strings.HasPrefix(upstream, "refs/heads/") {
-		return false, nil
-	}
-	tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(upstream, "refs/heads/")
-	if _, err := runInDir(dir, "fetch", remote, "+"+upstream+":"+tracking); err != nil {
-		return true, err
-	}
-	return true, nil
-}
-
 // FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
 func FetchRemoteBranch(branch string) error {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
@@ -448,6 +450,11 @@ func parseWorktreePorcelain(out string) []WorktreeEntry {
 			current = WorktreeEntry{Path: strings.TrimPrefix(line, "worktree ")}
 		case strings.HasPrefix(line, "branch refs/heads/"):
 			current.Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "locked" || strings.HasPrefix(line, "locked "):
+			current.Locked = true
+			current.LockReason = strings.TrimSpace(strings.TrimPrefix(line, "locked"))
+		case line == "prunable" || strings.HasPrefix(line, "prunable "):
+			current.Prunable = true
 		case line == "":
 			if current.Path != "" {
 				entries = append(entries, current)
@@ -474,19 +481,6 @@ func SetUpstreamInDir(dir, branch string) error {
 		return fmt.Errorf("could not set upstream for %q: %w", branch, err)
 	}
 	return nil
-}
-
-// WorktreeDirty reports whether a worktree has tracked, staged, or untracked
-// changes.
-func WorktreeDirty(path string) (bool, error) {
-	state, err := InspectWorktree(path)
-	if err != nil {
-		return false, err
-	}
-	if state == WorktreeStateStale {
-		return false, fmt.Errorf("could not inspect worktree %q: directory is missing or not a directory", path)
-	}
-	return state == WorktreeStateDirty, nil
 }
 
 type WorktreeState int
@@ -543,22 +537,6 @@ func InspectWorktrees(entries []WorktreeEntry) ([]InspectedWorktree, error) {
 	return inspected, nil
 }
 
-// BranchCanDeleteAtSHA reports whether Git's safe branch deletion would accept
-// branch when its tip is sha. Keeping sha explicit lets callers check policy
-// against the same ref value they later compare-and-delete.
-func BranchCanDeleteAtSHA(dir, branch, sha string) (bool, error) {
-	target := "HEAD"
-	if upstream, err := runInDir(dir, "rev-parse", "--abbrev-ref", branch+"@{upstream}"); err == nil {
-		target = upstream
-	}
-	return BranchMergedInto(dir, sha, target)
-}
-
-// BranchMergedInto reports whether branch is an ancestor of target.
-func BranchMergedInto(dir, branch, target string) (bool, error) {
-	return refIsAncestor(dir, branch, target)
-}
-
 // AnyCommitIsAncestor reports whether any ancestor is reachable from
 // descendant in the current repository. It streams the descendant history and
 // stops at the first matching commit.
@@ -604,37 +582,20 @@ func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
 	return false, nil
 }
 
-func refIsAncestor(dir, ancestor, descendant string) (bool, error) {
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
-	cmd.Dir = dir
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return false, nil
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return false, fmt.Errorf("could not check whether %q is an ancestor: %s", ancestor, msg)
-		}
-		return false, fmt.Errorf("could not check whether %q is an ancestor: %w", ancestor, err)
-	}
-	return true, nil
-}
-
-// WorktreeRemove removes the linked worktree at path. force permits removal
-// when Git would otherwise protect local changes.
-func WorktreeRemove(path string, force bool) error {
-	args := []string{"worktree", "remove"}
-	if force {
-		args = append(args, "--force")
-	}
-	args = append(args, path)
-	_, err := run(args...)
+// UnmergedCommitCount counts the commits on branch that target cannot reach.
+// It is reported at the confirmation prompt, never used as a gate: deleting a
+// branch drops its reflog along with the worktree's, so unmerged commits
+// become unreachable, and the moment to say so is while the user is deciding.
+func UnmergedCommitCount(dir, branch, target string) (int, error) {
+	out, err := runInDir(dir, "rev-list", "--count", target+".."+branch)
 	if err != nil {
-		return fmt.Errorf("failed to remove worktree %q: %w", path, err)
+		return 0, fmt.Errorf("could not count commits on %q not in %q: %w", branch, target, err)
 	}
-	return nil
+	count, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("could not parse commit count for %q: %w", branch, err)
+	}
+	return count, nil
 }
 
 // DeleteBranchAtSHA atomically deletes branch only when it still points at

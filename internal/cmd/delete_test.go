@@ -3,8 +3,11 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/shoutcape/treeman/internal/git"
 
 	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -41,71 +44,178 @@ func TestPickerArgs_PreservePrompt(t *testing.T) {
 	assert.NotContains(t, plainArgs, "--color="+ui.FZFColors())
 }
 
-// A branch whose commits are on the remote is safe to delete, but the merge
-// check reads a remote-tracking ref that only a fetch keeps current. These
-// tests describe what the deletion decides on.
-func TestDeleteFetchesTheUpstreamBeforeDecidingItIsUnmerged(t *testing.T) {
-	repo, worktree := createTestWorktree(t, "feature/pushed")
+// Deleting a treebranch the user named and confirmed is gated on the worktree
+// being clean, and on nothing else. Unmerged commits are reported at the
+// confirmation prompt rather than refused here: `treeman clean` is the
+// merge-aware command, and it has exact forge evidence where this would only
+// have local ancestry.
+func TestDeleteRemovesACleanUnmergedTreebranch(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/unmerged")
 	chdirForTest(t, repo)
-	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work")
-	gitTest(t, worktree, "push", "-u", "origin", "feature/pushed")
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work nobody merged")
 
-	// The work is on the remote, but this checkout has not seen it there since:
-	// the same state a machine is in after someone else pushes, or after
-	// pushing from elsewhere.
-	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/feature/pushed")
-
-	var stderr bytes.Buffer
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &stderr), worktree, "feature/pushed", repo, false))
+	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unmerged", repo, false))
 
 	assert.NoDirExists(t, worktree)
-	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/pushed")
-	assert.NotContains(t, stderr.String(), "could not refresh")
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/unmerged")
 }
 
-func TestDeleteWarnsAndUsesLocalStateWhenTheFetchFails(t *testing.T) {
+func TestDeleteRefusesADirtyTreebranchWithoutForce(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/dirty")
+	chdirForTest(t, repo)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch.txt"), []byte("unsaved"), 0o644))
+
+	err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/dirty", repo, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uncommitted or untracked changes")
+	assert.DirExists(t, worktree)
+
+	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/dirty", repo, true))
+	assert.NoDirExists(t, worktree)
+}
+
+// The deletion decides on local state alone. An unreachable remote is the
+// cheapest proof that nothing on this path talks to one.
+func TestDeleteTouchesNoRemote(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/offline")
 	chdirForTest(t, repo)
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work")
 	gitTest(t, worktree, "push", "-u", "origin", "feature/offline")
-	// Default-branch detection reads this ref before asking the remote, so
-	// setting it keeps the deletion offline apart from the fetch under test.
-	gitTest(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
-	// An unreachable remote stands in for being offline.
 	gitTest(t, repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
 
 	var stderr bytes.Buffer
 	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &stderr), worktree, "feature/offline", repo, false))
 
-	// The last fetched state still contains the branch tip, so the deletion
-	// proceeds -- but it says which state it decided on.
-	assert.Contains(t, stderr.String(), `could not refresh branch "feature/offline" from its remote`)
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/offline")
 }
 
-func TestDeleteSkipsTheFetchWhenItDoesNotDecide(t *testing.T) {
-	previous := fetchUpstreamBranch
-	fetches := 0
-	fetchUpstreamBranch = func(dir, branch string) (bool, error) {
-		fetches++
-		return previous(dir, branch)
-	}
-	t.Cleanup(func() { fetchUpstreamBranch = previous })
+// The default-branch guard must not be the reason a repository cannot delete
+// anything. Without origin/HEAD and without a remote named origin, the main
+// worktree still names the branch worth protecting.
+func TestDeleteFallsBackToTheMainWorktreeBranchWithoutOrigin(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/no-origin")
+	chdirForTest(t, repo)
+	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	gitTest(t, repo, "remote", "rename", "origin", "upstream")
 
-	// --force deletes without a merge check, and an untracked branch has no
-	// remote state to read, so neither pays for a network round trip.
-	forced, forcedWorktree := createTestWorktree(t, "feature/forced")
-	chdirForTest(t, forced)
-	gitTest(t, forcedWorktree, "commit", "--allow-empty", "-m", "unmerged")
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), forcedWorktree, "feature/forced", forced, true))
-	assert.Equal(t, 0, fetches)
+	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/no-origin", repo, false))
+	assert.NoDirExists(t, worktree)
 
-	local, localWorktree := createTestWorktree(t, "feature/local")
-	chdirForTest(t, local)
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), localWorktree, "feature/local", local, false))
-	tracked, err := previous(local, "feature/local")
+}
+
+// resolveDefaultBranch prefers origin/HEAD and falls back to the main
+// worktree's branch, so the guard never depends on reaching a remote.
+func TestResolveDefaultBranchFallsBackToTheMainWorktree(t *testing.T) {
+	repo, _ := createTestWorktree(t, "feature/resolve")
+	chdirForTest(t, repo)
+	entries, err := git.WorktreeList()
 	require.NoError(t, err)
-	assert.False(t, tracked, "an untracked branch has no upstream to refresh")
-	assert.Equal(t, 1, fetches)
+
+	branch, err := resolveDefaultBranch(entries, repo)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+
+	// With origin/HEAD gone and no remote named origin, the main worktree is
+	// the only thing left that names the branch to protect.
+	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	gitTest(t, repo, "remote", "rename", "origin", "upstream")
+
+	branch, err = resolveDefaultBranch(entries, repo)
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+}
+
+// The prompt is where unmerged work gets reported, since the deletion itself
+// no longer refuses it.
+func TestDeleteConfirmationReportsUnmergedCommits(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/counted")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "one")
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "two")
+
+	var stderr bytes.Buffer
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), repo, worktree, "feature/counted")
+
+	assert.Contains(t, stderr.String(), "(2 commits not on main)")
+}
+
+func TestDeleteConfirmationOmitsCountForAMergedBranch(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/merged")
+	chdirForTest(t, repo)
+
+	var stderr bytes.Buffer
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), repo, worktree, "feature/merged")
+
+	assert.NotContains(t, stderr.String(), "not on")
+}
+
+// A single commit reads as a commit, and the annotation never blocks the
+// prompt when the default branch cannot be worked out at all.
+func TestDeleteConfirmationSurvivesAnUnresolvableDefaultBranch(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/lonely")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "one")
+
+	var withDefault bytes.Buffer
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &withDefault), repo, worktree, "feature/lonely")
+	assert.Contains(t, withDefault.String(), "(1 commit not on main)")
+
+	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
+	gitTest(t, repo, "remote", "remove", "origin")
+	gitTest(t, repo, "checkout", "--detach")
+
+	var stderr bytes.Buffer
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), repo, worktree, "feature/lonely")
+	assert.Contains(t, stderr.String(), "feature/lonely")
+	assert.NotContains(t, stderr.String(), "not on")
+}
+
+// A lock is the user asking for this worktree to survive, including when its
+// directory is temporarily absent. It outranks --force.
+func TestDeleteRefusesALockedWorktree(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/locked")
+	chdirForTest(t, repo)
+	gitTest(t, repo, "worktree", "lock", "--reason", "on a removable disk", worktree)
+
+	for _, force := range []bool{false, true} {
+		err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/locked", repo, force)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is locked")
+		assert.Contains(t, err.Error(), "on a removable disk")
+		assert.Contains(t, err.Error(), "worktree unlock")
+		assert.DirExists(t, worktree)
+	}
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/locked")
+}
+
+// A worktree directory removed outside TreeMan used to be a dead end: delete
+// refused to inspect it and clean skipped it, so the registration and the
+// branch survived with nothing able to remove them.
+func TestDeleteCleansUpAWorktreeWhoseDirectoryIsGone(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/vanished")
+	chdirForTest(t, repo)
+	require.NoError(t, os.RemoveAll(worktree))
+
+	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished", repo, false))
+
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/vanished")
+	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature/vanished")
+}
+
+// The stale path reaches the same compare-and-delete as a normal deletion, so
+// a branch that moved since is still retained.
+func TestDeleteOfAVanishedWorktreeStillRefusesAMovedBranch(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/vanished-moved")
+	expectedSHA := gitRevParse(t, repo, "refs/heads/feature/vanished-moved")
+	chdirForTest(t, repo)
+	require.NoError(t, os.RemoveAll(worktree))
+	movedSHA := advanceMainForTest(t, repo)
+	gitTest(t, repo, "update-ref", "refs/heads/feature/vanished-moved", movedSHA)
+
+	err := deleteVerifiedWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished-moved", repo, false, expectedSHA)
+
+	require.Error(t, err)
+	assert.Equal(t, movedSHA, gitRevParse(t, repo, "refs/heads/feature/vanished-moved"))
 }

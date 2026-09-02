@@ -189,7 +189,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		cleanupOutcome, err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, true, candidate.verifiedSHA, cleanupBatch)
+		cleanupOutcome, err := deleteWorktreeAtSHAWithDatabase(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, false, candidate.verifiedSHA, cleanupBatch)
 		if err != nil {
 			removedDatabases, cleanupErr := cleanupBatch.FlushWithResult()
 			writeCleanResults(out, render, results, removedDatabases)
