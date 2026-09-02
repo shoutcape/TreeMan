@@ -54,6 +54,8 @@ treeman branch [query] [--skip-env] [--skip-database] [--skip-deps] [--skip-hook
 
 `branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
 
+TreeMan stops a branch or review list at 5000 items or at 50 pages. Read [known limitations](../known-limitations.md).
+
 TreeMan excludes the default branch and local branches. It does not exclude protected branches.
 
 After selection, TreeMan fetches the branch, creates a local branch, and tries to set upstream tracking. It then runs the create post-actions.

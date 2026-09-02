@@ -195,3 +195,41 @@ func TestRunForgeCLIStreamStopsOnACancelledContext(t *testing.T) {
 		t.Fatal("cancelling did not stop the CLI")
 	}
 }
+
+// A consumer that reached its row budget is done, not broken: the CLI is
+// stopped and the call succeeds, so a bounded list is not reported as a
+// failed one.
+func TestRunForgeCLIStreamStopsTheCommandWhenTheConsumerIsDone(t *testing.T) {
+	t.Setenv("GO_WANT_FORGE_HELPER_PROCESS", "1")
+
+	pages := 0
+	start := time.Now()
+	err := runForgeCLIStream(context.Background(), testHelperCommand(), streamHelperArgs("stream-hang"), "test done",
+		func(out io.Reader) error {
+			return decodePaginatedStream(out, func([]streamName) error {
+				pages++
+				return errStopStream
+			})
+		})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, pages)
+	assert.Less(t, time.Since(start), 10*time.Second, "the CLI should be killed, not waited out")
+}
+
+// Closing the picker still reports the cancellation, whether or not the
+// consumer had also finished with the stream.
+func TestRunForgeCLIStreamReportsCancellationOverAFinishedConsumer(t *testing.T) {
+	t.Setenv("GO_WANT_FORGE_HELPER_PROCESS", "1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err := runForgeCLIStream(ctx, testHelperCommand(), streamHelperArgs("stream-hang"), "test cancel",
+		func(out io.Reader) error {
+			return decodePaginatedStream(out, func([]streamName) error {
+				cancel()
+				return errStopStream
+			})
+		})
+
+	require.ErrorIs(t, err, context.Canceled)
+}
