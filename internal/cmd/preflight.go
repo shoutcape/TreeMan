@@ -88,9 +88,9 @@ func preflightDependenciesStatus(detection deps.Detection) preflightStatus {
 	}
 	installer := detection.Installer
 	if err := deps.InstallerAvailable(installer); err != nil {
-		return preflightStatus{name: "Dependencies", message: fmt.Sprintf("limited: %s detected but %s is not installed", installer.Lockfile, installer.Binary), tone: ui.ToneWarning, symbol: "!"}
+		return preflightStatus{name: "Dependencies", message: fmt.Sprintf("limited: %s detected but %s is not installed", installer.Manifest, installer.Binary), tone: ui.ToneWarning, symbol: "!"}
 	}
-	return preflightStatus{name: "Dependencies", message: fmt.Sprintf("ready: %s detected; will run %s %s", installer.Lockfile, installer.Binary, joinArgs(installer.Args)), tone: ui.ToneSuccess, symbol: "✓"}
+	return preflightStatus{name: "Dependencies", message: fmt.Sprintf("ready: %s detected; will run %s %s", installer.Manifest, installer.Binary, joinArgs(installer.Args)), tone: ui.ToneSuccess, symbol: "✓"}
 }
 
 func preflightConfigurationStatus(result config.LoadResult) preflightStatus {

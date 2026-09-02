@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -434,4 +435,53 @@ func TestFetchGitHubPagesStopsSiblingRequestsAfterAFailure(t *testing.T) {
 	require.ErrorIs(t, err, assert.AnError)
 	// fetchGitHubPages joins its workers, so nothing is still requesting by now.
 	running.Wait()
+}
+
+// The repository decides how many pages there are, so a picker over a
+// repository with tens of thousands of refs must still stop.
+func TestFetchGitHubPagesStopsAtThePageBudget(t *testing.T) {
+	previous := githubPageCall
+	t.Cleanup(func() { githubPageCall = previous })
+
+	var requests atomic.Int64
+	githubPageCall = func(_ context.Context, endpoint string) (string, []byte, error) {
+		requests.Add(1)
+		if !strings.Contains(endpoint, "&page=") {
+			return `<https://api.github.com/x?page=100000>; rel="last"`, []byte(`[]`), nil
+		}
+		return "", []byte(`[]`), nil
+	}
+
+	pages := 0
+	err := fetchGitHubPages(context.Background(), "repos/owner/repo/branches?per_page=100", func([]byte) error {
+		pages++
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, forgePageBudget, pages)
+	assert.Equal(t, int64(forgePageBudget), requests.Load())
+}
+
+func TestFetchGitHubPagesStopsWalkingNextLinksAtThePageBudget(t *testing.T) {
+	previous := githubPageCall
+	t.Cleanup(func() { githubPageCall = previous })
+
+	// Every response offers one more page and none advertises the last one,
+	// so only the budget ends the sequential walk.
+	requests := 0
+	githubPageCall = func(_ context.Context, _ string) (string, []byte, error) {
+		requests++
+		return fmt.Sprintf(`<https://api.github.com/x?page=%d>; rel="next"`, requests+1), []byte(`[]`), nil
+	}
+
+	pages := 0
+	err := fetchGitHubPages(context.Background(), "repos/owner/repo/branches?per_page=100", func([]byte) error {
+		pages++
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, forgePageBudget, pages)
+	assert.Equal(t, forgePageBudget, requests)
 }

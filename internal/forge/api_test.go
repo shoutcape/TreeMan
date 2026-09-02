@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -361,4 +362,111 @@ func TestMergedPRHeadError(t *testing.T) {
 
 	_, err = MergedPRHead(Type("bitbucket"), "owner/repo", "bitbucket.org", "main", "feature", "aaa111")
 	assert.Error(t, err)
+}
+
+// A busy repository has more branches and reviews than any picker session
+// works through, so the walk that follows pagination to its end needs a stop
+// of its own. These cover where each forge's walk stops.
+func TestGitHubPRListStopsAtTheRowBudget(t *testing.T) {
+	previous := githubGraphQLCall
+	t.Cleanup(func() { githubGraphQLCall = previous })
+
+	nodes := make([]string, 0, forgePageSize)
+	for number := 1; number <= forgePageSize; number++ {
+		nodes = append(nodes, fmt.Sprintf(`{"number":%d,"title":"pr","headRefName":"branch-%d"}`, number, number))
+	}
+	full := strings.Join(nodes, ",")
+
+	// A forge that always has one more page: only the budget ends this walk.
+	calls := 0
+	githubGraphQLCall = func(context.Context, string, map[string]string) ([]byte, error) {
+		calls++
+		return fmt.Appendf(nil,
+			`{"data":{"repository":{"pullRequests":{"nodes":[%s],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-%d"}}}}}`,
+			full, calls), nil
+	}
+
+	prs, err := githubPRList(context.Background(), "owner/repo")
+
+	require.NoError(t, err)
+	assert.Len(t, prs, forgeRowBudget)
+	assert.Equal(t, forgePageBudget, calls)
+}
+
+func TestGitHubPRListStopsAtThePageBudgetWhenPagesAreEmpty(t *testing.T) {
+	previous := githubGraphQLCall
+	t.Cleanup(func() { githubGraphQLCall = previous })
+
+	// Empty pages spend no budget, so the page count is what has to end this.
+	calls := 0
+	githubGraphQLCall = func(context.Context, string, map[string]string) ([]byte, error) {
+		calls++
+		return fmt.Appendf(nil,
+			`{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-%d"}}}}}`,
+			calls), nil
+	}
+
+	prs, err := githubPRList(context.Background(), "owner/repo")
+
+	require.NoError(t, err)
+	assert.Empty(t, prs)
+	assert.Equal(t, forgePageBudget, calls)
+}
+
+// endlessNDJSON prints one record without end, standing in for a glab that
+// keeps paginating. Nothing but the row budget can end a read of it, so a test
+// that stops is a test whose budget worked.
+type endlessNDJSON struct {
+	record  string
+	pending string
+}
+
+func (r *endlessNDJSON) Read(out []byte) (int, error) {
+	if r.pending == "" {
+		r.pending = r.record
+	}
+	count := copy(out, r.pending)
+	r.pending = r.pending[count:]
+	return count, nil
+}
+
+// stubGlabStream stands in for runForgeCLIStream, which stops the CLI and
+// reports success when its consumer is done.
+func stubGlabStream(t *testing.T, record string) {
+	t.Helper()
+	previous := glabAPIStreamCall
+	t.Cleanup(func() { glabAPIStreamCall = previous })
+	glabAPIStreamCall = func(_ context.Context, _, _ string, consume func(io.Reader) error) error {
+		err := consume(&endlessNDJSON{record: record})
+		if errors.Is(err, errStopStream) {
+			return nil
+		}
+		return err
+	}
+}
+
+func TestGitLabMRBatchesStopAtTheRowBudget(t *testing.T) {
+	stubGlabStream(t, "{\"iid\":1,\"title\":\"first\",\"source_branch\":\"one\"}\n")
+
+	delivered := 0
+	err := gitlabMRBatches(context.Background(), "group/repo", "gitlab.example", func(batch []PRInfo) error {
+		delivered += len(batch)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, forgeRowBudget, delivered)
+}
+
+func TestGitLabBranchBatchesStopAtTheRowBudget(t *testing.T) {
+	stubGlabStream(t, "{\"name\":\"one\",\"commit\":{\"committed_date\":\"2026-08-01T10:00:00Z\"}}\n")
+
+	delivered := 0
+	err := gitlabBranchBatches(context.Background(), "group/repo", "gitlab.example", func(batch []BranchInfo) error {
+		delivered += len(batch)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, forgeRowBudget, delivered)
 }

@@ -31,10 +31,12 @@ REMOTE_REPO="$TMP_DIR/remote.git"
 MAIN_REPO="$TMP_DIR/project"
 PR_SOURCE_REPO="$TMP_DIR/pr-source"
 WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-test"
+YARN_WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-yarn-smoke"
 REVIEW_WT_ALPHA="$MAIN_REPO/.worktrees/feature-review-alpha"
 REVIEW_WT_BETA="$MAIN_REPO/.worktrees/feature-review-beta"
 SKIP_WT="$MAIN_REPO/.worktrees/feature-skip-setup"
 NPM_CALLS="$TMP_DIR/npm-calls"
+COREPACK_CALLS="$TMP_DIR/corepack-calls"
 DOCKER_CALLS="$TMP_DIR/docker-calls"
 
 cleanup() {
@@ -83,9 +85,12 @@ wait_for_missing() {
 mkdir -p "$TEST_HOME"
 touch "$TEST_HOME/.bashrc"
 
-# Preserve real HOME/GOPATH before overriding, needed for unit test step.
+# Preserve real HOME/GOPATH/PATH before overriding, needed for unit test step.
 REAL_HOME="$HOME"
 REAL_GOPATH="${GOPATH:-$HOME/go}"
+# PATH is overridden below to put mock tools ahead of the real ones. Unit tests
+# that shell out to a real tool must not find a mock, so they run with this.
+REAL_PATH="$PATH"
 
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$HOME/.config"
@@ -95,6 +100,7 @@ export GIT_AUTHOR_EMAIL="test@example.com"
 export GIT_COMMITTER_NAME="TreeMan Test"
 export GIT_COMMITTER_EMAIL="test@example.com"
 export NPM_CALLS
+export COREPACK_CALLS
 export DOCKER_CALLS
 
 # Forge/repo overrides — injected into the treeman binary via env vars so that
@@ -365,6 +371,12 @@ cat > "$MOCK_BIN/npm" <<'EOF'
 printf '%s\n' "$*" >> "$NPM_CALLS"
 EOF
 chmod +x "$MOCK_BIN/npm"
+
+cat > "$MOCK_BIN/corepack" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$COREPACK_CALLS"
+EOF
+chmod +x "$MOCK_BIN/corepack"
 
 cat > "$MOCK_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -789,15 +801,33 @@ if git -C "$MAIN_REPO" show-ref --verify --quiet "refs/heads/$CURRENT_BRANCH"; t
 fi
 
 # ---------------------------------------------------------------------------
+# Corepack-managed Yarn setup
+# ---------------------------------------------------------------------------
+
+echo "==> worktree create for Corepack-managed Yarn"
+
+cd "$MAIN_REPO"
+git rm package-lock.json >/dev/null
+printf '{"packageManager":"yarn@4.9.2"}\n' > package.json
+git add package.json
+git commit -m "use Corepack-managed Yarn" >/dev/null
+git push origin main >/dev/null
+wt feature/yarn-smoke --skip-env --skip-database --skip-hooks
+assert_exists "$YARN_WORKTREE_REPO"
+assert_file_contains "$COREPACK_CALLS" "yarn install"
+
+# ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)
 # ---------------------------------------------------------------------------
 
 echo "==> unit tests"
 cd "$SCRIPT_DIR"
-# Run with the real HOME/GOPATH and without smoke-test env overrides that
-# would interfere with forge detection tests (_TREEMAN_FORGE, etc.).
+# Run with the real HOME/GOPATH/PATH and without smoke-test env overrides that
+# would interfere with forge detection tests (_TREEMAN_FORGE, etc.). The real
+# PATH matters for the same reason: the mock tools this script installs are
+# stand-ins for its own runs, not for a test that asks for the real tool.
 env -u _TREEMAN_FORGE -u _TREEMAN_GH_REPO -u _TREEMAN_REMOTE_URL \
-  HOME="$REAL_HOME" GOPATH="${REAL_GOPATH:-$REAL_HOME/go}" \
+  HOME="$REAL_HOME" GOPATH="${REAL_GOPATH:-$REAL_HOME/go}" PATH="$REAL_PATH" \
   go test ./... >/dev/null
 
 echo "PASS"

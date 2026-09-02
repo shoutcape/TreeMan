@@ -327,7 +327,7 @@ func setupDependencies(out io.Writer, render ui.Renderer, worktreePath string) s
 
 	installer := detection.Installer
 	command := installer.Binary + " " + joinArgs(installer.Args)
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s...", installer.Lockfile, command)))
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Detected %s, running %s...", installer.Manifest, command)))
 	if err := deps.Run(worktreePath, installer, out); err != nil {
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("dependency installation failed: %v", err)))
 		return failedStatus(fmt.Sprintf("failed: %v", err))

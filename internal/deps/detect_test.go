@@ -15,42 +15,42 @@ func TestDetectInstaller(t *testing.T) {
 	tests := []struct {
 		name         string
 		files        []string
-		wantLockfile string
+		wantManifest string
 		wantBinary   string
 		wantArgs     []string
 	}{
 		{
 			name:         "pnpm",
 			files:        []string{"pnpm-lock.yaml", "package.json"},
-			wantLockfile: "pnpm-lock.yaml",
+			wantManifest: "pnpm-lock.yaml",
 			wantBinary:   "pnpm",
 			wantArgs:     []string{"install"},
 		},
 		{
 			name:         "yarn",
 			files:        []string{"yarn.lock", "package.json"},
-			wantLockfile: "yarn.lock",
+			wantManifest: "yarn.lock",
 			wantBinary:   "yarn",
 			wantArgs:     []string{"install"},
 		},
 		{
 			name:         "npm",
 			files:        []string{"package-lock.json", "package.json"},
-			wantLockfile: "package-lock.json",
+			wantManifest: "package-lock.json",
 			wantBinary:   "npm",
 			wantArgs:     []string{"install"},
 		},
 		{
 			name:         "go mod",
 			files:        []string{"go.mod", "go.sum", "main.go"},
-			wantLockfile: "go.mod",
+			wantManifest: "go.mod",
 			wantBinary:   "go",
 			wantArgs:     []string{"mod", "download"},
 		},
 		{
 			name:         "cargo",
 			files:        []string{"Cargo.toml", "src"},
-			wantLockfile: "Cargo.toml",
+			wantManifest: "Cargo.toml",
 			wantBinary:   "cargo",
 			wantArgs:     []string{"fetch"},
 		},
@@ -58,7 +58,7 @@ func TestDetectInstaller(t *testing.T) {
 			// pnpm takes priority over npm when both are present
 			name:         "pnpm beats npm",
 			files:        []string{"pnpm-lock.yaml", "package-lock.json"},
-			wantLockfile: "pnpm-lock.yaml",
+			wantManifest: "pnpm-lock.yaml",
 			wantBinary:   "pnpm",
 			wantArgs:     []string{"install"},
 		},
@@ -66,7 +66,7 @@ func TestDetectInstaller(t *testing.T) {
 			// yarn takes priority over npm
 			name:         "yarn beats npm",
 			files:        []string{"yarn.lock", "package-lock.json"},
-			wantLockfile: "yarn.lock",
+			wantManifest: "yarn.lock",
 			wantBinary:   "yarn",
 			wantArgs:     []string{"install"},
 		},
@@ -76,7 +76,7 @@ func TestDetectInstaller(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := deps.DetectInstaller(tt.files)
 			require.NotNil(t, got)
-			assert.Equal(t, tt.wantLockfile, got.Lockfile)
+			assert.Equal(t, tt.wantManifest, got.Manifest)
 			assert.Equal(t, tt.wantBinary, got.Binary)
 			assert.Equal(t, tt.wantArgs, got.Args)
 		})

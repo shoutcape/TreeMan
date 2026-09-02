@@ -77,6 +77,28 @@ func TestPreflightCommandReportsNestedModulesWithoutRootDependencySetup(t *testi
 	assert.NotContains(t, out, "generated/legacy")
 }
 
+func TestPreflightReportsCorepackManagedYarn(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"packageManager":"yarn@4.9.2"}`), 0o600))
+	installPreflightInstaller(t, "corepack")
+
+	statuses := preflightDependenciesStatuses(dir)
+
+	require.NotEmpty(t, statuses)
+	assert.Equal(t, "ready: package.json detected; will run corepack yarn install", statuses[0].message)
+}
+
+func TestPreflightReportsMissingCorepackForModernYarn(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"packageManager":"yarn@4.9.2"}`), 0o600))
+	t.Setenv("PATH", "")
+
+	statuses := preflightDependenciesStatuses(dir)
+
+	require.NotEmpty(t, statuses)
+	assert.Equal(t, "limited: package.json detected but corepack is not installed", statuses[0].message)
+}
+
 func installPreflightInstaller(t *testing.T, binary string) {
 	t.Helper()
 	binDir := t.TempDir()

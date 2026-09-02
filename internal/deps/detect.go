@@ -4,18 +4,20 @@
 package deps
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/shoutcape/treeman/internal/git"
 )
 
 // Installer describes a detected package manager and the command to run.
 type Installer struct {
-	// Lockfile is the filename that triggers this installer.
-	Lockfile string
+	// Manifest is the root manifest or lockfile that triggers this installer.
+	Manifest string
 	// Binary is the executable to invoke (e.g. "npm", "go").
 	Binary string
 	// Args are the arguments passed to Binary (e.g. ["install"] or ["mod", "download"]).
@@ -34,14 +36,14 @@ type Module struct {
 // activate their virtualenv manually.
 var pythonFiles = []string{"requirements.txt", "pyproject.toml"}
 
-// knownInstallers is the ordered list of lockfile→installer mappings.
+// knownInstallers is the ordered list of manifest-to-installer mappings.
 // Priority is first-match-wins.
 var knownInstallers = []Installer{
-	{Lockfile: "pnpm-lock.yaml", Binary: "pnpm", Args: []string{"install"}},
-	{Lockfile: "yarn.lock", Binary: "yarn", Args: []string{"install"}},
-	{Lockfile: "package-lock.json", Binary: "npm", Args: []string{"install"}},
-	{Lockfile: "go.mod", Binary: "go", Args: []string{"mod", "download"}},
-	{Lockfile: "Cargo.toml", Binary: "cargo", Args: []string{"fetch"}},
+	{Manifest: "pnpm-lock.yaml", Binary: "pnpm", Args: []string{"install"}},
+	{Manifest: "yarn.lock", Binary: "yarn", Args: []string{"install"}},
+	{Manifest: "package-lock.json", Binary: "npm", Args: []string{"install"}},
+	{Manifest: "go.mod", Binary: "go", Args: []string{"mod", "download"}},
+	{Manifest: "Cargo.toml", Binary: "cargo", Args: []string{"fetch"}},
 }
 
 var ignoredModuleDirs = map[string]struct{}{
@@ -52,8 +54,8 @@ var ignoredModuleDirs = map[string]struct{}{
 	"vendor":       {},
 }
 
-// DetectInstaller returns the first Installer whose lockfile appears in files,
-// or nil if no known lockfile is present.
+// DetectInstaller returns the first Installer whose manifest appears in files,
+// or nil if no known manifest is present.
 //
 // files should be the list of filenames (basename only) in the worktree root.
 // The caller is responsible for reading the directory.
@@ -63,9 +65,29 @@ func DetectInstaller(files []string) *Installer {
 	return installerFor(fileSet(files))
 }
 
+func declaredYarnInstaller(packageJSON []byte) *Installer {
+	var manifest struct {
+		PackageManager string `json:"packageManager"`
+	}
+	if err := json.Unmarshal(packageJSON, &manifest); err != nil {
+		return nil
+	}
+
+	manager, _, _ := strings.Cut(manifest.PackageManager, "@")
+	if manager != "yarn" {
+		return nil
+	}
+
+	return &Installer{
+		Manifest: "package.json",
+		Binary:   "corepack",
+		Args:     []string{"yarn", "install"},
+	}
+}
+
 func installerFor(files map[string]struct{}) *Installer {
 	for i := range knownInstallers {
-		if _, ok := files[knownInstallers[i].Lockfile]; ok {
+		if _, ok := files[knownInstallers[i].Manifest]; ok {
 			result := knownInstallers[i] // copy
 			return &result
 		}
@@ -98,14 +120,14 @@ func pythonManifestFor(files map[string]struct{}) string {
 
 func supportedManifestFor(files map[string]struct{}) string {
 	if installer := installerFor(files); installer != nil {
-		return installer.Lockfile
+		return installer.Manifest
 	}
 	return pythonManifestFor(files)
 }
 
 func isSupportedManifest(name string) bool {
 	for _, installer := range knownInstallers {
-		if name == installer.Lockfile {
+		if name == installer.Manifest {
 			return true
 		}
 	}

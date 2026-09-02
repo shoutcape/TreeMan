@@ -28,13 +28,15 @@ Shell integration uses stdout destinations to change the current interactive she
 treeman create <branch-name> [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
-Create a local branch from the fetched default branch. TreeMan supports only `main` and `master` as default branch names.
+Create a local branch from the fetched default branch. TreeMan reads `refs/remotes/origin/HEAD` to detect that branch. If that ref is absent, TreeMan looks for `main` or `master` on `origin`. The command fails when it finds neither name.
 
 The command fails when the branch or target directory exists. It creates `.worktrees/<branch-slug>`. The branch slug changes `/` to `-`.
 
 If a different branch holds that path, TreeMan adds a slug suffix and creates `.worktrees/<branch-slug>-<slug-suffix>`. Existing worktrees keep their paths.
 
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
+
+Dependency installation supports `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `go.mod`, and `Cargo.toml`. A `package.json` that declares `"packageManager": "yarn@<version>"` takes priority and runs `corepack yarn install`; otherwise `yarn.lock` runs `yarn install`. Corepack must already be available on `PATH`. TreeMan does not enable it or modify global package-manager configuration.
 
 Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.
 
@@ -44,7 +46,7 @@ Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists r
 treeman preflight
 ```
 
-Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
+Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. For Corepack-managed Yarn projects, it reports `corepack yarn install` and warns when `corepack` is unavailable. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
 
 ## `branch`
 
@@ -53,6 +55,8 @@ treeman branch [query] [--skip-env] [--skip-database] [--skip-deps] [--skip-hook
 ```
 
 `branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
+
+TreeMan stops a branch or review list at 5000 items or at 50 pages. Read [known limitations](../known-limitations.md).
 
 TreeMan excludes the default branch and local branches. It does not exclude protected branches.
 
@@ -78,7 +82,9 @@ treeman switch [query]
 
 `switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
 
-It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. Shell integration changes directory when it receives a path.
+A path query resolves its symlinks before the comparison. Therefore a symlinked path selects the same worktree as its real path.
+
+It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. A symlinked current directory counts as the current worktree. Shell integration changes directory when it receives a path.
 
 ## `delete`
 
@@ -93,9 +99,19 @@ treeman delete --path <path> --branch <branch> [--yes] [--force]
 
 TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion loads the worktree's durable database ownership record, removes the worktree and branch, marks the owned database pending, then drops it before the command returns. It never derives deletion authority from `.env`.
 
-The merge check reads the branch's remote-tracking ref, so TreeMan refreshes that ref from its remote before deciding. Without it, commits pushed from another machine, or by anyone since the last fetch here, are invisible and deletion refuses a branch whose work is safely on the remote. A fetch that cannot run, whether offline or because the remote branch is gone, is reported and not fatal: the check falls back to the last fetched state, which can only make it refuse more often. `--force` skips the merge check and therefore the fetch, and a branch that tracks no remote branch has nothing to refresh.
+`delete` does not check whether the branch is merged. You named the treebranch and confirmed it, and the worktree being clean is what protects work that is not recoverable. `treeman clean` is the merge-aware command: it deletes only what it can prove is merged, using forge evidence for squash and rebase merges that local history cannot show. Deciding merge status here would only duplicate that with a weaker local check, and would push you toward `--force` for the ordinary case of a squash-merged branch.
 
-TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files. `--yes` skips the confirmation prompt but does not bypass safety checks.
+Unmerged commits are still reported. The confirmation prompt annotates the branch with how many of its commits the default branch cannot reach, because deleting a branch drops its reflog along with the worktree's, and those commits become unreachable. `--yes` skips the prompt and therefore that annotation.
+
+The whole path is local. `delete` contacts no remote.
+
+TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files -- it means that and nothing else. `--yes` skips the confirmation prompt but does not bypass safety checks.
+
+A locked worktree is never removed, and `--force` does not override the lock: `git worktree lock` is how you mark a worktree whose directory is legitimately absent sometimes, such as one on removable media. Unlock it first.
+
+A worktree whose directory was removed outside TreeMan is still deleted: the registration is unregistered and the branch goes through the same compare-and-delete as any other deletion, rather than leaving both behind with nothing able to remove them. Its recorded database cannot be resolved without the directory, so any drop it had already recorded is left to the pending-cleanup retry.
+
+Removal renames the worktree directory into `.git/treeman/trash/` and hands the unlinking to a background process, so the command returns as soon as the workspace is clear rather than waiting on a dependency tree. Before the rename, TreeMan verifies the directory is still the worktree the repository registered there -- the check `git worktree remove` would have made, which renaming past it would otherwise skip. A worktree on a different filesystem cannot be renamed and is removed directly instead.
 
 When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so shell integration can change directory safely.
 
