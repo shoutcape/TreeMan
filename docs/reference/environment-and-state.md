@@ -10,7 +10,17 @@ TreeMan creates worktrees under this path:
 <main-worktree>/.worktrees/<branch-slug>
 ```
 
-The branch slug changes `/` to `-`. Different branch names can produce the same slug. Existing target directories stop creation.
+The branch slug changes `/` to `-`. Therefore, different branch names can produce the same slug. For example, `feature/login` and `feature-login` both produce `feature-login`.
+
+The first branch to get a worktree keeps the plain slug. If a different branch holds that path, TreeMan adds a slug suffix:
+
+```text
+<main-worktree>/.worktrees/<branch-slug>-<slug-suffix>
+```
+
+The slug suffix comes from the full branch name. Therefore, one branch always gets the same path.
+
+Existing worktrees keep their paths. TreeMan reads the branch of a worktree from `git worktree list`, not from the directory name. Existing target directories that are not worktrees stop creation.
 
 TreeMan tries to add `.worktrees/` to the main `.gitignore`. This action is warning-only.
 

@@ -32,6 +32,8 @@ Create a local branch from the fetched default branch. TreeMan reads `refs/remot
 
 The command fails when the branch or target directory exists. It creates `.worktrees/<branch-slug>`. The branch slug changes `/` to `-`.
 
+If a different branch holds that path, TreeMan adds a slug suffix and creates `.worktrees/<branch-slug>-<slug-suffix>`. Existing worktrees keep their paths.
+
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 
 Dependency installation supports `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `go.mod`, and `Cargo.toml`. A `package.json` that declares `"packageManager": "yarn@<version>"` takes priority and runs `corepack yarn install`; otherwise `yarn.lock` runs `yarn install`. Corepack must already be available on `PATH`. TreeMan does not enable it or modify global package-manager configuration.

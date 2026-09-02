@@ -21,6 +21,8 @@ func newCreateCmd() *cobra.Command {
 		Long: `Create a new linked worktree and branch from the latest default branch.
 
 The worktree is placed under .worktrees/<branch-slug> inside the repository.
+If a different branch already has a worktree at that path, the path gets a
+short suffix that is derived from the branch name.
 
 .env* files are automatically copied from the main worktree, and
 dependencies are installed if a known lockfile is detected.
@@ -73,8 +75,16 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		return err
 	}
 
-	// Build worktree path.
-	worktreePath := worktree.PathForBranch(mainRoot, branch)
+	// Build worktree path. Existing worktrees keep their path; a branch whose
+	// slug collides with another branch's worktree gets a suffixed path.
+	existing, err := git.WorktreeList()
+	if err != nil {
+		return err
+	}
+	worktreePath, err := worktree.ResolvePathForBranch(mainRoot, branch, existing)
+	if err != nil {
+		return err
+	}
 
 	// Guard: directory must not already exist.
 	if _, err := os.Stat(worktreePath); err == nil {

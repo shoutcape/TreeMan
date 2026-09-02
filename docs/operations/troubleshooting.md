@@ -58,4 +58,11 @@ git branch --list
 
 ## Worktree Path Exists
 
-TreeMan does not overwrite an existing target directory. Check `.worktrees/` for a path with the same branch slug. Branches that differ only by slash replacement can collide.
+TreeMan does not overwrite an existing target directory. Check `.worktrees/` for a path with the same branch slug.
+
+A branch that collides with a different branch does not cause this error. TreeMan adds a slug suffix to the path of the second branch. This error shows a directory that is not a worktree, or a worktree for the same branch.
+
+Do one of these actions:
+
+- Remove the directory.
+- Delete its worktree with `treeman delete`.

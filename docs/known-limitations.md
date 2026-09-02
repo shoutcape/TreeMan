@@ -6,7 +6,8 @@ This document describes current behavior. It is not a product roadmap.
 
 - Default branch detection reads `refs/remotes/origin/HEAD` first. If that ref is absent, TreeMan finds only `main` or `master` on `origin`.
 - Branch validation does not implement all Git ref rules.
-- Branch names with `/` can collide after slug conversion to `-`.
+- Slug collision detection compares raw directory paths. Symlinked or equivalent paths can differ.
+- A directory that is not a worktree stops creation at the target path. TreeMan does not add a slug suffix in this condition.
 - Do not run direct `git worktree` mutations concurrently with `treeman clean` or `treeman delete`. TreeMan serializes its own worktree additions and guarded deletions, but direct Git commands do not participate in that lock.
 
 ## Forge Data
