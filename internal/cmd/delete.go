@@ -72,7 +72,7 @@ func newDeleteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flagPath, "path", "", "Worktree path to delete (skips fzf picker)")
 	cmd.Flags().StringVar(&flagBranch, "branch", "", "Branch to delete (skips fzf picker)")
 	cmd.Flags().BoolVarP(&flagYes, "yes", "y", false, "Skip confirmation prompt")
-	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a worktree with uncommitted or untracked changes")
+	cmd.Flags().BoolVarP(&flagForce, "force", "f", false, "Delete a worktree with uncommitted changes, or a branch whose commits exist nowhere else")
 	return cmd
 }
 
@@ -87,18 +87,18 @@ func runDeleteDirect(cmd *cobra.Command, path, branch string, skipConfirm, force
 	if err != nil {
 		return err
 	}
+	plan, err := planDeletion(path, branch, mainRoot, deletionGuards{force: force}, "")
+	if err != nil {
+		return err
+	}
 	if !skipConfirm {
-		printDeleteConfirmation(cmd, mainRoot, path, branch)
-		confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
-		if err != nil {
+		confirmedPlan, confirmed, err := confirmDeletion(cmd, plan)
+		if err != nil || !confirmed {
 			return err
 		}
-		if !confirmed {
-			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "Cancelled."))
-			return nil
-		}
+		plan = confirmedPlan
 	}
-	return deleteWorktree(cmd, path, branch, mainRoot, force)
+	return runDeletionPlan(cmd, plan)
 }
 
 func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error {
@@ -164,74 +164,68 @@ func runDelete(cmd *cobra.Command, query string, skipConfirm, force bool) error 
 	if idx < 0 {
 		return fmt.Errorf("could not map fzf selection to a worktree")
 	}
-	if !skipConfirm {
-		printDeleteConfirmation(cmd, mainRoot, paths[idx], branches[idx])
-		confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
-			return nil
-		}
-	}
-	return deleteWorktree(cmd, paths[idx], branches[idx], mainRoot, force)
-}
-
-func deleteWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
-	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, "")
-}
-
-// deleteVerifiedWorktree preserves the exact-SHA cleanup helper used by the
-// merge classifier while routing it through database-aware deletion. The
-// classifier authorized one specific tip, so a branch that has moved since is
-// no longer the branch it verified.
-func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string) error {
-	if expectedSHA == "" {
-		return fmt.Errorf("cannot delete verified branch %q without an expected SHA", branch)
-	}
-	return deleteWorktreeAtSHA(cmd, dest, branch, mainRoot, force, expectedSHA)
-}
-
-// deleteWorktreeAtSHA removes a worktree and its branch. An expected SHA makes
-// cleanup conditional on the exact commit whose merge was verified. Every
-// deletion snapshots its branch SHA and compare-and-deletes that exact ref.
-func deleteWorktreeAtSHA(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string) error {
-	batch := newCleanupBatch()
-	outcome, err := deleteWorktreeAtSHAWithDatabase(cmd, dest, branch, mainRoot, force, expectedSHA, batch)
+	plan, err := planDeletion(paths[idx], branches[idx], mainRoot, deletionGuards{force: force}, "")
 	if err != nil {
 		return err
 	}
-	if err := batch.Flush(); err != nil {
-		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
+	if !skipConfirm {
+		confirmedPlan, confirmed, err := confirmDeletion(cmd, plan)
+		if err != nil || !confirmed {
+			return err
+		}
+		plan = confirmedPlan
 	}
-	reportDeletedWorktree(cmd, branch, mainRoot, outcome)
-	return nil
+	return runDeletionPlan(cmd, plan)
 }
 
-func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) {
-	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
-	if outcome.currentWorktree {
-		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
-	}
+// deletionGuards says what the caller has already established about a branch,
+// and therefore which refusals still apply. It is what --force and a forge
+// verification each waive, named rather than inferred from another field.
+type deletionGuards struct {
+	// force is the user waiving their own work: uncommitted changes, and
+	// commits that exist nowhere else.
+	force bool
+	// mergeVerified is a caller that proved this exact commit merged. `clean`
+	// asks the forge, which sees the squash merge local history cannot, so its
+	// evidence outranks the unreachable-commit guard and nothing else.
+	mergeVerified bool
 }
 
-// deleteWorktreeAtSHAWithDatabase lets clean share one cleanup batch across
-// worktrees while keeping ownership transitions inside the database package.
-func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot string, force bool, expectedSHA string, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
+// deletionPlan is a deletion that has passed every refusal. It carries the
+// facts the prompt reports and the removal acts on, so the loss the user
+// confirms is the loss the guards weighed rather than a second estimate of it.
+type deletionPlan struct {
+	entry            git.WorktreeEntry
+	mainRoot         string
+	branchSHA        string
+	defaultBranch    string
+	directoryMissing bool
+	// dirty and unreachable are what force waived. They are zero on any plan
+	// that did not need waiving, which is what makes them safe to report.
+	dirty       bool
+	unreachable int
+	guards      deletionGuards
+}
+
+// planDeletion decides whether a worktree and its branch may be removed, and
+// returns the facts that decision rested on. Every refusal lives here, so a
+// caller can put the question to the user before asking them to confirm it
+// rather than after. An expected SHA pins the exact commit whose merge was
+// verified; a branch that has moved since is no longer the branch it verified.
+func planDeletion(dest, branch, mainRoot string, guards deletionGuards, expectedSHA string) (deletionPlan, error) {
 	entries, err := git.WorktreeList()
 	if err != nil {
-		return deleteWorktreeOutcome{}, err
+		return deletionPlan{}, err
 	}
 	entry, err := worktreeEntryAt(entries, dest)
 	if err != nil {
-		return deleteWorktreeOutcome{}, err
+		return deletionPlan{}, err
 	}
 	if samePath(entry.Path, mainRoot) {
-		return deleteWorktreeOutcome{}, fmt.Errorf("cannot delete the main worktree")
+		return deletionPlan{}, fmt.Errorf("cannot delete the main worktree")
 	}
 	if entry.Branch != branch {
-		return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
+		return deletionPlan{}, fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
 	}
 	// A lock says "do not remove this", and --force is the user waiving their
 	// own uncommitted changes, never a claim about the lock. Git refuses a
@@ -244,21 +238,29 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		if entry.LockReason != "" {
 			reason = ": " + entry.LockReason
 		}
-		return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
+		return deletionPlan{}, fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
 	}
 	defaultBranch, err := resolveDefaultBranch(entries, mainRoot)
 	if err != nil {
-		return deleteWorktreeOutcome{}, fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
+		return deletionPlan{}, fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
 	}
 	if branch == defaultBranch {
-		return deleteWorktreeOutcome{}, fmt.Errorf("cannot delete the default branch %q", branch)
+		return deletionPlan{}, fmt.Errorf("cannot delete the default branch %q", branch)
 	}
 	branchSHA, err := git.BranchSHA(branch)
 	if err != nil {
-		return deleteWorktreeOutcome{}, fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved: %w", entry.Path, branch, err)
+		return deletionPlan{}, fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved: %w", entry.Path, branch, err)
 	}
 	if expectedSHA != "" && branchSHA != expectedSHA {
-		return deleteWorktreeOutcome{}, fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
+		return deletionPlan{}, fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
+	}
+	plan := deletionPlan{
+		entry:            entry,
+		mainRoot:         mainRoot,
+		branchSHA:        branchSHA,
+		defaultBranch:    defaultBranch,
+		directoryMissing: git.WorktreeDirectoryMissing(entry.Path),
+		guards:           guards,
 	}
 	// A registration whose directory is gone has no working tree to protect
 	// and nothing to identify, so both checks below are skipped rather than
@@ -266,23 +268,98 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	// still goes through the same compare-and-delete, so this reaches the same
 	// end state as a normal deletion instead of leaving behind a registration
 	// and a branch that nothing can remove.
-	directoryMissing := git.WorktreeDirectoryMissing(entry.Path)
-	if !directoryMissing {
+	if !plan.directoryMissing {
 		// Identity before contents. Reading the working tree of a directory
 		// that is no longer this worktree reports a foreign repository's
 		// changes as this one's, and answers them with --force -- the one flag
 		// that would carry the removal through.
 		if err := git.EnsureHoldsWorktree(mainRoot, entry.Path); err != nil {
-			return deleteWorktreeOutcome{}, err
+			return deletionPlan{}, err
 		}
 		state, err := git.InspectWorktree(entry.Path)
 		if err != nil {
-			return deleteWorktreeOutcome{}, err
+			return deletionPlan{}, err
 		}
-		if state == git.WorktreeStateDirty && !force {
-			return deleteWorktreeOutcome{}, fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
+		plan.dirty = state == git.WorktreeStateDirty
+		if plan.dirty && !guards.force {
+			return deletionPlan{}, fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", entry.Path)
 		}
 	}
+	// Committing work does not make it safe. Deleting a branch drops its
+	// reflog along with the worktree's, so a commit that no remote and not the
+	// default branch can reach has nothing left pointing at it -- the same
+	// unrecoverable loss the dirty check refuses, one commit later. It is
+	// checked whether or not the directory survives, because the loss is the
+	// branch's, not the directory's.
+	if !guards.mergeVerified {
+		plan.unreachable, err = git.UnpushedCommitCount(mainRoot, branch, defaultBranch)
+		if err != nil {
+			return deletionPlan{}, fmt.Errorf("cannot tell whether branch %q has commits that exist nowhere else: %w\nRecovery: inspect the branch, then use --force to delete it anyway", branch, err)
+		}
+		if plan.unreachable > 0 && !guards.force {
+			return deletionPlan{}, fmt.Errorf("branch %q has %d %s on no remote and not on %s; push the branch or use --force to delete it", branch, plan.unreachable, commitsWord(plan.unreachable), defaultBranch)
+		}
+	}
+	return plan, nil
+}
+
+// replanAfterPrompt re-runs the guards once the user has answered. The answer
+// was given against the state at plan time, and a prompt is human-sized: the
+// removal acts on the worktree as it is now, and work committed while we
+// waited stops the deletion rather than disappearing into it.
+func replanAfterPrompt(plan deletionPlan) (deletionPlan, error) {
+	fresh, err := planDeletion(plan.entry.Path, plan.entry.Branch, plan.mainRoot, plan.guards, "")
+	if err != nil {
+		return deletionPlan{}, err
+	}
+	if fresh.branchSHA != plan.branchSHA {
+		return deletionPlan{}, fmt.Errorf("branch %q moved while the prompt was open (was %s, now %s); rerun the deletion to see what changed", plan.entry.Branch, plan.branchSHA, fresh.branchSHA)
+	}
+	return fresh, nil
+}
+
+// deleteVerifiedWorktree removes a worktree whose branch a caller proved
+// merged, sharing that caller's cleanup batch. The classifier authorized one
+// specific tip, so a branch that has moved since is no longer the branch it
+// verified, and without a tip there is no verification to speak of.
+func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot, expectedSHA string, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
+	if expectedSHA == "" {
+		return deleteWorktreeOutcome{}, fmt.Errorf("cannot delete verified branch %q without an expected SHA", branch)
+	}
+	plan, err := planDeletion(dest, branch, mainRoot, deletionGuards{mergeVerified: true}, expectedSHA)
+	if err != nil {
+		return deleteWorktreeOutcome{}, err
+	}
+	return plan.execute(cmd, batch)
+}
+
+// runDeletionPlan executes a plan with a cleanup batch of its own and reports
+// what it removed.
+func runDeletionPlan(cmd *cobra.Command, plan deletionPlan) error {
+	batch := newCleanupBatch()
+	outcome, err := plan.execute(cmd, batch)
+	if err != nil {
+		return err
+	}
+	if err := batch.Flush(); err != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
+	}
+	reportDeletedWorktree(cmd, plan.entry.Branch, plan.mainRoot, outcome)
+	return nil
+}
+
+func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) {
+	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
+	if outcome.currentWorktree {
+		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
+	}
+}
+
+// execute carries out a plan: the removal itself, the branch's exact-SHA
+// deletion, and the database the worktree owned. Nothing here refuses -- every
+// refusal happened in planDeletion, before the user was asked to confirm.
+func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
+	entry := plan.entry
 	currentRoot, err := git.CurrentWorktreeRoot()
 	if err != nil {
 		return deleteWorktreeOutcome{}, err
@@ -301,7 +378,7 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 	// directory -- so there is nothing to prepare, and reporting that as a
 	// failure would make an expected cleanup look broken. A drop it had
 	// already recorded is still collected by the pending-cleanup retry.
-	if directoryMissing {
+	if plan.directoryMissing {
 		cleanupOutcome.status = databaseCleanupAbsent
 	} else if commitDatabaseCleanup, databaseName, err = batch.Prepare(entry.Path); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
@@ -311,15 +388,15 @@ func deleteWorktreeAtSHAWithDatabase(cmd *cobra.Command, dest, branch, mainRoot 
 		cleanupOutcome.status = databaseCleanupPending
 		cleanupOutcome.database = databaseName
 	}
-	if err := removeWorktree(mainRoot, entry.Path, force); err != nil {
-		return deleteWorktreeOutcome{}, deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, branch, forceFlag(force)))
+	if err := removeWorktree(plan.mainRoot, entry.Path, plan.guards.force); err != nil {
+		return deleteWorktreeOutcome{}, deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))
 	}
-	if err := deleteBranchAtSHA(mainRoot, branch, branchSHA); err != nil {
+	if err := deleteBranchAtSHA(plan.mainRoot, entry.Branch, plan.branchSHA); err != nil {
 		return deleteWorktreeOutcome{}, deleteWorktreeFailure(
-			fmt.Errorf("branch %q was preserved after deletion checks: %w", branch, err),
+			fmt.Errorf("branch %q was preserved after deletion checks: %w", entry.Branch, err),
 			fmt.Sprintf("removed worktree %q", entry.Path),
-			fmt.Sprintf("branch %q", branch),
-			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", branch, mainRoot, branch),
+			fmt.Sprintf("branch %q", entry.Branch),
+			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
 		)
 	}
 	if commitDatabaseCleanup != nil {
@@ -379,15 +456,6 @@ func resolveDefaultBranch(entries []git.WorktreeEntry, mainRoot string) (string,
 	return "", detectErr
 }
 
-// localDefaultBranch is resolveDefaultBranch without the remote round trip, for
-// callers that only decorate output.
-func localDefaultBranch(entries []git.WorktreeEntry, mainRoot string) (string, bool) {
-	if branch, ok := git.LocalDefaultBranch(); ok {
-		return branch, true
-	}
-	return mainWorktreeBranch(entries, mainRoot)
-}
-
 func mainWorktreeBranch(entries []git.WorktreeEntry, mainRoot string) (string, bool) {
 	for _, entry := range entries {
 		if samePath(entry.Path, mainRoot) && entry.Branch != "" {
@@ -419,37 +487,58 @@ func canonicalPath(path string) string {
 	return filepath.Clean(abs)
 }
 
-func printDeleteConfirmation(cmd *cobra.Command, mainRoot, path, branch string) {
+// confirmDeletion puts the plan to the user and, once they answer, re-runs it
+// against the state as it is now, returning the plan the removal should act
+// on. It reports what --force waived, because that is the only work a plan
+// that got this far can still destroy.
+func confirmDeletion(cmd *cobra.Command, plan deletionPlan) (deletionPlan, bool, error) {
+	printDeleteConfirmation(cmd, plan)
+	confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
+	if err != nil {
+		return deletionPlan{}, false, err
+	}
+	if !confirmed {
+		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "Cancelled."))
+		return deletionPlan{}, false, nil
+	}
+	fresh, err := replanAfterPrompt(plan)
+	if err != nil {
+		return deletionPlan{}, false, err
+	}
+	return fresh, true, nil
+}
+
+func printDeleteConfirmation(cmd *cobra.Command, plan deletionPlan) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", "About to delete:"))
-	fmt.Fprintf(out, "  Worktree: %s\n", render.Path(path))
-	fmt.Fprintf(out, "  Branch:   %s%s\n\n", render.Branch(branch), describeUnmergedCommits(mainRoot, branch))
+	fmt.Fprintf(out, "  Worktree: %s\n", render.Path(plan.entry.Path))
+	fmt.Fprintf(out, "  Branch:   %s%s\n", render.Branch(plan.entry.Branch), describeUnreachableCommits(plan))
+	if plan.dirty {
+		fmt.Fprintln(out, "  Discards: uncommitted and untracked changes")
+	}
+	fmt.Fprintln(out)
 }
 
-// describeUnmergedCommits annotates the branch line with the work that would
-// stop being reachable. It is decoration, so every failure to work it out --
-// no default branch, an unreadable ref -- returns an empty string instead of
-// an error: nothing here decides whether the deletion may proceed, and a
-// prompt that cannot render a count is still a usable prompt.
-func describeUnmergedCommits(mainRoot, branch string) string {
-	entries, err := git.WorktreeList()
-	if err != nil {
+// describeUnreachableCommits annotates the branch with the work the deletion
+// ends: commits no remote and not the default branch can reach, which lose the
+// last thing pointing at them when the branch and its reflog go. A plan only
+// carries a count when --force waived it, so the prompt warns about work that
+// is genuinely about to be destroyed and stays quiet about work that is not.
+// It reads as the refusal reads, because it is the same count: what the prompt
+// reports is what the guard weighed, word for word.
+func describeUnreachableCommits(plan deletionPlan) string {
+	if plan.unreachable == 0 {
 		return ""
 	}
-	defaultBranch, ok := localDefaultBranch(entries, mainRoot)
-	if !ok || defaultBranch == branch {
-		return ""
-	}
-	count, err := git.UnmergedCommitCount(mainRoot, branch, defaultBranch)
-	if err != nil || count == 0 {
-		return ""
-	}
-	commits := "commits"
+	return fmt.Sprintf("  (%d %s on no remote and not on %s)", plan.unreachable, commitsWord(plan.unreachable), plan.defaultBranch)
+}
+
+func commitsWord(count int) string {
 	if count == 1 {
-		commits = "commit"
+		return "commit"
 	}
-	return fmt.Sprintf("  (%d %s not on %s)", count, commits, defaultBranch)
+	return "commits"
 }
 
 func confirmYN(cmd *cobra.Command, prompt string) (bool, error) {

@@ -276,6 +276,37 @@ func TestAnyCommitIsAncestor(t *testing.T) {
 	assert.False(t, ancestor)
 }
 
+// UnpushedCommitCount counts what a deletion would make unreachable: commits
+// no remote-tracking ref and not the default branch can reach.
+func TestUnpushedCommitCount(t *testing.T) {
+	repo := createGitTestRepo(t)
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "one")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "two")
+
+	count, err := UnpushedCommitCount(repo, "feature", "main")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// A default branch that cannot be read only widens what counts as safe, so
+	// losing it falls back to the conservative count rather than an error.
+	count, err = UnpushedCommitCount(repo, "feature", "no-such-branch")
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+
+	// Any remote-tracking ref that reaches the commits answers the question --
+	// the branch does not have to track one.
+	gitTest(t, repo, "update-ref", "refs/remotes/origin/feature", "refs/heads/feature")
+	count, err = UnpushedCommitCount(repo, "feature", "main")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "after the push")
+	count, err = UnpushedCommitCount(repo, "feature", "main")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
 func TestDeleteBranchAtSHA(t *testing.T) {
 	t.Run("deletes matching ref", func(t *testing.T) {
 		repo := createGitTestRepo(t)

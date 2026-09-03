@@ -582,18 +582,31 @@ func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
 	return false, nil
 }
 
-// UnmergedCommitCount counts the commits on branch that target cannot reach.
-// It is reported at the confirmation prompt, never used as a gate: deleting a
-// branch drops its reflog along with the worktree's, so unmerged commits
-// become unreachable, and the moment to say so is while the user is deciding.
-func UnmergedCommitCount(dir, branch, target string) (int, error) {
-	out, err := runInDir(dir, "rev-list", "--count", target+".."+branch)
+// UnpushedCommitCount counts the commits on branch that exist nowhere else.
+// A commit a remote-tracking ref reaches is on a remote, and one the default
+// branch reaches stays reachable after this branch goes; what is left lives on
+// this branch alone, and deleting a branch drops its reflog along with the
+// worktree's, so those commits become unreachable with nothing to recover them
+// from. That is the work `delete` refuses to discard without --force.
+//
+//	git rev-list --count --ignore-missing <branch> --not --remotes <default>
+//
+// The default branch widens what counts as safe rather than narrowing it, so a
+// repository that cannot name one locally is tolerated instead of refused:
+// --ignore-missing drops the unreadable half and the remaining count is the
+// conservative answer.
+func UnpushedCommitCount(dir, branch, defaultBranch string) (int, error) {
+	args := []string{"rev-list", "--count", "--ignore-missing", branch, "--not", "--remotes"}
+	if defaultBranch != "" {
+		args = append(args, defaultBranch)
+	}
+	out, err := runInDir(dir, args...)
 	if err != nil {
-		return 0, fmt.Errorf("could not count commits on %q not in %q: %w", branch, target, err)
+		return 0, fmt.Errorf("could not count unpushed commits on %q: %w", branch, err)
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
-		return 0, fmt.Errorf("could not parse commit count for %q: %w", branch, err)
+		return 0, fmt.Errorf("could not parse unpushed commit count for %q: %w", branch, err)
 	}
 	return count, nil
 }

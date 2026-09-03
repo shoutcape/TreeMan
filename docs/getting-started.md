@@ -69,6 +69,6 @@ wtd
 TreeMan asks for confirmation and completes deletion before it returns. When you delete the current worktree, the `wtd` wrapper changes back to the main worktree.
 
 > [!warning]
-> TreeMan refuses to delete a dirty worktree or unmerged branch. Use `--force` only when you intend to remove changed or untracked files.
+> TreeMan refuses to delete a dirty worktree, or a branch whose commits are on no remote and not on the default branch. Use `--force` only when you intend to lose those changes or commits.
 
 Read [Workflows](guides/workflows.md) before you use direct deletion in a script.

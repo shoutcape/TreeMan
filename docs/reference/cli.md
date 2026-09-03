@@ -99,13 +99,19 @@ treeman delete --path <path> --branch <branch> [--yes] [--force]
 
 TreeMan verifies that `--path` names a linked worktree and that it has the supplied branch. It protects the main worktree and detected default branch. Deletion loads the worktree's durable database ownership record, removes the worktree and branch, marks the owned database pending, then drops it before the command returns. It never derives deletion authority from `.env`.
 
-`delete` does not check whether the branch is merged. You named the treebranch and confirmed it, and the worktree being clean is what protects work that is not recoverable. `treeman clean` is the merge-aware command: it deletes only what it can prove is merged, using forge evidence for squash and rebase merges that local history cannot show. Deciding merge status here would only duplicate that with a weaker local check, and would push you toward `--force` for the ordinary case of a squash-merged branch.
+`delete` does not check whether the branch is merged. You named the treebranch and confirmed it, and what protects work that is not recoverable is the worktree being clean and the branch's commits existing somewhere else. `treeman clean` is the merge-aware command: it deletes only what it can prove is merged, using forge evidence for squash and rebase merges that local history cannot show. Deciding merge status here would only duplicate that with a weaker local check.
 
-Unmerged commits are still reported. The confirmation prompt annotates the branch with how many of its commits the default branch cannot reach, because deleting a branch drops its reflog along with the worktree's, and those commits become unreachable. `--yes` skips the prompt and therefore that annotation.
+Every refusal is decided before the prompt, so a deletion that cannot proceed says so instead of asking you to confirm it first. What the prompt then reports is what `--force` waived and nothing else: the branch line is annotated with how many of its commits exist nowhere else, and a `Discards:` line names uncommitted and untracked changes. A deletion that loses nothing says nothing, because there is nothing left to warn about.
 
-The whole path is local. `delete` contacts no remote.
+Answering the prompt re-runs the checks against the state as it is now, and a branch whose tip moved while the prompt was open is refused rather than deleted under an answer given before that work existed. `--yes` skips the prompt, and with it both the annotation and the second pass.
 
-TreeMan refuses deletion when the worktree has staged, modified, or untracked files. Use `--force` only when you intend to remove those files -- it means that and nothing else. `--yes` skips the confirmation prompt but does not bypass safety checks.
+The path is local in every repository that can name its default branch locally, which is the ordinary case: Git writes `origin/HEAD` on clone and refreshes it on fetch. Only when that ref is unreadable does default-branch detection fall back to asking `origin` directly, and it falls back again to the main worktree's own branch when it cannot. Nothing else in `delete` contacts a remote -- the unreachable-commit count reads local refs only.
+
+TreeMan refuses deletion when the worktree has staged, modified, or untracked files. It also refuses when the branch holds commits that no remote-tracking ref and not the default branch can reach: deleting a branch drops its reflog along with the worktree's, so those commits have nothing left pointing at them. Committing work does not make it safe; pushing it does. Use `--force` only when you intend to lose that work -- it means that and nothing else. `--yes` skips the confirmation prompt but does not bypass safety checks.
+
+The count is `git rev-list --count <branch> --not --remotes <default branch>`, and every part of it is local. A branch pushed to any remote passes, whether or not it merged and whether or not it tracks that remote. A branch merged into the default branch passes, so a repository with no remote at all does not have to force every deletion. A squash-merged branch whose remote branch was already pruned does not pass, because nothing local can tell those commits from work that was never pushed -- run `treeman clean`, which has the forge evidence this check cannot get, or `--force` if you know the merge landed.
+
+`clean` is exempt: it deletes an exact commit it verified as merged with the forge, and that evidence outranks this check.
 
 A locked worktree is never removed, and `--force` does not override the lock: `git worktree lock` is how you mark a worktree whose directory is legitimately absent sometimes, such as one on removable media. Unlock it first.
 
