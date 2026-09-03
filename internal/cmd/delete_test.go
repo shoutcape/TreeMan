@@ -8,12 +8,33 @@ import (
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/spf13/cobra"
 
 	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// deleteForTest is the delete command's own flow with the prompt left out:
+// plan, then carry the plan out. Tests that exercise the prompt call
+// planDeletion and printDeleteConfirmation directly.
+func deleteForTest(t *testing.T, cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
+	t.Helper()
+	plan, err := planDeletion(dest, branch, mainRoot, deletionGuards{force: force}, "")
+	if err != nil {
+		return err
+	}
+	return runDeletionPlan(cmd, plan)
+}
+
+// deleteVerifiedWorktreeForTest gives a verified deletion its own cleanup
+// batch, the way `clean` gives it a shared one.
+func deleteVerifiedWorktreeForTest(t *testing.T, cmd *cobra.Command, dest, branch, mainRoot, expectedSHA string) error {
+	t.Helper()
+	_, err := deleteVerifiedWorktree(cmd, dest, branch, mainRoot, expectedSHA, newCleanupBatch())
+	return err
+}
 
 func TestPickerSelectionIndex_DuplicateDisplayRows(t *testing.T) {
 	display := ui.NewRenderer(io.Discard, terminal.Capabilities{}).WorktreeRow("/home/user/repo.feature-a", "feature/a")
@@ -54,7 +75,7 @@ func TestDeleteRemovesACleanPushedUnmergedTreebranch(t *testing.T) {
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work nobody merged")
 	gitTest(t, worktree, "push", "-u", "origin", "feature/unmerged")
 
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unmerged", repo, false))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unmerged", repo, false))
 
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/unmerged")
@@ -69,7 +90,7 @@ func TestDeleteRefusesCommitsThatExistNowhereElse(t *testing.T) {
 	chdirForTest(t, repo)
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work only this branch has")
 
-	err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unpushed", repo, false)
+	err := deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unpushed", repo, false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has 1 commit on no remote and not on main")
@@ -77,7 +98,7 @@ func TestDeleteRefusesCommitsThatExistNowhereElse(t *testing.T) {
 	assert.DirExists(t, worktree)
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/unpushed")
 
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unpushed", repo, true))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/unpushed", repo, true))
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/unpushed")
 }
@@ -92,7 +113,7 @@ func TestDeleteRefusesCommitsAddedAfterThePush(t *testing.T) {
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "after the push")
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "after that")
 
-	err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/ahead", repo, false)
+	err := deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/ahead", repo, false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has 2 commits on no remote and not on main")
@@ -109,7 +130,7 @@ func TestDeleteRemovesABranchMergedIntoALocalOnlyDefaultBranch(t *testing.T) {
 	gitTest(t, repo, "merge", "--no-ff", "-m", "merge feature/local-merge", "feature/local-merge")
 	gitTest(t, repo, "remote", "remove", "origin")
 
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/local-merge", repo, false))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/local-merge", repo, false))
 
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/local-merge")
@@ -124,7 +145,7 @@ func TestDeleteOfAVerifiedBranchIgnoresUnpushedCommits(t *testing.T) {
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "squashed upstream")
 	verifiedSHA := gitRevParse(t, repo, "refs/heads/feature/verified")
 
-	require.NoError(t, deleteVerifiedWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/verified", repo, false, verifiedSHA))
+	require.NoError(t, deleteVerifiedWorktreeForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/verified", repo, verifiedSHA))
 
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/verified")
@@ -135,13 +156,13 @@ func TestDeleteRefusesADirtyTreebranchWithoutForce(t *testing.T) {
 	chdirForTest(t, repo)
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch.txt"), []byte("unsaved"), 0o644))
 
-	err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/dirty", repo, false)
+	err := deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/dirty", repo, false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "uncommitted or untracked changes")
 	assert.DirExists(t, worktree)
 
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/dirty", repo, true))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/dirty", repo, true))
 	assert.NoDirExists(t, worktree)
 }
 
@@ -155,7 +176,7 @@ func TestDeleteTouchesNoRemote(t *testing.T) {
 	gitTest(t, repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
 
 	var stderr bytes.Buffer
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &stderr), worktree, "feature/offline", repo, false))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &stderr), worktree, "feature/offline", repo, false))
 
 	assert.NoDirExists(t, worktree)
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/offline")
@@ -170,7 +191,7 @@ func TestDeleteFallsBackToTheMainWorktreeBranchWithoutOrigin(t *testing.T) {
 	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
 	gitTest(t, repo, "remote", "rename", "origin", "upstream")
 
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/no-origin", repo, false))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/no-origin", repo, false))
 	assert.NoDirExists(t, worktree)
 
 }
@@ -197,49 +218,98 @@ func TestResolveDefaultBranchFallsBackToTheMainWorktree(t *testing.T) {
 	assert.Equal(t, "main", branch)
 }
 
-// The prompt is where unmerged work gets reported, since the deletion itself
-// no longer refuses it.
-func TestDeleteConfirmationReportsUnmergedCommits(t *testing.T) {
+// The prompt reports what --force waived, and nothing else: a plan that got
+// this far cannot be refused, so the only work still about to be destroyed is
+// the work the flag let through.
+func TestDeleteConfirmationReportsCommitsThatExistNowhereElse(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/counted")
 	chdirForTest(t, repo)
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "one")
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "two")
 
-	var stderr bytes.Buffer
-	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), repo, worktree, "feature/counted")
-
-	assert.Contains(t, stderr.String(), "(2 commits not on main)")
-}
-
-func TestDeleteConfirmationOmitsCountForAMergedBranch(t *testing.T) {
-	repo, worktree := createTestWorktree(t, "feature/merged")
-	chdirForTest(t, repo)
+	plan, err := planDeletion(worktree, "feature/counted", repo, deletionGuards{force: true}, "")
+	require.NoError(t, err)
 
 	var stderr bytes.Buffer
-	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), repo, worktree, "feature/merged")
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), plan)
 
-	assert.NotContains(t, stderr.String(), "not on")
+	assert.Contains(t, stderr.String(), "(2 commits on no remote and not on main)")
 }
 
-// A single commit reads as a commit, and the annotation never blocks the
-// prompt when the default branch cannot be worked out at all.
-func TestDeleteConfirmationSurvivesAnUnresolvableDefaultBranch(t *testing.T) {
-	repo, worktree := createTestWorktree(t, "feature/lonely")
+// A pushed branch loses nothing to the deletion, so the prompt says nothing
+// about its commits. The count the prompt reports is the count the guards
+// weighed -- there is no second estimate to disagree with.
+func TestDeleteConfirmationStaysQuietWhenNothingIsLost(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/pushed")
 	chdirForTest(t, repo)
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "one")
+	gitTest(t, worktree, "push", "-u", "origin", "feature/pushed")
 
-	var withDefault bytes.Buffer
-	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &withDefault), repo, worktree, "feature/lonely")
-	assert.Contains(t, withDefault.String(), "(1 commit not on main)")
+	plan, err := planDeletion(worktree, "feature/pushed", repo, deletionGuards{}, "")
+	require.NoError(t, err)
 
+	var stderr bytes.Buffer
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), plan)
+
+	assert.Contains(t, stderr.String(), "feature/pushed")
+	assert.NotContains(t, stderr.String(), "on no remote")
+	assert.NotContains(t, stderr.String(), "Discards")
+}
+
+// The other thing --force waives is named too, so a forced deletion says both
+// of the things it is about to destroy.
+func TestDeleteConfirmationNamesDiscardedChanges(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/forced-dirty")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "push", "-u", "origin", "feature/forced-dirty")
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch.txt"), []byte("unsaved"), 0o644))
+
+	plan, err := planDeletion(worktree, "feature/forced-dirty", repo, deletionGuards{force: true}, "")
+	require.NoError(t, err)
+
+	var stderr bytes.Buffer
+	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), plan)
+
+	assert.Contains(t, stderr.String(), "Discards: uncommitted and untracked changes")
+}
+
+// Every refusal now happens before the prompt, so a deletion that cannot
+// proceed says so instead of asking the user to confirm it first.
+func TestPlanRefusesAnUnresolvableDefaultBranchBeforeAnyPrompt(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/lonely")
+	chdirForTest(t, repo)
 	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
 	gitTest(t, repo, "remote", "remove", "origin")
 	gitTest(t, repo, "checkout", "--detach")
 
-	var stderr bytes.Buffer
-	printDeleteConfirmation(commandWithOutput(&bytes.Buffer{}, &stderr), repo, worktree, "feature/lonely")
-	assert.Contains(t, stderr.String(), "feature/lonely")
-	assert.NotContains(t, stderr.String(), "not on")
+	_, err := planDeletion(worktree, "feature/lonely", repo, deletionGuards{}, "")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default branch could not be detected")
+}
+
+// A prompt is human-sized. Work committed while it was open would otherwise be
+// deleted under an answer given before it existed -- unpushed, the guards
+// catch it on the way back through; pushed, the confirmed tip is what catches
+// it.
+func TestReplanRefusesABranchThatMovedWhileThePromptWasOpen(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/moved-at-prompt")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "push", "-u", "origin", "feature/moved-at-prompt")
+	plan, err := planDeletion(worktree, "feature/moved-at-prompt", repo, deletionGuards{}, "")
+	require.NoError(t, err)
+
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "committed while the prompt waited")
+	// Pushed, so the unreachable-commit guard has nothing to say and the only
+	// thing left to catch the change is the tip the user actually confirmed.
+	gitTest(t, worktree, "push", "origin", "feature/moved-at-prompt")
+
+	_, err = replanAfterPrompt(plan)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "moved while the prompt was open")
+	assert.DirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/moved-at-prompt")
 }
 
 // A lock is the user asking for this worktree to survive, including when its
@@ -250,7 +320,7 @@ func TestDeleteRefusesALockedWorktree(t *testing.T) {
 	gitTest(t, repo, "worktree", "lock", "--reason", "on a removable disk", worktree)
 
 	for _, force := range []bool{false, true} {
-		err := deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/locked", repo, force)
+		err := deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/locked", repo, force)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "is locked")
 		assert.Contains(t, err.Error(), "on a removable disk")
@@ -268,10 +338,28 @@ func TestDeleteCleansUpAWorktreeWhoseDirectoryIsGone(t *testing.T) {
 	chdirForTest(t, repo)
 	require.NoError(t, os.RemoveAll(worktree))
 
-	require.NoError(t, deleteWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished", repo, false))
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished", repo, false))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/vanished")
 	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature/vanished")
+}
+
+// A vanished directory takes the working tree with it, not the branch. The
+// commits are still the branch's, so the guard that protects them still runs.
+func TestDeleteOfAVanishedWorktreeStillRefusesUnreachableCommits(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/vanished-unpushed")
+	chdirForTest(t, repo)
+	gitTest(t, worktree, "commit", "--allow-empty", "-m", "work only this branch has")
+	require.NoError(t, os.RemoveAll(worktree))
+
+	err := deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished-unpushed", repo, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "on no remote and not on main")
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/vanished-unpushed")
+
+	require.NoError(t, deleteForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished-unpushed", repo, true))
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/vanished-unpushed")
 }
 
 // The stale path reaches the same compare-and-delete as a normal deletion, so
@@ -284,7 +372,7 @@ func TestDeleteOfAVanishedWorktreeStillRefusesAMovedBranch(t *testing.T) {
 	movedSHA := advanceMainForTest(t, repo)
 	gitTest(t, repo, "update-ref", "refs/heads/feature/vanished-moved", movedSHA)
 
-	err := deleteVerifiedWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished-moved", repo, false, expectedSHA)
+	err := deleteVerifiedWorktreeForTest(t, commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), worktree, "feature/vanished-moved", repo, expectedSHA)
 
 	require.Error(t, err)
 	assert.Equal(t, movedSHA, gitRevParse(t, repo, "refs/heads/feature/vanished-moved"))

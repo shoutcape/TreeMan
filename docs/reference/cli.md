@@ -101,9 +101,11 @@ TreeMan verifies that `--path` names a linked worktree and that it has the suppl
 
 `delete` does not check whether the branch is merged. You named the treebranch and confirmed it, and what protects work that is not recoverable is the worktree being clean and the branch's commits existing somewhere else. `treeman clean` is the merge-aware command: it deletes only what it can prove is merged, using forge evidence for squash and rebase merges that local history cannot show. Deciding merge status here would only duplicate that with a weaker local check.
 
-Unmerged commits are still reported. The confirmation prompt annotates the branch with how many of its commits the default branch cannot reach, because deleting a branch drops its reflog along with the worktree's, and those commits become unreachable. `--yes` skips the prompt and therefore that annotation.
+Every refusal is decided before the prompt, so a deletion that cannot proceed says so instead of asking you to confirm it first. What the prompt then reports is what `--force` waived and nothing else: the branch line is annotated with how many of its commits exist nowhere else, and a `Discards:` line names uncommitted and untracked changes. A deletion that loses nothing says nothing, because there is nothing left to warn about.
 
-The whole path is local. `delete` contacts no remote.
+Answering the prompt re-runs the checks against the state as it is now, and a branch whose tip moved while the prompt was open is refused rather than deleted under an answer given before that work existed. `--yes` skips the prompt, and with it both the annotation and the second pass.
+
+The path is local in every repository that can name its default branch locally, which is the ordinary case: Git writes `origin/HEAD` on clone and refreshes it on fetch. Only when that ref is unreadable does default-branch detection fall back to asking `origin` directly, and it falls back again to the main worktree's own branch when it cannot. Nothing else in `delete` contacts a remote -- the unreachable-commit count reads local refs only.
 
 TreeMan refuses deletion when the worktree has staged, modified, or untracked files. It also refuses when the branch holds commits that no remote-tracking ref and not the default branch can reach: deleting a branch drops its reflog along with the worktree's, so those commits have nothing left pointing at them. Committing work does not make it safe; pushing it does. Use `--force` only when you intend to lose that work -- it means that and nothing else. `--yes` skips the confirmation prompt but does not bypass safety checks.
 

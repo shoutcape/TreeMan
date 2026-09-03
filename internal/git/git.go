@@ -582,22 +582,6 @@ func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
 	return false, nil
 }
 
-// UnmergedCommitCount counts the commits on branch that target cannot reach.
-// It is reported at the confirmation prompt, never used as a gate: deleting a
-// branch drops its reflog along with the worktree's, so unmerged commits
-// become unreachable, and the moment to say so is while the user is deciding.
-func UnmergedCommitCount(dir, branch, target string) (int, error) {
-	out, err := runInDir(dir, "rev-list", "--count", target+".."+branch)
-	if err != nil {
-		return 0, fmt.Errorf("could not count commits on %q not in %q: %w", branch, target, err)
-	}
-	count, err := strconv.Atoi(strings.TrimSpace(out))
-	if err != nil {
-		return 0, fmt.Errorf("could not parse commit count for %q: %w", branch, err)
-	}
-	return count, nil
-}
-
 // UnpushedCommitCount counts the commits on branch that exist nowhere else.
 // A commit a remote-tracking ref reaches is on a remote, and one the default
 // branch reaches stays reachable after this branch goes; what is left lives on

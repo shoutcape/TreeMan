@@ -207,7 +207,7 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		deleteBranchAtSHA = func(string, string, string) error { events = append(events, "branch"); return assert.AnError }
 		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
 
-		err := deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-failure", repo, true, "")
+		err := deleteForTest(t, &cobra.Command{}, worktree, "feature/cleanup-failure", repo, true)
 
 		require.ErrorIs(t, err, assert.AnError)
 		assert.Equal(t, []string{"prepare", "branch"}, events)
@@ -227,7 +227,7 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		}
 		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
 
-		require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/cleanup-success", repo, true, ""))
+		require.NoError(t, deleteForTest(t, &cobra.Command{}, worktree, "feature/cleanup-success", repo, true))
 		assert.Equal(t, []string{"prepare", "branch", "flush"}, events)
 	})
 }
@@ -240,7 +240,7 @@ func TestDeleteWorktreeAtSHAAdvancesDatabaseCleanupLifecycle(t *testing.T) {
 	newCleanupBatch = func() databaseCleanupBatch { return &transitionCleanupSession{events: &events} }
 	t.Cleanup(func() { newCleanupBatch = restoreBatch })
 
-	require.NoError(t, deleteWorktreeAtSHA(&cobra.Command{}, worktree, "feature/database-lifecycle", repo, true, ""))
+	require.NoError(t, deleteForTest(t, &cobra.Command{}, worktree, "feature/database-lifecycle", repo, true))
 	assert.Equal(t, []string{"active", "pending_cleanup", "removed"}, events)
 }
 
@@ -251,7 +251,7 @@ func TestDeleteWorktreeAtSHARetainsWorktreeWhenBranchMovedBeforeRemoval(t *testi
 	gitTest(t, repo, "update-ref", "refs/heads/feature/verified", "refs/heads/main")
 	chdirForTest(t, repo)
 
-	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, true, expectedSHA)
+	err := deleteVerifiedWorktreeForTest(t, &cobra.Command{}, worktree, "feature/verified", repo, expectedSHA)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "moved after merge verification")
@@ -263,7 +263,7 @@ func TestDeleteVerifiedWorktreeRequiresExpectedSHA(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/verified")
 	chdirForTest(t, repo)
 
-	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, true, "")
+	err := deleteVerifiedWorktreeForTest(t, &cobra.Command{}, worktree, "feature/verified", repo, "")
 
 	require.EqualError(t, err, "cannot delete verified branch \"feature/verified\" without an expected SHA")
 	assert.DirExists(t, worktree)
@@ -288,7 +288,7 @@ func TestDeleteVerifiedWorktreePreservesBranchOnCompareAndDeleteMismatch(t *test
 		removeWorktree = originalRemove
 	})
 
-	err := deleteVerifiedWorktree(&cobra.Command{}, worktree, "feature/verified", repo, false, expectedSHA)
+	err := deleteVerifiedWorktreeForTest(t, &cobra.Command{}, worktree, "feature/verified", repo, expectedSHA)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Completed: removed worktree")
