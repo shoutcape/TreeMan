@@ -887,3 +887,62 @@ func LocalBranchNames() (map[string]struct{}, error) {
 	}
 	return names, nil
 }
+
+// CommitIsAncestorOfAny reports whether commit is reachable from any of heads.
+//
+// This is the opposite direction from AnyCommitIsAncestor, and it carries the
+// opposite meaning. A tip that descends from a merged head has commits the
+// merge never saw. A tip contained in a merged head has none: everything on it
+// went in with that head.
+//
+// Heads absent from the local object store are skipped rather than fetched.
+// Missing history is not evidence of a merge, so skipping can only withhold
+// cleanup, never authorize it.
+func CommitIsAncestorOfAny(commit string, heads []string) (bool, error) {
+	if commit == "" || len(heads) == 0 {
+		return false, nil
+	}
+	for _, head := range heads {
+		if head == "" || head == commit {
+			continue
+		}
+		if !commitExists(head) {
+			continue
+		}
+		contained, err := commitIsAncestor(commit, head)
+		if err != nil {
+			return false, err
+		}
+		if contained {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// commitExists reports whether the object is present locally and is a commit.
+func commitExists(commit string) bool {
+	return exec.Command("git", "cat-file", "-e", commit+"^{commit}").Run() == nil
+}
+
+// commitIsAncestor reports whether ancestor is reachable from descendant.
+// `git merge-base --is-ancestor` reports the answer through its exit status,
+// so exit code 1 is a negative result and every other failure is an error.
+func commitIsAncestor(ancestor, descendant string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if msg != "" {
+		return false, fmt.Errorf("could not compare %q with %q: %s", ancestor, descendant, msg)
+	}
+	return false, fmt.Errorf("could not compare %q with %q: %w", ancestor, descendant, err)
+}

@@ -212,6 +212,11 @@ func TestAcquireMarksPostMergeDescendantWithoutAuthorizingCleanup(t *testing.T) 
 	a.git.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
 	a.git.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
 	a.git.branchSHAs = func([]string) (map[string]string, error) { return map[string]string{"feature": "post-merge-sha"}, nil }
+	a.git.containedInAny = func(commit string, heads []string) (bool, error) {
+		assert.Equal(t, "post-merge-sha", commit)
+		assert.Equal(t, []string{"missing-sha", "merged-sha"}, heads)
+		return false, nil
+	}
 	a.git.anyAncestor = func(ancestors []string, descendant string) (bool, error) {
 		assert.Equal(t, []string{"missing-sha", "merged-sha"}, ancestors)
 		assert.Equal(t, "post-merge-sha", descendant)
@@ -224,6 +229,88 @@ func TestAcquireMarksPostMergeDescendantWithoutAuthorizingCleanup(t *testing.T) 
 	assert.Empty(t, warnings)
 	assert.Equal(t, MergeAncestor, snapshot.Candidates[0].Merge)
 	assert.Equal(t, []Candidate{{Branch: "feature", SHA: "post-merge-sha"}}, Merged(snapshot))
+	assert.Empty(t, Cleanable(snapshot))
+}
+
+func TestAcquireAuthorizesCleanupForTipContainedInMergedHead(t *testing.T) {
+	a := testAcquirer()
+	a.forge.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
+	a.forge.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
+	a.forge.lookPath = func(string) (string, error) { return "/bin/gh", nil }
+	a.forge.githubSnapshot = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{
+			Candidate:    candidates[0],
+			RemoteExists: false,
+			Verification: forge.SnapshotNotMerged,
+			MergedHeads:  []string{"merged-head-sha"},
+		}}}, nil
+	}
+	a.git.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
+	a.git.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
+	a.git.branchSHAs = func([]string) (map[string]string, error) { return map[string]string{"feature": "behind-sha"}, nil }
+	a.git.containedInAny = func(commit string, heads []string) (bool, error) {
+		assert.Equal(t, "behind-sha", commit)
+		assert.Equal(t, []string{"merged-head-sha"}, heads)
+		return true, nil
+	}
+
+	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "behind-sha"}})
+
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	assert.Equal(t, MergeContained, snapshot.Candidates[0].Merge)
+	assert.Equal(t, []Candidate{{Branch: "feature", SHA: "behind-sha"}}, Merged(snapshot))
+	assert.Equal(t, []Candidate{{Branch: "feature", SHA: "behind-sha"}}, Cleanable(snapshot))
+}
+
+func TestAcquireRetainsTipContainedInMergedHeadWhileRemoteBranchExists(t *testing.T) {
+	a := testAcquirer()
+	a.forge.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
+	a.forge.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
+	a.forge.lookPath = func(string) (string, error) { return "/bin/gh", nil }
+	a.forge.githubSnapshot = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{
+			Candidate:    candidates[0],
+			RemoteExists: true,
+			Verification: forge.SnapshotNotMerged,
+			MergedHeads:  []string{"merged-head-sha"},
+		}}}, nil
+	}
+	a.git.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
+	a.git.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
+	a.git.containedInAny = func(string, []string) (bool, error) { return true, nil }
+
+	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "behind-sha"}})
+
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	assert.Equal(t, MergeContained, snapshot.Candidates[0].Merge)
+	assert.Empty(t, Cleanable(snapshot))
+}
+
+func TestAcquireLeavesMergeUnknownWhenContainmentCheckFails(t *testing.T) {
+	a := testAcquirer()
+	a.forge.originRemoteURL = func() (string, error) { return "https://github.com/org/repo.git", nil }
+	a.forge.resolveForge = func(string) (forge.Type, string, string, error) { return forge.GitHub, "org/repo", "github.com", nil }
+	a.forge.lookPath = func(string) (string, error) { return "/bin/gh", nil }
+	a.forge.githubSnapshot = func(_ string, _ string, candidates []forge.SnapshotCandidate) (forge.GitHubSnapshot, error) {
+		return forge.GitHubSnapshot{DefaultSHA: "default", Branches: []forge.SnapshotBranch{{
+			Candidate:    candidates[0],
+			Verification: forge.SnapshotNotMerged,
+			MergedHeads:  []string{"merged-head-sha"},
+		}}}, nil
+	}
+	a.git.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
+	a.git.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
+	a.git.branchSHAs = func([]string) (map[string]string, error) { return map[string]string{"feature": "behind-sha"}, nil }
+	a.git.containedInAny = func(string, []string) (bool, error) { return false, errors.New("boom") }
+	a.forge.mergedPRHead = func(forge.Type, string, string, string, string, string) (bool, error) { return false, nil }
+
+	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "behind-sha"}})
+
+	require.NoError(t, err)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0].String(), "merge containment check for \"feature\" failed")
 	assert.Empty(t, Cleanable(snapshot))
 }
 
@@ -242,6 +329,7 @@ func TestAcquireRetainsReusedBranchWithoutMergedHeadAncestry(t *testing.T) {
 	a.git.remoteTrackingSHA = func(string) (string, bool, error) { return "default", true, nil }
 	a.git.mergedBranches = func(string) (map[string]string, error) { return map[string]string{}, nil }
 	a.git.branchSHAs = func([]string) (map[string]string, error) { return map[string]string{"feature": "new-sha"}, nil }
+	a.git.containedInAny = func(string, []string) (bool, error) { return false, nil }
 	a.git.anyAncestor = func([]string, string) (bool, error) { return false, nil }
 
 	snapshot, warnings, err := a.acquire("main", []Candidate{{Branch: "feature", SHA: "new-sha"}})
@@ -484,6 +572,7 @@ func testAcquirer() acquirer {
 			fetch:             func(string) error { panic("unexpected Fetch call") },
 			mergedBranches:    func(string) (map[string]string, error) { panic("unexpected MergedBranches call") },
 			anyAncestor:       func([]string, string) (bool, error) { panic("unexpected AnyCommitIsAncestor call") },
+			containedInAny:    func(string, []string) (bool, error) { panic("unexpected CommitIsAncestorOfAny call") },
 		},
 		forge: forgeAcquirer{
 			originRemoteURL: func() (string, error) { return "", errors.New("no forge") },

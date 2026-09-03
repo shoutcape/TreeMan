@@ -44,6 +44,7 @@ type gitAcquirer struct {
 	fetch             func(string) error
 	mergedBranches    func(string) (map[string]string, error)
 	anyAncestor       func([]string, string) (bool, error)
+	containedInAny    func(string, []string) (bool, error)
 }
 
 // forgeAcquirer resolves one applicable forge and exposes its optional
@@ -72,6 +73,7 @@ func productionAcquirer() acquirer {
 			fetch:             git.Fetch,
 			mergedBranches:    git.MergedBranches,
 			anyAncestor:       git.AnyCommitIsAncestor,
+			containedInAny:    git.CommitIsAncestorOfAny,
 		},
 		forge: forgeAcquirer{
 			originRemoteURL:   git.OriginRemoteURL,
@@ -253,11 +255,28 @@ func (a acquirer) acquire(defaultBranch string, candidates []Candidate) (Snapsho
 	return snapshot, deferredWarnings, nil
 }
 
+// markMergedDescendants refines negative forge evidence using local ancestry
+// against the merged pull-request heads for the same branch name.
+//
+// A tip can sit on either side of a merged head. Containment is checked first
+// because it is the stronger result: a tip reachable from a merged head has no
+// commit the merge left behind, so it can authorize cleanup, while a tip that
+// merely descends from one does carry unmerged commits and stays display-only.
 func (a acquirer) markMergedDescendants(snapshot *Snapshot, candidates []forgeCandidateObservation) []Diagnostic {
 	diagnostics := make([]Diagnostic, 0)
 	for index, candidate := range candidates {
 		evidence := &snapshot.Candidates[index]
 		if evidence.Merge != MergeNo || len(candidate.mergedHeads) == 0 {
+			continue
+		}
+		contained, err := a.git.containedInAny(evidence.Candidate.SHA, candidate.mergedHeads)
+		if err != nil {
+			evidence.Merge = MergeUnknown
+			diagnostics = append(diagnostics, Diagnostic{Operation: fmt.Sprintf("merge containment check for %q failed", evidence.Candidate.Branch), Err: err})
+			continue
+		}
+		if contained {
+			evidence.Merge = MergeContained
 			continue
 		}
 		ancestor, err := a.git.anyAncestor(candidate.mergedHeads, evidence.Candidate.SHA)

@@ -47,9 +47,9 @@ If you close the picker, TreeMan stops the requests that are still in progress.
 
 TreeMan excludes the detected default branch and existing local branches. It gets protected-branch data but does not use it to filter branches.
 
-For squash and rebase cleanup, TreeMan verifies the source branch name and exact head SHA.
+For squash and rebase cleanup, TreeMan verifies the source branch name and matches the local tip against merged head SHAs. The tip qualifies when it is that head, or when the merged head reaches it.
 
-GitHub reads the default ref, candidate branch presence, and merged pull-request heads in one fresh GraphQL snapshot per batch. TreeMan then refreshes the default branch and checks local ancestry. Ordinary worktree counts use one GraphQL request per classification. TreeMan shows a local tip as merged when it descends from a merged pull-request head. Only an exact head-SHA match can authorize cleanup. If TreeMan cannot read a complete snapshot, it records a warning and refreshes state with Git. It uses exact-SHA REST verification only for stable remote-gone non-ancestors.
+GitHub reads the default ref, candidate branch presence, and merged pull-request heads in one fresh GraphQL snapshot per batch. TreeMan then refreshes the default branch and checks local ancestry. Ordinary worktree counts use one GraphQL request per classification. TreeMan shows a local tip as merged when it descends from a merged pull-request head, but that case stays informational: such a tip carries commits the merge never saw. Cleanup needs the merge to account for every commit on the tip, which holds when the tip is the merged head, and when the merged head reaches the tip. The second case is what a local checkout looks like after its pull request was updated on the remote and never pulled again. If TreeMan cannot read a complete snapshot, it records a warning and refreshes state with Git. It uses exact-SHA REST verification only for stable remote-gone non-ancestors.
 
 GitHub snapshot candidates that require more data use exact-SHA per-branch REST verification. These candidates include fork PRs. GitLab batches remote-gone candidates in a paginated GraphQL merge-request query. It matches the source branch, target branch, and diff-head SHA exactly. If that query is unavailable, GitLab and other configurations use at most four requests at once.
 

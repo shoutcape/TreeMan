@@ -28,14 +28,21 @@ const (
 	AncestorYes
 )
 
-// MergeState records forge evidence for a branch. MergeYes is exact evidence
-// and can authorize cleanup; MergeAncestor is display-only historical evidence.
+// MergeState records forge evidence for a branch. MergeYes and MergeContained
+// are exact evidence and can authorize cleanup; MergeAncestor is display-only
+// historical evidence.
 type MergeState uint8
 
 const (
 	MergeUnknown MergeState = iota
 	MergeNo
 	MergeYes
+	// MergeContained means the tip is reachable from a merged pull-request
+	// head. The merge carried every commit on the tip, so nothing local is
+	// lost by removing it. This is how a branch looks when its pull request
+	// was updated on the remote -- typically by merging the default branch
+	// into it -- and the local checkout never pulled that final head.
+	MergeContained
 	MergeAncestor
 )
 
