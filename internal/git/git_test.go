@@ -276,6 +276,60 @@ func TestAnyCommitIsAncestor(t *testing.T) {
 	assert.False(t, ancestor)
 }
 
+// CommitIsAncestorOfAny answers the question a squash-merged pull request
+// leaves behind: was the local tip already carried in by a merged head, even
+// though the tip never became that head?
+func TestCommitIsAncestorOfAny(t *testing.T) {
+	repo := createGitTestRepo(t)
+	base := gitTestOutput(t, repo, "rev-parse", "HEAD")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "next")
+	tip := gitTestOutput(t, repo, "rev-parse", "HEAD")
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	contained, err := CommitIsAncestorOfAny(base, []string{"missing", tip})
+	require.NoError(t, err)
+	assert.True(t, contained)
+
+	contained, err = CommitIsAncestorOfAny(tip, []string{base})
+	require.NoError(t, err)
+	assert.False(t, contained)
+
+	contained, err = CommitIsAncestorOfAny(base, []string{"missing"})
+	require.NoError(t, err)
+	assert.False(t, contained)
+
+	contained, err = CommitIsAncestorOfAny(base, []string{base})
+	require.NoError(t, err)
+	assert.False(t, contained)
+
+	contained, err = CommitIsAncestorOfAny(base, nil)
+	require.NoError(t, err)
+	assert.False(t, contained)
+}
+
+// A tip on a branch that shares no history with the merged head is not
+// contained by it, and the unrelated histories must not read as an error.
+func TestCommitIsAncestorOfAnyRejectsUnrelatedHistory(t *testing.T) {
+	repo := createGitTestRepo(t)
+	base := gitTestOutput(t, repo, "rev-parse", "HEAD")
+	gitTest(t, repo, "checkout", "--orphan", "unrelated")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "unrelated root")
+	unrelated := gitTestOutput(t, repo, "rev-parse", "HEAD")
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	contained, err := CommitIsAncestorOfAny(base, []string{unrelated})
+	require.NoError(t, err)
+	assert.False(t, contained)
+}
+
 // UnpushedCommitCount counts what a deletion would make unreachable: commits
 // no remote-tracking ref and not the default branch can reach.
 func TestUnpushedCommitCount(t *testing.T) {
