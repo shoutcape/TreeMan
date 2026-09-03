@@ -14,9 +14,8 @@ import (
 )
 
 var (
-	removeWorktree    = git.WorktreeRemove
-	deleteBranchAtSHA = git.DeleteBranchAtSHA
-	newCleanupBatch   = func() databaseCleanupBatch { return database.NewCleanupBatch() }
+	removeWorktreeAndBranch = git.RemoveWorktreeAndBranch
+	newCleanupBatch         = func() databaseCleanupBatch { return database.NewCleanupBatch() }
 )
 
 type databaseCleanupPreparer interface {
@@ -44,6 +43,7 @@ type databaseCleanupOutcome struct {
 type deleteWorktreeOutcome struct {
 	database        databaseCleanupOutcome
 	currentWorktree bool
+	cleanupPending  bool
 }
 
 func newDeleteCmd() *cobra.Command {
@@ -349,6 +349,9 @@ func runDeletionPlan(cmd *cobra.Command, plan deletionPlan) error {
 
 func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) error {
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
+	if outcome.cleanupPending {
+		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "File cleanup continues in the background."))
+	}
 	if !outcome.currentWorktree {
 		return nil
 	}
@@ -390,12 +393,20 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 		cleanupOutcome.status = databaseCleanupPending
 		cleanupOutcome.database = databaseName
 	}
-	if err := removeWorktree(plan.mainRoot, entry.Path, plan.guards.force); err != nil {
+	// TODO(phase-5): planDeletion and RemoveWorktreeAndBranch duplicate the
+	// main-worktree, branch-match, locked and SHA-compare refusals verbatim,
+	// error strings included. One shared validator, called at plan time for
+	// the message and under the lock for the guarantee.
+	removal, err := removeWorktreeAndBranch(plan.mainRoot, entry.Path, entry.Branch, plan.branchSHA, plan.guards.force)
+	if removal.CleanupError != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("pending file cleanup needs retry: %v", removal.CleanupError)))
+	}
+	if err != nil && !removal.WorktreeUnregistered {
 		return deleteWorktreeOutcome{}, deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))
 	}
-	if err := deleteBranchAtSHA(plan.mainRoot, entry.Branch, plan.branchSHA); err != nil {
+	if err != nil && !removal.BranchDeleted {
 		return deleteWorktreeOutcome{}, deleteWorktreeFailure(
-			fmt.Errorf("branch %q was preserved after deletion checks: %w", entry.Branch, err),
+			fmt.Errorf("branch %q was preserved after worktree removal: %w", entry.Branch, err),
 			fmt.Sprintf("removed worktree %q", entry.Path),
 			fmt.Sprintf("branch %q", entry.Branch),
 			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
@@ -407,7 +418,7 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 			cleanupOutcome.status = databaseCleanupUnavailable
 		}
 	}
-	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path)}, nil
+	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path), cleanupPending: removal.CleanupPending}, nil
 }
 
 func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {

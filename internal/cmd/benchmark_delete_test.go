@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -123,16 +124,16 @@ func TestDeleteBenchmarkCleansUpDeletionFailure(t *testing.T) {
 	run, err := runner(&cobra.Command{})
 	require.NoError(t, err)
 
-	previousRemove := removeWorktree
+	previousRemove := removeWorktreeAndBranch
 	failedOnce := false
-	removeWorktree = func(mainRoot, path string, force bool) error {
+	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (git.RemoveWorktreeResult, error) {
 		if !failedOnce {
 			failedOnce = true
-			return errors.New("injected removal failure")
+			return git.RemoveWorktreeResult{}, errors.New("injected removal failure")
 		}
-		return previousRemove(mainRoot, path, force)
+		return previousRemove(mainRoot, path, branch, expectedSHA, force)
 	}
-	t.Cleanup(func() { removeWorktree = previousRemove })
+	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
 
 	measurement, runErr := run()
 	require.ErrorContains(t, runErr, "injected removal failure")

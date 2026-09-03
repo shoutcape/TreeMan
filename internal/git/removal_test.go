@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,16 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// captureStagedRemoval replaces the detached unlink with a synchronous one and
-// records what it was handed, so tests can assert on both the staging and the
-// deletion without racing a background process.
+// captureStagedRemoval makes cleanup synchronous so filesystem assertions do
+// not race the detached process.
 func captureStagedRemoval(t *testing.T) *[]string {
 	t.Helper()
 	staged := []string{}
 	previous := detachRemoval
-	detachRemoval = func(path string) error {
-		staged = append(staged, path)
-		return os.RemoveAll(path)
+	detachRemoval = func(_ string, job string) error {
+		staged = append(staged, filepath.Join(job, stagedWorktreeName))
+		return os.RemoveAll(job)
 	}
 	t.Cleanup(func() { detachRemoval = previous })
 	return &staged
@@ -32,40 +32,51 @@ func addTestWorktree(t *testing.T, repo, branch string) string {
 	return path
 }
 
-func TestWorktreeRemoveStagesThroughTheTrashDirectory(t *testing.T) {
+func branchSHAForRemoval(t *testing.T, repo, branch string) string {
+	t.Helper()
+	return strings.TrimSpace(gitTestOutput(t, repo, "rev-parse", "refs/heads/"+branch))
+}
+
+func TestRemoveWorktreeAndBranchStagesThroughTheTrashDirectory(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("x"), 0o644))
 	staged := captureStagedRemoval(t)
 
-	require.NoError(t, WorktreeRemove(repo, worktree, false))
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
 
-	require.Len(t, *staged, 1, "removal should have gone through the trash directory")
+	require.NoError(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	assert.False(t, result.CleanupPending)
+	require.Len(t, *staged, 1)
 	assert.Contains(t, (*staged)[0], filepath.Join(".git", "treeman", "trash"))
-	assert.NoDirExists(t, worktree)
-	assert.NoDirExists(t, (*staged)[0])
+	assert.NoFileExists(t, worktree)
 	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature")
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
 }
 
-// A worktree whose directory is already gone cannot be renamed, so it takes
-// the direct path and still unregisters.
-func TestWorktreeRemoveFallsBackWhenThereIsNothingToStage(t *testing.T) {
+func TestRemoveWorktreeAndBranchUnregistersAMissingDirectory(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
 	require.NoError(t, os.RemoveAll(worktree))
 	staged := captureStagedRemoval(t)
 
-	require.NoError(t, WorktreeRemove(repo, worktree, false))
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
 
-	assert.Empty(t, *staged, "a missing directory has nothing to stage")
+	require.NoError(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	assert.Empty(t, *staged)
 	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature")
 }
 
-// The rename is what makes removal fast, so it must not be waiting on the
-// unlink. Staging a large tree stays far cheaper than deleting it.
-func TestWorktreeRemoveReturnsBeforeUnlinking(t *testing.T) {
+func TestRemoveWorktreeAndBranchReturnsWhileCleanupIsPending(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
 	deps := filepath.Join(worktree, "node_modules")
 	for i := 0; i < 40; i++ {
 		pkg := filepath.Join(deps, "pkg", string(rune('a'+i%26)), string(rune('a'+i/26)))
@@ -75,96 +86,255 @@ func TestWorktreeRemoveReturnsBeforeUnlinking(t *testing.T) {
 		}
 	}
 
-	var stagedPath string
+	var cleanupJob string
 	previous := detachRemoval
-	detachRemoval = func(path string) error { stagedPath = path; return nil }
+	detachRemoval = func(_ string, job string) error { cleanupJob = job; return nil }
 	t.Cleanup(func() {
 		detachRemoval = previous
-		_ = os.RemoveAll(stagedPath)
+		_ = os.RemoveAll(cleanupJob)
 	})
 
 	start := time.Now()
-	require.NoError(t, WorktreeRemove(repo, worktree, false))
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
 	elapsed := time.Since(start)
 
-	assert.NoDirExists(t, worktree, "the workspace is clear as soon as the call returns")
-	assert.DirExists(t, stagedPath, "the files still exist, staged out of the way")
-	assert.Less(t, elapsed, 2*time.Second, "removal should not be waiting on the unlink")
+	require.NoError(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	assert.True(t, result.CleanupPending)
+	assert.NoDirExists(t, worktree)
+	assert.DirExists(t, cleanupJob)
+	assert.Less(t, elapsed, 2*time.Second)
 }
 
-func TestEnsureHoldsWorktreeAcceptsItsOwnWorktrees(t *testing.T) {
+func TestRemoveWorktreeAndBranchRestoresDirtyWorktreeWithoutForce(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("unsaved"), 0o644))
+	captureStagedRemoval(t)
 
-	require.NoError(t, EnsureHoldsWorktree(repo, worktree))
-	require.NoError(t, EnsureHoldsWorktree(repo, repo), "the main worktree is its own common directory")
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uncommitted or untracked changes")
+	assert.False(t, result.WorktreeUnregistered)
+	assert.False(t, result.BranchDeleted)
+	assert.FileExists(t, filepath.Join(worktree, "scratch"))
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
 }
 
-// The check that Git would have made itself. An unrelated clone sitting at a
-// stale registration's path holds work of its own, and renaming it away would
-// be unrecoverable.
-func TestEnsureHoldsWorktreeRefusesAForeignOccupant(t *testing.T) {
+func TestRemoveWorktreeAndBranchRestoresAForeignOccupant(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
-
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
 	require.NoError(t, os.RemoveAll(worktree))
 	foreign := createGitTestRepo(t)
 	require.NoError(t, os.Rename(foreign, worktree))
+	captureStagedRemoval(t)
 
-	err := EnsureHoldsWorktree(repo, worktree)
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "different repository")
+	assert.Contains(t, err.Error(), "not the expected linked-worktree file")
+	assert.False(t, result.WorktreeUnregistered)
+	assert.DirExists(t, worktree)
+	assert.FileExists(t, filepath.Join(worktree, ".git", "HEAD"))
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
 }
 
-// A sibling worktree of the same repository is the case a repository-level
-// ownership test would wrongly accept: its Git directory lives under the same
-// common directory, and only the registration's own record rules it out.
-func TestEnsureHoldsWorktreeRefusesASiblingMovedOntoThePath(t *testing.T) {
+func TestRemoveWorktreeAndBranchRestoresASiblingMovedOntoThePath(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
 	sibling := addTestWorktree(t, repo, "sibling")
-
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
 	require.NoError(t, os.RemoveAll(worktree))
 	require.NoError(t, os.Rename(sibling, worktree))
+	captureStagedRemoval(t)
 
-	err := EnsureHoldsWorktree(repo, worktree)
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "records")
+	assert.Contains(t, err.Error(), "different registration")
+	assert.False(t, result.WorktreeUnregistered)
+	assert.DirExists(t, worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
 }
 
-func TestEnsureHoldsWorktreeRefusesADirectoryThatIsNotAWorktree(t *testing.T) {
+func TestRemoveWorktreeAndBranchRejectsMainRepositoryMetadataAtLinkedPath(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
-
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
 	require.NoError(t, os.RemoveAll(worktree))
-	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(t, os.Mkdir(worktree, 0o755))
+	require.NoError(t, os.Symlink(commonDir, filepath.Join(worktree, ".git")))
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "unrelated"), []byte("keep"), 0o644))
+	captureStagedRemoval(t)
 
-	err := EnsureHoldsWorktree(repo, worktree)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no longer looks like a Git worktree")
-}
-
-// The argument to an unsupervised recursive delete is checked against the
-// directory this process stages into, not trusted from the caller.
-func TestDetachRemoveAllRefusesAPathOutsideTheTrashDirectory(t *testing.T) {
-	outside := t.TempDir()
-
-	err := detachRemoveAll(filepath.Join(outside, "something"))
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not a staged worktree")
-	assert.DirExists(t, outside)
+	assert.Contains(t, err.Error(), ".git entry is not the expected linked-worktree file")
+	assert.False(t, result.WorktreeUnregistered)
+	assert.FileExists(t, filepath.Join(worktree, "unrelated"))
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
 }
 
-func TestWorktreeDirectoryMissing(t *testing.T) {
-	dir := t.TempDir()
-	assert.False(t, WorktreeDirectoryMissing(dir))
-	assert.True(t, WorktreeDirectoryMissing(filepath.Join(dir, "absent")))
+func TestDetachRemoveAllRefusesMatchingDirectoryNamesOutsideActualTrash(t *testing.T) {
+	actualTrash := filepath.Join(t.TempDir(), "repo", "treeman", "trash")
+	outsideJob := filepath.Join(t.TempDir(), "treeman", "trash", "job")
+	require.NoError(t, os.MkdirAll(actualTrash, 0o700))
+	require.NoError(t, os.MkdirAll(outsideJob, 0o700))
 
-	file := filepath.Join(dir, "file")
-	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
-	assert.True(t, WorktreeDirectoryMissing(file), "a file is not a worktree directory")
+	err := detachRemoveAll(actualTrash, outsideJob)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not contained in trash root")
+	assert.DirExists(t, outsideJob)
+}
+
+func TestDetachRemoveAllCompletesQueuedJob(t *testing.T) {
+	trashRoot := filepath.Join(t.TempDir(), "treeman", "trash")
+	job := filepath.Join(trashRoot, "job")
+	require.NoError(t, os.MkdirAll(job, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(job, "payload"), []byte("data"), 0o600))
+
+	require.NoError(t, detachRemoveAll(trashRoot, job))
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(job)
+		return os.IsNotExist(err)
+	}, 2*time.Second, 10*time.Millisecond)
+	assert.NoFileExists(t, cleanupErrorPath(trashRoot, job))
+}
+
+func TestRemoveWorktreeAndBranchRestoresAFileAtTheRegisteredPath(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
+	require.NoError(t, os.RemoveAll(worktree))
+	require.NoError(t, os.WriteFile(worktree, []byte("unrelated data"), 0o644))
+	captureStagedRemoval(t)
+
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+
+	require.Error(t, err)
+	assert.False(t, result.WorktreeUnregistered)
+	assert.False(t, result.BranchDeleted)
+	contents, readErr := os.ReadFile(worktree)
+	require.NoError(t, readErr)
+	assert.Equal(t, "unrelated data", string(contents))
+	assert.Contains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), worktree)
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
+}
+
+func TestRemoveWorktreeAndBranchQueuesCleanupAfterDetachFailure(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
+	previous := detachRemoval
+	detachRemoval = func(string, string) error { return assert.AnError }
+	t.Cleanup(func() { detachRemoval = previous })
+
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+
+	require.NoError(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	assert.True(t, result.CleanupPending)
+	assert.ErrorIs(t, result.CleanupError, assert.AnError)
+}
+
+func TestRemoveWorktreeAndBranchRetriesQueuedCleanup(t *testing.T) {
+	repo := createGitTestRepo(t)
+	first := addTestWorktree(t, repo, "first")
+	firstSHA := branchSHAForRemoval(t, repo, "first")
+	previous := detachRemoval
+	detachRemoval = func(string, string) error { return assert.AnError }
+	t.Cleanup(func() { detachRemoval = previous })
+
+	firstResult, err := RemoveWorktreeAndBranch(repo, first, "first", firstSHA, false)
+	require.NoError(t, err)
+	require.True(t, firstResult.CleanupPending)
+
+	second := addTestWorktree(t, repo, "second")
+	secondSHA := branchSHAForRemoval(t, repo, "second")
+	var cleaned []string
+	detachRemoval = func(_ string, job string) error {
+		cleaned = append(cleaned, job)
+		return os.RemoveAll(job)
+	}
+
+	secondResult, err := RemoveWorktreeAndBranch(repo, second, "second", secondSHA, false)
+
+	require.NoError(t, err)
+	assert.False(t, secondResult.CleanupPending)
+	assert.Len(t, cleaned, 2, "the queued job and current removal should both be cleaned")
+}
+
+func TestRemoveWorktreeAndBranchReportsDurableCleanupDiagnostic(t *testing.T) {
+	repo := createGitTestRepo(t)
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+	job := filepath.Join(trashRoot, "leftover")
+	require.NoError(t, os.MkdirAll(job, 0o700))
+	require.NoError(t, os.WriteFile(cleanupErrorPath(trashRoot, job), []byte("permission denied"), 0o600))
+
+	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
+	captureStagedRemoval(t)
+
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+
+	require.NoError(t, err)
+	require.Error(t, result.CleanupError)
+	assert.Contains(t, result.CleanupError.Error(), "previous file cleanup")
+	assert.Contains(t, result.CleanupError.Error(), "permission denied")
+	assert.NoDirExists(t, job)
+}
+
+func TestRemoveWorktreeAndBranchReportsUnregisterBeforeCompareDeleteFailure(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	expectedSHA := branchSHAForRemoval(t, repo, "feature")
+	gitTest(t, repo, "commit", "--allow-empty", "-m", "advance main")
+	mainSHA := branchSHAForRemoval(t, repo, "main")
+	previous := detachRemoval
+	detachRemoval = func(_ string, job string) error {
+		require.NoError(t, os.RemoveAll(job))
+		gitTest(t, repo, "update-ref", "refs/heads/feature", mainSHA)
+		return nil
+	}
+	t.Cleanup(func() { detachRemoval = previous })
+
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+
+	require.Error(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.False(t, result.BranchDeleted)
+	assert.False(t, result.CleanupPending)
+	assert.Equal(t, mainSHA, branchSHAForRemoval(t, repo, "feature"))
+}
+
+func TestRestoreStagedWorktreeDoesNotReplaceARecreatedPath(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "worktree")
+	job := filepath.Join(root, "trash", "job")
+	stagedPath := filepath.Join(job, stagedWorktreeName)
+	require.NoError(t, os.MkdirAll(job, 0o700))
+	require.NoError(t, os.WriteFile(stagedPath, []byte("captured"), 0o600))
+	require.NoError(t, os.WriteFile(original, []byte("replacement"), 0o600))
+
+	err := restoreStagedWorktree(original, &stagedWorktree{job: job, path: stagedPath}, assert.AnError)
+
+	require.Error(t, err)
+	replacement, readErr := os.ReadFile(original)
+	require.NoError(t, readErr)
+	assert.Equal(t, "replacement", string(replacement))
+	captured, readErr := os.ReadFile(stagedPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "captured", string(captured))
 }
