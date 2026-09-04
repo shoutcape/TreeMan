@@ -20,6 +20,8 @@ sequenceDiagram
     Shell->>Shell: cd to path
 ```
 
+With `--exec`, TreeMan replaces its own process with the command after setup. It prints no path, so the shell wrapper does not change directory.
+
 ## Remote Branch and Review
 
 ```mermaid
@@ -41,7 +43,9 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     A[Read Git worktrees] --> B[Select with fzf]
-    B --> C[Print path to stdout]
+    B --> C{--exec given?}
+    C -->|No| D[Print path to stdout]
+    C -->|Yes| E[Replace process with command]
 ```
 
 ## Delete

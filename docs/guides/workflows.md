@@ -36,6 +36,16 @@ cd "$path"
 
 Successful `create` and `branch` commands print their worktree path to stdout.
 
+## Start a Command in the Worktree
+
+Use `-x <command>` when you want to work in the new worktree immediately.
+
+```bash
+wt feature/login -x claude
+```
+
+TreeMan replaces itself with the command after setup. The command owns the terminal and prints no worktree path. Read the [Command Reference](../reference/cli.md#run-a-command-in-the-worktree).
+
 ## Delete From a Tool
 
 Use direct deletion only when the tool provides a trusted worktree path and branch.

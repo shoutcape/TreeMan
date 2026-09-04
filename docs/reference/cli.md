@@ -4,6 +4,8 @@ Run `treeman --help` for current command help. TreeMan sends status and warnings
 
 Shell integration uses stdout destinations to change the current interactive shell directory. Native commands never change the caller directory.
 
+`create`, `branch`, `review`, and `switch` accept `--exec` (`-x`). Read [Run a command in the worktree](#run-a-command-in-the-worktree).
+
 ## Commands
 
 | Native command | Shell wrapper | Purpose |
@@ -22,10 +24,35 @@ Shell integration uses stdout destinations to change the current interactive she
 | `treeman theme` | None | Select a terminal color theme |
 | `treeman version` | None | Print build data |
 
+## Run a Command in the Worktree
+
+`create`, `branch`, `review`, and `switch` accept `--exec <command>`, with short form `-x <command>`.
+
+TreeMan runs the command in the ready worktree. The system shell runs the command string, so quoting, arguments, and operators work as they do in `.treeman.toml` hooks.
+
+```text
+treeman create feature/login -x claude
+treeman review 42 -x nvim
+treeman switch feature/login -x lazygit
+```
+
+`--exec` replaces the TreeMan process with the command. Therefore:
+
+- The command owns the terminal and can be interactive.
+- The command reports its own exit status to your shell.
+- TreeMan does not print the worktree path. Status output before the handover stays on stderr.
+- Shell integration does not change your directory. When the command exits, your shell stays where it was.
+
+A post-create hook is not an alternative. TreeMan runs hooks to completion and captures their output, which an interactive command cannot use.
+
+`switch --exec` runs the command in the selected worktree, also when that worktree is the current directory.
+
+TreeMan fails before it creates a worktree when `--exec` has no command.
+
 ## `create`
 
 ```text
-treeman create <branch-name> [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman create <branch-name> [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
 Create a local branch from the fetched default branch. TreeMan reads `refs/remotes/origin/HEAD` to detect that branch. If that ref is absent, TreeMan looks for `main` or `master` on `origin`. The command fails when it finds neither name.
@@ -40,6 +67,8 @@ Dependency installation supports `pnpm-lock.yaml`, `yarn.lock`, `package-lock.js
 
 Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists requested skips in the final summary.
 
+Use `-x <command>` to run a command in the new worktree instead of printing its path. Read [Run a command in the worktree](#run-a-command-in-the-worktree).
+
 ## `preflight`
 
 ```text
@@ -51,7 +80,7 @@ Report whether environment file copy, dependency installation, database setup, a
 ## `branch`
 
 ```text
-treeman branch [query] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman branch [query] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
 `branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
@@ -62,10 +91,12 @@ TreeMan excludes the default branch and local branches. It does not exclude prot
 
 After selection, TreeMan fetches the branch, creates a local branch, and tries to set upstream tracking. It then runs the create post-actions.
 
+Use `-x <command>` to run a command in the new worktree instead of printing its path. Read [Run a command in the worktree](#run-a-command-in-the-worktree).
+
 ## `review`
 
 ```text
-treeman review [pr-number] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman review [pr-number] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
 ```
 
 `review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
@@ -74,10 +105,12 @@ Give a positive numeric PR or MR number. Without a number, TreeMan uses `fzf` to
 
 TreeMan fetches the review head into a new worktree. It runs environment, database, dependency, and hook actions.
 
+Use `-x <command>` to run a command in the review worktree instead of printing its path. Read [Run a command in the worktree](#run-a-command-in-the-worktree).
+
 ## `switch`
 
 ```text
-treeman switch [query]
+treeman switch [query] [-x <command>]
 ```
 
 `switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
@@ -85,6 +118,8 @@ treeman switch [query]
 A path query resolves its symlinks before the comparison. Therefore a symlinked path selects the same worktree as its real path.
 
 It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. A symlinked current directory counts as the current worktree. Shell integration changes directory when it receives a path.
+
+With `-x`, the command runs in the selected worktree and no path is printed. Read [Run a command in the worktree](#run-a-command-in-the-worktree).
 
 ## `delete`
 

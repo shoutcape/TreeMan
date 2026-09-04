@@ -97,7 +97,7 @@ func TestRunSwitch_SymlinkedQueryMatchesWorktree(t *testing.T) {
 	pathWithOnlyGit(t)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), link))
+	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), link, worktreeLaunchOptions{}))
 
 	assert.Equal(t, worktree+"\n", stdout.String())
 }
@@ -110,7 +110,7 @@ func TestRunSwitch_SymlinkedCurrentWorktreeReportsAlreadyThere(t *testing.T) {
 	pathWithOnlyGit(t)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), "feature/symlink"))
+	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), "feature/symlink", worktreeLaunchOptions{}))
 
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "Already in this worktree.")

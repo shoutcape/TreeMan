@@ -46,7 +46,7 @@ func RunPostCreate(dir string, cmds []string, outputs ...io.Writer) []RunResult 
 
 // runShellCommand executes a single command string via the system shell.
 func runShellCommand(dir, command string, output io.Writer) error {
-	shell, flag := shellCmd()
+	shell, flag := Shell()
 
 	cmd := exec.Command(shell, flag, command)
 	cmd.Dir = dir
@@ -59,8 +59,9 @@ func runShellCommand(dir, command string, output io.Writer) error {
 	return nil
 }
 
-// shellCmd returns the shell binary and flag for running a command string.
-func shellCmd() (string, string) {
+// Shell returns the shell binary and flag that run a command string. Every
+// TreeMan feature that runs a user command string goes through this choice.
+func Shell() (string, string) {
 	if runtime.GOOS == "windows" {
 		return "cmd", "/C"
 	}

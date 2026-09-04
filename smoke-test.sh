@@ -184,6 +184,12 @@ if [[ "${1:-}" == "create" && "${2:-}" == "fish-test" ]]; then
   printf '%s\n' "$FISH_WRAPPER_TARGET"
   exit 0
 fi
+# Stand in for --exec: replace this process with the command, print no path.
+if [[ "${1:-}" == "create" && "${2:-}" == "fish-exec" && "${3:-}" == "-x" ]]; then
+  cd "$FISH_WRAPPER_TARGET" || exit 1
+  : > fish-exec-ran
+  exec sh -c "${4:-}"
+fi
 exit 1
 EOF
 chmod +x "$FISH_MOCK_BIN/treeman"
@@ -191,8 +197,15 @@ if command -v fish >/dev/null 2>&1; then
   FISH_WRAPPER_TARGET="$FISH_WRAPPER_TARGET" fish -c '
     source "$argv[1]"
     set -gx PATH "$argv[3]" $PATH
+    set -l origin (pwd)
     wt fish-test "$argv[2]"
-    test (pwd) = "$argv[2]"
+    test (pwd) = "$argv[2]"; or exit 1
+    cd "$origin"
+    # --exec owns the terminal, so the wrapper must not capture its output. A
+    # captured run would read this path and change directory into it.
+    wt fish-exec -x "echo $argv[2]"
+    test (pwd) = "$origin"; or exit 1
+    test -f "$argv[2]/fish-exec-ran"
   ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET" "$FISH_MOCK_BIN"
 else
   echo "warning: Fish is not installed. Skipping Fish wrapper runtime test."
@@ -815,6 +828,30 @@ git push origin main >/dev/null
 wt feature/yarn-smoke --skip-env --skip-database --skip-hooks
 assert_exists "$YARN_WORKTREE_REPO"
 assert_file_contains "$COREPACK_CALLS" "yarn install"
+
+# ---------------------------------------------------------------------------
+# --exec -- the command runs in the worktree and the shell stays where it was
+# ---------------------------------------------------------------------------
+
+echo "==> worktree exec (-x)"
+
+cd "$MAIN_REPO"
+EXEC_WT="$MAIN_REPO/.worktrees/feature-exec-smoke"
+wt feature/exec-smoke --skip-env --skip-database --skip-deps --skip-hooks -x 'pwd > exec-marker; pwd'
+assert_exists "$EXEC_WT/exec-marker"
+assert_file_contains "$EXEC_WT/exec-marker" "$EXEC_WT"
+assert_eq "shell directory after wt -x" "$MAIN_REPO" "$(pwd)"
+
+# switch selects by exact branch name, so no picker is involved.
+wts feature/exec-smoke -x 'pwd > switch-exec-marker; pwd'
+assert_file_contains "$EXEC_WT/switch-exec-marker" "$EXEC_WT"
+assert_eq "shell directory after wts -x" "$MAIN_REPO" "$(pwd)"
+
+# An --exec run that names no command fails before it creates anything.
+if wt feature/exec-empty -x '' 2>/dev/null; then
+  fail "Expected an empty --exec to fail"
+fi
+assert_missing "$MAIN_REPO/.worktrees/feature-exec-empty"
 
 # ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)

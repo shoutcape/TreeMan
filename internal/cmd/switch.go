@@ -13,7 +13,8 @@ import (
 )
 
 func newSwitchCmd() *cobra.Command {
-	return &cobra.Command{
+	var launchOptions worktreeLaunchOptions
+	cmd := &cobra.Command{
 		Use:   "switch [query]",
 		Short: "Switch between worktrees via fzf",
 		Long: `Open an interactive fzf picker listing all worktrees.
@@ -21,20 +22,27 @@ func newSwitchCmd() *cobra.Command {
 An optional query pre-filters the list.
 
 The selected worktree path is printed to stdout so that a shell wrapper
-can cd into it.`,
+can cd into it. With --exec, TreeMan runs the given command in the selected
+worktree instead of printing the path.`,
 		Aliases: []string{"wts"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := launchOptions.validate(cmd); err != nil {
+				return err
+			}
 			query := ""
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runSwitch(cmd, query)
+			return runSwitch(cmd, query, launchOptions)
 		},
 	}
+	addLaunchFlag(cmd, &launchOptions)
+
+	return cmd
 }
 
-func runSwitch(cmd *cobra.Command, query string) error {
+func runSwitch(cmd *cobra.Command, query string, launchOptions worktreeLaunchOptions) error {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	entries, err := git.WorktreeList()
@@ -52,7 +60,7 @@ func runSwitch(cmd *cobra.Command, query string) error {
 	if query != "" {
 		for _, entry := range entries {
 			if entry.Branch == query || samePath(entry.Path, query) {
-				return printSwitchDestination(cmd, entry.Path)
+				return deliverSwitchDestination(cmd, entry.Path, launchOptions)
 			}
 		}
 	}
@@ -104,6 +112,17 @@ func runSwitch(cmd *cobra.Command, query string) error {
 	}
 	dest := fullPaths[idx]
 
+	return deliverSwitchDestination(cmd, dest, launchOptions)
+}
+
+// deliverSwitchDestination hands the selected worktree to --exec, or reports it
+// as a directory to change to. A launched command runs in the selection even
+// when it is the current worktree, because it is what the caller asked to run
+// and not a directory change that would do nothing.
+func deliverSwitchDestination(cmd *cobra.Command, dest string, launchOptions worktreeLaunchOptions) error {
+	if launchOptions.command != "" {
+		return deliverWorktree(cmd, dest, launchOptions)
+	}
 	return printSwitchDestination(cmd, dest)
 }
 
