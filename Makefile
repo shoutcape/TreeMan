@@ -10,12 +10,23 @@ LDFLAGS    := -X main.version=$(VERSION) \
               -X main.commit=$(COMMIT) \
               -X main.date=$(DATE)
 
-.PHONY: build test lint clean install tidy benchmark-list help
+.PHONY: build cross test lint clean install tidy benchmark-list help
+
+# Every target .goreleaser.yml releases. Keep the two lists in step: a symbol
+# that exists on only one GOOS compiles here and fails at release time.
+CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 ## build: compile the binary to ./bin/treeman
 build:
 	@mkdir -p bin
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) $(CMD)
+
+## cross: compile every released GOOS/GOARCH, catching platform-only symbols
+cross:
+	@for target in $(CROSS_TARGETS); do \
+		echo "  $$target"; \
+		GOOS=$${target%/*} GOARCH=$${target#*/} go build ./... || exit 1; \
+	done
 
 ## test: run all tests
 test:

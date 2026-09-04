@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -258,7 +257,7 @@ func validateStagedWorktree(mainRoot, stagedPath, expectedGitDir string, force b
 }
 
 func restoreStagedWorktree(originalPath string, staged *stagedWorktree, cause error) error {
-	if err := unix.Renameat2(unix.AT_FDCWD, staged.path, unix.AT_FDCWD, originalPath, unix.RENAME_NOREPLACE); err != nil {
+	if err := renameNoReplace(staged.path, originalPath); err != nil {
 		return fmt.Errorf("%w (the captured worktree could not be restored and remains at %q: %v)", cause, staged.path, err)
 	}
 	if err := os.RemoveAll(staged.job); err != nil {
@@ -402,15 +401,8 @@ func detachRemoveAll(trashRoot, job string) error {
 	}
 	errorFile := os.NewFile(uintptr(errorFD), filepath.Join(trashRoot, errorName))
 
-	// Recursive deletion runs relative to the inherited directory descriptor.
-	// The trash root and job descriptors remain stable across path replacement.
-	script := `status=0; cd -P -- /proc/self/fd/5 || status=$?; if [ "$status" -eq 0 ]; then rm -rf -- ./* ./.[!.]* ./..?* || status=$?; fi; cd /; if [ "$status" -eq 0 ]; then if [ "$1" -ef /proc/self/fd/5 ]; then rmdir -- "$1" || status=$?; else printf 'cleanup job path changed during removal\n' >&2; status=1; fi; fi; if [ "$status" -eq 0 ]; then rm -f -- "$3" || status=$?; fi; if [ "$status" -eq 0 ]; then rm -f -- "$2" || status=$?; fi; exit "$status"`
-	jobRef := "/proc/self/fd/4/" + jobName
-	errorRef := "/proc/self/fd/4/" + errorName
-	lockRef := "/proc/self/fd/4/" + lockName
-	cmd := exec.Command("sh", "-c", script, "treeman-cleanup", jobRef, errorRef, lockRef)
+	cmd := cleanupCommand(trashRoot, jobName, errorName, lockName, lock, rootFile, jobFile)
 	cmd.Stderr = errorFile
-	cmd.ExtraFiles = []*os.File{lock, rootFile, jobFile}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		message := fmt.Sprintf("could not start background removal: %v", err)

@@ -12,6 +12,8 @@ builds:
     binary: treeman
     env:
       - CGO_ENABLED=0
+    # Mirrored by CROSS_TARGETS in the Makefile, which `make cross` builds on
+    # every PR. Add a platform here and add it there in the same change.
     goos:
       - linux
       - darwin

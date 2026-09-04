@@ -29,6 +29,11 @@ jobs:
       - name: Static checks
         run: make lint
 
+      - name: Cross-compile
+        # Catches platform-only symbols before GoReleaser meets them at release
+        # time. Targets are listed in the Makefile, matching .goreleaser.yml.
+        run: make cross
+
       - name: Unit tests
         run: make test
 
