@@ -18,7 +18,33 @@ import (
 // inherits and holds for its lifetime, fd 4 the trash root, and fd 5 the job.
 // Positional arguments are the job, diagnostic, and lock paths in that order.
 func cleanupCommand(trashRoot, jobName, errorName, lockName string, lock, rootFile, jobFile *os.File) *exec.Cmd {
-	script := `status=0; cd -P -- /proc/self/fd/5 || status=$?; if [ "$status" -eq 0 ]; then rm -rf -- ./* ./.[!.]* ./..?* || status=$?; fi; cd /; if [ "$status" -eq 0 ]; then if [ "$1" -ef /proc/self/fd/5 ]; then rmdir -- "$1" || status=$?; else printf 'cleanup job path changed during removal\n' >&2; status=1; fi; fi; if [ "$status" -eq 0 ]; then rm -f -- "$3" || status=$?; fi; if [ "$status" -eq 0 ]; then rm -f -- "$2" || status=$?; fi; exit "$status"`
+	// Each step runs only if every earlier one succeeded, and the first
+	// non-zero status is what the process exits with, so a failure stops the
+	// sequence at the boundary that produced it and leaves the diagnostic and
+	// the lock behind for the next removal to find.
+	script := `
+status=0
+cd -P -- /proc/self/fd/5 || status=$?
+if [ "$status" -eq 0 ]; then
+  rm -rf -- ./* ./.[!.]* ./..?* || status=$?
+fi
+cd /
+if [ "$status" -eq 0 ]; then
+  if [ "$1" -ef /proc/self/fd/5 ]; then
+    rmdir -- "$1" || status=$?
+  else
+    printf 'cleanup job path changed during removal\n' >&2
+    status=1
+  fi
+fi
+if [ "$status" -eq 0 ]; then
+  rm -f -- "$3" || status=$?
+fi
+if [ "$status" -eq 0 ]; then
+  rm -f -- "$2" || status=$?
+fi
+exit "$status"
+`
 	jobRef := "/proc/self/fd/4/" + jobName
 	errorRef := "/proc/self/fd/4/" + errorName
 	lockRef := "/proc/self/fd/4/" + lockName

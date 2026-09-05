@@ -22,7 +22,20 @@ import (
 // fd 3 still carries the lock, whose flock the child inherits and holds for
 // its lifetime. Positional arguments are the job, diagnostic, and lock paths.
 func cleanupCommand(trashRoot, jobName, errorName, lockName string, lock, rootFile, jobFile *os.File) *exec.Cmd {
-	script := `status=0; rm -rf -- "$1" || status=$?; if [ "$status" -eq 0 ]; then rm -f -- "$3" || status=$?; fi; if [ "$status" -eq 0 ]; then rm -f -- "$2" || status=$?; fi; exit "$status"`
+	// As on Linux, each step runs only if every earlier one succeeded and the
+	// first non-zero status is the exit status, so a failure leaves the
+	// diagnostic and the lock for the next removal to find.
+	script := `
+status=0
+rm -rf -- "$1" || status=$?
+if [ "$status" -eq 0 ]; then
+  rm -f -- "$3" || status=$?
+fi
+if [ "$status" -eq 0 ]; then
+  rm -f -- "$2" || status=$?
+fi
+exit "$status"
+`
 	cmd := exec.Command("sh", "-c", script, "treeman-cleanup",
 		filepath.Join(trashRoot, jobName),
 		filepath.Join(trashRoot, errorName),
