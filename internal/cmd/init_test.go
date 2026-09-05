@@ -145,6 +145,8 @@ func TestInitCmd_Fish(t *testing.T) {
 	assert.Contains(t, out, "function treeman")
 	assert.Contains(t, out, "set -lx TREEMAN_CD_FILE \"$_tm_file\"")
 	assert.Contains(t, out, "cd (cat \"$_tm_file\")")
+	assert.Contains(t, out, "if type -q mktemp",
+		"fish reports a missing command itself, so the wrapper asks before calling")
 	assert.NotContains(t, out, "(command treeman $argv)")
 	assert.NotContains(t, out, "_tm_arg", "the wrapper does not scan TreeMan's arguments")
 	assert.Contains(t, out, "function wtc; treeman clean $argv; end")

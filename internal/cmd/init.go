@@ -52,7 +52,12 @@ function treeman
     case create branch review switch clean delete wtb wtpr wtmr wts wtc wtd
       # TreeMan writes the directory to change to into this file. Nothing is
       # captured, so a command started by --exec inherits the terminal.
-      set -l _tm_file (mktemp 2>/dev/null)
+      # Ask before calling, because fish reports a missing command itself and
+      # that report is not the command's stderr to redirect.
+      set -l _tm_file
+      if type -q mktemp
+        set _tm_file (mktemp 2>/dev/null)
+      end
       if test -z "$_tm_file"
         # TreeMan still runs; say why it stopped changing directory rather
         # than leaving the caller to wonder.

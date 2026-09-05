@@ -158,6 +158,61 @@ func TestLaunchFlag_AcceptsCommandAndUnsetFlag(t *testing.T) {
 	}
 }
 
+// TestLaunchFlag_KeepsAnExistingCheck pins the composition: a command that
+// already refuses to run must keep refusing once it carries --exec.
+func TestLaunchFlag_KeepsAnExistingCheck(t *testing.T) {
+	for name, install := range map[string]func(*cobra.Command, *bool){
+		"PreRunE": func(cmd *cobra.Command, checked *bool) {
+			cmd.PreRunE = func(*cobra.Command, []string) error {
+				*checked = true
+				return errors.New("the command said no")
+			}
+		},
+		"PreRun": func(cmd *cobra.Command, checked *bool) {
+			cmd.PreRun = func(*cobra.Command, []string) { *checked = true }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var execCommand string
+			ran, checked := false, false
+			cmd := commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{})
+			cmd.RunE = func(*cobra.Command, []string) error {
+				ran = true
+				return nil
+			}
+			install(cmd, &checked)
+			addLaunchFlag(cmd, &execCommand)
+			cmd.SetArgs([]string{"--" + execFlagName, "nvim ."})
+
+			err := cmd.Execute()
+
+			assert.True(t, checked, "--exec must not shadow the check the command already had")
+			if name == "PreRunE" {
+				assert.ErrorContains(t, err, "the command said no")
+				assert.False(t, ran)
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, ran)
+		})
+	}
+}
+
+// TestLaunchFlag_ChecksExecBeforeAnExistingCheck keeps the --exec refusal ahead
+// of work a command does in its own check.
+func TestLaunchFlag_ChecksExecBeforeAnExistingCheck(t *testing.T) {
+	var execCommand string
+	checked := false
+	cmd := commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{})
+	cmd.RunE = func(*cobra.Command, []string) error { return nil }
+	cmd.PreRun = func(*cobra.Command, []string) { checked = true }
+	addLaunchFlag(cmd, &execCommand)
+	cmd.SetArgs([]string{"--" + execFlagName, ""})
+
+	assert.ErrorContains(t, cmd.Execute(), "--exec needs a command")
+	assert.False(t, checked, "a bad --exec fails before the command does anything")
+}
+
 // launchFlagCommand builds the smallest command that carries --exec, and
 // records whether its work ran.
 func launchFlagCommand(ran *bool) *cobra.Command {
