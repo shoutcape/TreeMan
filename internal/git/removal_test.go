@@ -748,10 +748,14 @@ func TestRemovalWithRelativeGitReferences(t *testing.T) {
 	require.NoError(t, err)
 	registration, err := linkedRegistrationDir(commonDir, worktree)
 	require.NoError(t, err)
-	relative, err := filepath.Rel(worktree, registration)
+	// Git writes these links relative to the path it resolved, so the test has
+	// to as well: a relative path counted from a symlinked prefix walks a
+	// different number of levels and lands somewhere else.
+	registered := CanonicalPath(worktree)
+	relative, err := filepath.Rel(registered, registration)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+relative+"\n"), 0o600))
-	backlink, err := filepath.Rel(registration, filepath.Join(worktree, ".git"))
+	backlink, err := filepath.Rel(registration, filepath.Join(registered, ".git"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(registration, "gitdir"), []byte(backlink+"\n"), 0o600))
 	require.NoError(t, EnsureHoldsWorktree(repo, worktree))

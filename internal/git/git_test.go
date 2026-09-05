@@ -361,6 +361,38 @@ func TestUnpushedCommitCount(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+// Git records the path it resolved, not the text the caller passed. Reached
+// through a symlinked prefix -- which is every temporary directory on macOS --
+// a rollback that matched on the text found nothing to remove and reported
+// success while leaving the worktree and its branch in place.
+func TestRemoveCreatedWorktreeMatchesThroughASymlinkedPrefix(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(real, 0o700))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(real, link))
+	repo := filepath.Join(real, "repo")
+	require.NoError(t, os.Mkdir(repo, 0o755))
+	initGitTestRepo(t, repo)
+
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+
+	// The caller names the worktree through the link; Git will record the
+	// directory it resolved.
+	worktree := filepath.Join(link, "feature")
+	created, err := CreateWorktree(worktree, "feature", "HEAD")
+	require.NoError(t, err)
+
+	require.NoError(t, RemoveCreatedWorktree(repo, created))
+
+	assert.NoDirExists(t, filepath.Join(real, "feature"))
+	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature")
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
+}
+
 func TestCreatedWorktreeLifecycleIsAtomic(t *testing.T) {
 	t.Run("create and remove owned worktree", func(t *testing.T) {
 		repo := createGitTestRepo(t)

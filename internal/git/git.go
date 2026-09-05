@@ -623,7 +623,12 @@ func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 			return err
 		}
 		for _, entry := range entries {
-			if entry.Path != created.Path {
+			// Git records the path it resolved, which is not always the text
+			// the caller gave: reached through a symlinked prefix -- /var and
+			// /tmp on macOS both are -- the two name one worktree and compare
+			// unequal as strings. Matching on the text left the worktree in
+			// place and the rollback silently incomplete.
+			if !sameRemovalPath(entry.Path, created.Path) {
 				continue
 			}
 			if entry.Branch != created.Branch {
@@ -826,7 +831,8 @@ func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Path == path && entry.Branch == branch {
+		// Compared canonically for the reason RemoveCreatedWorktree gives.
+		if sameRemovalPath(entry.Path, path) && entry.Branch == branch {
 			if _, removeErr := runInDir(dir, "worktree", "remove", "--force", path); removeErr != nil {
 				errs = append(errs, fmt.Errorf("rolling back worktree %q: %w", path, removeErr))
 			}
