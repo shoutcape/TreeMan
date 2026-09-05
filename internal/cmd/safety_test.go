@@ -306,9 +306,12 @@ func TestRunDeleteDirect_ReportsACaptureThatCouldNotBeRestored(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Contains(t, err.Error(), `worktree "`+worktree+`" was captured for removal and could not be restored`)
-	assert.Contains(t, err.Error(), `Completed: moved worktree "`+worktree+`" into the cleanup queue.`)
-	assert.Contains(t, err.Error(), `Remaining: worktree "`+worktree+`" registered with nothing at its path, branch "feature/retained".`)
-	assert.Contains(t, err.Error(), fmt.Sprintf("Recovery: move the captured directory back, then retry: mv %q %q", capture, worktree))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Completed: moved the worktree directory for %q into the cleanup queue at %q.", worktree, capture))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Remaining: worktree %q registered while its directory sits at %q, branch \"feature/retained\".", worktree, capture))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Recovery: inspect %q and whatever now occupies %q", capture, worktree))
+	// Restoration failed because the rename would not replace what is at the
+	// path, so recommending a move that would is the one thing not to print.
+	assert.NotContains(t, err.Error(), "mv ")
 	assert.False(t, refusedRemoval(err), "a batch must not skip a removal that needs manual recovery")
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/retained")
 }

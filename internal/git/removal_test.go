@@ -205,8 +205,14 @@ func TestDetachRemoveAllCompletesQueuedJob(t *testing.T) {
 
 	require.NoError(t, detachRemoveAll(trashRoot, job))
 
+	// The job, then the lock, then the diagnostic: a run that got all the way
+	// through leaves the queue with nothing to retry.
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(job)
+		return os.IsNotExist(err)
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(cleanupLockPath(trashRoot, job))
 		return os.IsNotExist(err)
 	}, 2*time.Second, 10*time.Millisecond)
 	assert.NoFileExists(t, cleanupErrorPath(trashRoot, job))
@@ -401,6 +407,26 @@ func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
 		assert.Equal(t, RemovalScopeCandidate, failure.Scope)
 		assert.Empty(t, failure.Capture, "a worktree that is back at its path needs no recovery")
 		assert.FileExists(t, filepath.Join(worktree, "scratch"))
+	})
+
+	t.Run("an unusable cleanup queue is the repository's failure", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := addTestWorktree(t, repo, "feature")
+		sha := branchSHAForRemoval(t, repo, "feature")
+		commonDir, err := CommonDir(repo)
+		require.NoError(t, err)
+		trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+		require.NoError(t, os.MkdirAll(filepath.Dir(trashRoot), 0o700))
+		// A file where the queue belongs blocks it for every candidate, and
+		// does so whoever is running: no privilege waives ENOTDIR.
+		require.NoError(t, os.WriteFile(trashRoot, []byte("not a queue"), 0o600))
+
+		_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+		failure := removalFailureOf(t, err)
+		assert.Equal(t, RemovalScopeRepository, failure.Scope)
+		assert.DirExists(t, worktree)
+		gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
 	})
 
 	t.Run("an unreadable cleanup queue is the repository's failure", func(t *testing.T) {

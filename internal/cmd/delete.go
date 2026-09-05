@@ -388,28 +388,38 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 // the error a batch acts on. Which durable transitions completed cannot answer
 // that on its own: a worktree that is still registered because its captured
 // directory could not be put back is not a worktree that was merely refused,
-// and both report the same unregistration. So the scope decides, and an
-// unclassified failure -- which claims nothing -- stops the run.
+// and both report the same unregistration. So the scope decides, and only the
+// scope that claims nothing changed lets a batch continue: an unrecognized one
+// and an unclassified failure both claim nothing at all, and stop the run.
 func (plan deletionPlan) removalFailure(err error) error {
 	entry := plan.entry
 	remaining := fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch)
 	retry := fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force))
+	// A failure that classified nothing supports no claim about what survived
+	// it, so its report names what to look at rather than what is still there.
+	unknown := deleteWorktreeFailure(err, "unknown",
+		fmt.Sprintf("unknown; inspect worktree %q and branch %q", entry.Path, entry.Branch),
+		fmt.Sprintf("confirm what survived, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))
 	var failure *git.RemovalError
 	if !errors.As(err, &failure) {
-		return deleteWorktreeFailure(err, "unknown", remaining, retry)
+		return unknown
 	}
 	switch failure.Scope {
+	case git.RemovalScopeCandidate:
+		return removalRefused{deleteWorktreeFailure(err, "none", remaining, retry)}
 	case git.RemovalScopeRepository:
 		return repositoryUnavailable{deleteWorktreeFailure(err, "none", remaining, retry)}
 	case git.RemovalScopeCaptureRetained:
-		// Git kept both resources, but the working tree did not stay where the
-		// registration says it is, so the recovery is a move rather than a
-		// retry and the run stops until someone makes it.
+		// Git kept both resources, but the working tree is no longer where the
+		// registration says it is. Restoring it is a move TreeMan already tried
+		// and could not make -- most likely because something occupies the
+		// path -- so the report names both locations and leaves the move to
+		// someone who can see what is in the way.
 		return deleteWorktreeFailure(
 			fmt.Errorf("worktree %q was captured for removal and could not be restored: %w", entry.Path, err),
-			fmt.Sprintf("moved worktree %q into the cleanup queue", entry.Path),
-			fmt.Sprintf("worktree %q registered with nothing at its path, branch %q", entry.Path, entry.Branch),
-			fmt.Sprintf("move the captured directory back, then retry: mv %q %q && treeman delete --path %q --branch %q --yes%s", failure.Capture, entry.Path, entry.Path, entry.Branch, forceFlag(plan.guards.force)),
+			fmt.Sprintf("moved the worktree directory for %q into the cleanup queue at %q", entry.Path, failure.Capture),
+			fmt.Sprintf("worktree %q registered while its directory sits at %q, branch %q", entry.Path, failure.Capture, entry.Branch),
+			fmt.Sprintf("inspect %q and whatever now occupies %q, restore the directory there once the path is free, then retry: treeman delete --path %q --branch %q --yes%s", failure.Capture, entry.Path, entry.Path, entry.Branch, forceFlag(plan.guards.force)),
 		)
 	case git.RemovalScopeBranchRetained:
 		return deleteWorktreeFailure(
@@ -419,7 +429,7 @@ func (plan deletionPlan) removalFailure(err error) error {
 			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
 		)
 	default:
-		return removalRefused{deleteWorktreeFailure(err, "none", remaining, retry)}
+		return unknown
 	}
 }
 

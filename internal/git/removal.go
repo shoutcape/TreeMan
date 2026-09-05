@@ -42,8 +42,11 @@ const (
 	RemovalScopeRepository
 	// RemovalScopeCaptureRetained means the worktree directory was moved into
 	// the cleanup queue and could not be put back. The registration survives,
-	// but nothing stands at the registered path: this is not an untouched
-	// worktree, and recovering it is manual.
+	// but the directory is no longer at the registered path -- most often
+	// because something else came to occupy it, which is what stopped the
+	// restoring rename. This is not an untouched worktree, and putting it back
+	// is a judgement about whatever is in the way, so Capture names where the
+	// directory is and recovery is manual.
 	RemovalScopeCaptureRetained
 	// RemovalScopeBranchRetained means the worktree was unregistered and its
 	// branch outlived it.
@@ -201,10 +204,11 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 	return result, classifiedRemovalFailure(err)
 }
 
-// classifiedRemovalFailure keeps the scope contract total at the boundary. A
-// failure that arrives without a scope -- acquiring the mutation lock, say --
-// happened before this worktree was reached at all, and the next candidate
-// would meet it too.
+// classifiedRemovalFailure keeps the scope contract total at the boundary.
+// Every failure inside the locked operation classifies itself where it happens,
+// so the only thing that reaches here unclassified is acquiring the mutation
+// lock: that fails before this worktree is reached at all, and the next
+// candidate would meet it too.
 func classifiedRemovalFailure(err error) error {
 	if err == nil {
 		return nil
@@ -391,8 +395,9 @@ func validateWorktreeIdentity(originalPath, stagedPath, expectedGitDir string) e
 
 // restoreStagedWorktree puts the capture back and reports what the failure
 // left behind. A restored worktree is untouched and refuses only itself; a
-// capture that could not be restored is a registration with nothing at its
-// path, which no caller may treat as a worktree it merely declined to remove.
+// capture that could not be restored is a registration whose directory now
+// sits elsewhere, which no caller may treat as a worktree it merely declined
+// to remove.
 func restoreStagedWorktree(originalPath string, staged *stagedWorktree, cause error) error {
 	if err := renameNoReplace(staged.path, originalPath); err != nil {
 		return &RemovalError{
