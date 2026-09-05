@@ -10,7 +10,7 @@ This document describes current behavior. It is not a product roadmap.
 - A directory that is not a worktree stops creation at the target path. TreeMan does not add a slug suffix in this condition.
 - Do not run direct `git worktree` mutations concurrently with `treeman clean` or `treeman delete`. TreeMan serializes its own worktree additions and guarded deletions, but direct Git commands do not participate in that lock.
 - Do not concurrently replace, move, or delete a worktree directory with direct filesystem commands while TreeMan removes it. TreeMan guards its own operations, but external filesystem mutations do not participate in that coordination.
-- File cleanup after Git deletion is asynchronous and is retried only when a later worktree removal runs. Interrupted staging and failed restoration leave captured directories protected for manual recovery, even if their Git registration is later removed. Recover them from the location named in the error before retrying removal.
+- File cleanup after Git deletion is asynchronous and is retried only when a later worktree removal runs. Interrupted staging and failed restoration leave captured directories protected for manual recovery, even if their Git registration is later removed. Recover them from the location named in the error before retrying removal. A capture whose staging metadata does not record where it came from cannot be matched to a worktree or restored automatically; it stays protected and is reported by every later removal until you recover it.
 
 ## Forge Data
 
@@ -27,4 +27,4 @@ This document describes current behavior. It is not a product roadmap.
 
 - Release binaries support Linux and macOS only.
 - Shell wrappers support Bash, Zsh, and Fish.
-- Linux uses atomic no-replace restoration and descriptor-relative cleanup paths. On macOS, restoration checks the destination before renaming and cleanup uses ordinary paths. Both platforms lock active cleanup jobs, but the macOS fallbacks cannot prevent an external process from replacing paths between validation and use.
+- Linux uses atomic no-replace restoration and descriptor-relative cleanup paths. On macOS, restoration checks the destination before renaming and cleanup uses ordinary paths. Linux falls back to that same check on filesystems that do not implement the atomic flag, such as NFS and some FUSE mounts, because refusing to restore a capture would be worse than the narrower guarantee. Both platforms lock active cleanup jobs, but the check-then-rename fallbacks cannot prevent an external process from replacing paths between validation and use.

@@ -104,6 +104,7 @@ func TestRemoveWorktreeAndBranchReturnsWhileCleanupIsPending(t *testing.T) {
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
 	assert.True(t, CleanupPending(result.CleanupJob))
+	assert.True(t, result.CleanupStarted)
 	assert.NoDirExists(t, worktree)
 	assert.DirExists(t, cleanupJob)
 	assert.Less(t, elapsed, 2*time.Second)
@@ -252,6 +253,8 @@ func TestRemoveWorktreeAndBranchQueuesCleanupAfterDetachFailure(t *testing.T) {
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
 	assert.True(t, CleanupPending(result.CleanupJob))
+	// Queued for a later removal to retry, but nothing is working on it.
+	assert.False(t, result.CleanupStarted)
 	assert.ErrorIs(t, result.CleanupError, assert.AnError)
 }
 
@@ -391,6 +394,119 @@ func removalFailureOf(t *testing.T, err error) *RemovalError {
 	var failure *RemovalError
 	require.ErrorAs(t, err, &failure)
 	return failure
+}
+
+// A refusal restores the capture, so the location the checks ran against is
+// gone by the time anyone reads why. The message has to name the path the user
+// can still go and look at.
+// A crash can leave staging metadata created but empty on disk while the
+// rename that follows it succeeded, so a job can hold real data and not say
+// where it belongs. That must not be disposable, and it must not stop every
+// other removal in the repository either.
+// The cleanup script removes its job directory, then its lock, then its
+// diagnostic. If either of the last two fails, queue inspection cannot see what
+// is left -- it only walks directories -- so the files would sit there forever
+// with a recorded failure nobody ever reads.
+func TestRemovalReclaimsOrphanedCleanupBookkeeping(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+	require.NoError(t, os.MkdirAll(trashRoot, 0o700))
+	orphan := filepath.Join(trashRoot, "worktree-gone")
+	require.NoError(t, os.WriteFile(cleanupLockPath(trashRoot, orphan), nil, 0o600))
+	require.NoError(t, os.WriteFile(cleanupErrorPath(trashRoot, orphan), []byte("rmdir: Directory not empty"), 0o600))
+	captureStagedRemoval(t)
+
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+	require.NoError(t, err)
+	require.Error(t, result.CleanupError)
+	assert.Contains(t, result.CleanupError.Error(), "rmdir: Directory not empty")
+	assert.NoFileExists(t, cleanupLockPath(trashRoot, orphan))
+	assert.NoFileExists(t, cleanupErrorPath(trashRoot, orphan))
+}
+
+// A cleanup that is running has already removed its job directory and still
+// holds its lock, which must not be mistaken for an orphan.
+func TestReclaimOrphanedCleanupFilesLeavesARunningCleanupAlone(t *testing.T) {
+	trashRoot := t.TempDir()
+	job := filepath.Join(trashRoot, "worktree-running")
+	lockPath := cleanupLockPath(trashRoot, job)
+	require.NoError(t, os.WriteFile(lockPath, nil, 0o600))
+	lock, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer lock.Close()
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
+
+	require.NoError(t, reclaimOrphanedCleanupFiles(trashRoot))
+	assert.FileExists(t, lockPath)
+}
+
+func TestRemovalSurvivesCaptureMetadataThatRecordsNoPath(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+	stranded := filepath.Join(trashRoot, "worktree-stranded")
+	captured := filepath.Join(stranded, stagedWorktreeName)
+	require.NoError(t, os.MkdirAll(captured, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(captured, "payload"), []byte("irreplaceable"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stranded, cleanupOriginalPathFile), nil, 0o600))
+	cleaned := captureStagedRemoval(t)
+
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+	require.NoError(t, err, "one unreadable capture must not stop the repository")
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	// Protected, not disposed of, and reported rather than kept in silence.
+	assert.FileExists(t, filepath.Join(captured, "payload"))
+	assert.NotContains(t, *cleaned, filepath.Join(stranded, stagedWorktreeName))
+	require.Error(t, result.CleanupError)
+	assert.Contains(t, result.CleanupError.Error(), "does not record where it came from")
+}
+
+// An empty original path must never be compared against a candidate: made
+// absolute it becomes the working directory, which could match one.
+func TestRemovalDoesNotMatchAPathlessCaptureAgainstTheWorkingDirectory(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+	stranded := filepath.Join(trashRoot, "worktree-stranded")
+	require.NoError(t, os.MkdirAll(filepath.Join(stranded, stagedWorktreeName), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(stranded, cleanupOriginalPathFile), []byte("   "), 0o600))
+	restore, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(worktree))
+	t.Cleanup(func() { _ = os.Chdir(restore) })
+	captureStagedRemoval(t)
+
+	_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+	require.NoError(t, err, "a capture with no recorded path belongs to no candidate")
+}
+
+func TestRemoveWorktreeAndBranchRefusesAgainstTheRegisteredPath(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("unsaved"), 0o600))
+	captureStagedRemoval(t)
+
+	_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), strconv.Quote(worktree))
+	assert.NotContains(t, err.Error(), filepath.FromSlash(trashDirName), "the staged location no longer exists")
+	assert.DirExists(t, worktree)
 }
 
 func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
@@ -646,6 +762,6 @@ func TestForcedRemovalSkipsTheUntrackedFileScan(t *testing.T) {
 	// would surface that failure rather than the waived answer.
 	require.NoError(t, os.WriteFile(filepath.Join(registration, "index"), []byte("not an index"), 0o600))
 
-	require.ErrorContains(t, validateStagedWorktree(repo, worktree, worktree, registration, false), "could not inspect staged worktree")
+	require.ErrorContains(t, validateStagedWorktree(repo, worktree, worktree, registration, false), "could not inspect worktree")
 	assert.NoError(t, validateStagedWorktree(repo, worktree, worktree, registration, true))
 }
