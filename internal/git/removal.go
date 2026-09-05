@@ -304,7 +304,7 @@ func linkedRegistrationDir(commonDir, worktreePath string) (string, error) {
 			recordedGitFile = filepath.Join(gitDir, recordedGitFile)
 		}
 		if sameRemovalPath(filepath.Dir(recordedGitFile), worktreePath) {
-			return canonicalRemovalPath(gitDir), nil
+			return CanonicalPath(gitDir), nil
 		}
 	}
 	if len(readErrors) > 0 {
@@ -751,18 +751,39 @@ func pathExists(path string) bool {
 }
 
 func sameRemovalPath(a, b string) bool {
-	return canonicalRemovalPath(a) == canonicalRemovalPath(b)
+	return CanonicalPath(a) == CanonicalPath(b)
 }
 
-func canonicalRemovalPath(path string) string {
+// CanonicalPath makes path absolute and resolves its symlinks, so that one
+// directory reached through different raw text compares equal.
+//
+// A path that does not exist still has to canonicalize, and this is not the
+// rare case: removal renames the worktree directory away before it does
+// anything else, and a registration whose directory was deleted outside
+// TreeMan is one TreeMan is specifically meant to be able to remove. Resolving
+// only whole existing paths would return the raw text for exactly those, so on
+// any system with a symlinked prefix -- /var and /tmp on macOS both are --
+// "/var/x/worktree" and Git's "/private/var/x/worktree" would name the same
+// worktree and compare unequal, and TreeMan would refuse to find its own
+// registration. So the deepest ancestor that does exist is resolved and the
+// missing tail is re-attached to it.
+func CanonicalPath(path string) string {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		absolute = filepath.Clean(path)
 	}
+	return canonicalExistingPrefix(filepath.Clean(absolute))
+}
+
+func canonicalExistingPrefix(absolute string) string {
 	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
 		return filepath.Clean(resolved)
 	}
-	return filepath.Clean(absolute)
+	parent := filepath.Dir(absolute)
+	if parent == absolute {
+		return absolute
+	}
+	return filepath.Join(canonicalExistingPrefix(parent), filepath.Base(absolute))
 }
 
 func canonicalExistingPath(path string) (string, error) {

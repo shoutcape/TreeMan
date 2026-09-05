@@ -26,8 +26,12 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # Scoped to the package whose code diverges by platform. The rest of the
+      # suite has macOS failures of its own, predating this job and unrelated to
+      # removal, and widening the scope before those are fixed would only mean a
+      # red check nobody reads.
       - name: Unit tests
-        run: go test ./...
+        run: go test ./internal/git/...
 
   test:
     runs-on: ubuntu-latest

@@ -407,6 +407,59 @@ func removalFailureOf(t *testing.T, err error) *RemovalError {
 // diagnostic. If either of the last two fails, queue inspection cannot see what
 // is left -- it only walks directories -- so the files would sit there forever
 // with a recorded failure nobody ever reads.
+// macOS reaches its temporary directories through symlinked prefixes (/var
+// and /tmp both are), and a worktree whose directory is absent cannot be
+// resolved as a whole -- which is the normal state during removal, because
+// staging renames it away first. A symlinked prefix reproduces that here on
+// any platform.
+func TestCanonicalPathResolvesThroughASymlinkedPrefixWhenTheLeafIsGone(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Mkdir(real, 0o700))
+	require.NoError(t, os.Symlink(real, link))
+
+	present := filepath.Join(real, "worktree")
+	require.NoError(t, os.Mkdir(present, 0o700))
+	assert.Equal(t, CanonicalPath(present), CanonicalPath(filepath.Join(link, "worktree")),
+		"one directory reached two ways is one directory")
+
+	// The same must hold once the directory is gone, or a registration whose
+	// worktree was staged away cannot be matched to the path that names it.
+	require.NoError(t, os.Remove(present))
+	assert.Equal(t, CanonicalPath(present), CanonicalPath(filepath.Join(link, "worktree")))
+	assert.True(t, sameRemovalPath(present, filepath.Join(link, "worktree")))
+}
+
+// A registration whose directory is gone is one TreeMan is meant to be able to
+// remove. Reached through a symlinked prefix, resolving only whole existing
+// paths left it unfindable.
+func TestRemoveWorktreeAndBranchFindsAVanishedWorktreeThroughASymlinkedPrefix(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(real, 0o700))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(real, link))
+
+	repo := filepath.Join(real, "repo")
+	require.NoError(t, os.Mkdir(repo, 0o755))
+	initGitTestRepo(t, repo)
+	worktree := filepath.Join(real, "feature")
+	gitTest(t, repo, "worktree", "add", "-b", "feature", worktree)
+	sha := branchSHAForRemoval(t, repo, "feature")
+	require.NoError(t, os.RemoveAll(worktree))
+	captureStagedRemoval(t)
+
+	// The caller names the worktree through the link; Git recorded the real
+	// path, and neither one exists any more.
+	result, err := RemoveWorktreeAndBranch(filepath.Join(link, "repo"), filepath.Join(link, "feature"), "feature", sha, false)
+
+	require.NoError(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature")
+}
+
 func TestRemovalReclaimsOrphanedCleanupBookkeeping(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
@@ -504,7 +557,9 @@ func TestRemoveWorktreeAndBranchRefusesAgainstTheRegisteredPath(t *testing.T) {
 	_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), strconv.Quote(worktree))
+	// Compare canonically: Git records the resolved path, and a temporary
+	// directory reached through a symlinked prefix is not the text we passed.
+	assert.Contains(t, err.Error(), strconv.Quote(CanonicalPath(worktree)))
 	assert.NotContains(t, err.Error(), filepath.FromSlash(trashDirName), "the staged location no longer exists")
 	assert.DirExists(t, worktree)
 }

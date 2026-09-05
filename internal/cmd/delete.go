@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/database"
@@ -543,23 +542,13 @@ func mainWorktreeBranch(entries []git.WorktreeEntry, mainRoot string) (string, b
 // samePath reports whether two paths name the same directory. Symlinked or
 // relative paths reach one directory through different raw text, therefore
 // TreeMan compares canonical paths.
+//
+// It shares git.CanonicalPath with the removal itself deliberately. These two
+// answers are compared against each other -- planning decides which worktree
+// the removal then acts on -- so two implementations that disagree about a
+// path would disagree about which worktree that is.
 func samePath(a, b string) bool {
-	return canonicalPath(a) == canonicalPath(b)
-}
-
-// canonicalPath makes path absolute and resolves its symlinks. A path that the
-// operating system cannot resolve keeps its cleaned absolute form, therefore a
-// missing directory does not cause a failure.
-func canonicalPath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err == nil {
-		return filepath.Clean(resolved)
-	}
-	return filepath.Clean(abs)
+	return git.CanonicalPath(a) == git.CanonicalPath(b)
 }
 
 // confirmDeletion puts the plan to the user and, once they answer, re-runs it

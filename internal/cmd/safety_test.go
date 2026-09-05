@@ -320,10 +320,13 @@ func TestRunDeleteDirect_ReportsACaptureThatCouldNotBeRestored(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
-	assert.Contains(t, err.Error(), `worktree "`+worktree+`" was captured for removal and could not be restored`)
-	assert.Contains(t, err.Error(), fmt.Sprintf("Completed: moved the worktree directory for %q into the cleanup queue at %q.", worktree, capture))
-	assert.Contains(t, err.Error(), fmt.Sprintf("Remaining: worktree %q registered while its directory sits at %q, branch \"feature/retained\".", worktree, capture))
-	assert.Contains(t, err.Error(), fmt.Sprintf("Recovery: inspect %q and whatever now occupies %q", capture, worktree))
+	// The report names the worktree as Git records it, which is the resolved
+	// path, not the text the caller happened to pass.
+	registered := gitpkg.CanonicalPath(worktree)
+	assert.Contains(t, err.Error(), `worktree "`+registered+`" was captured for removal and could not be restored`)
+	assert.Contains(t, err.Error(), fmt.Sprintf("Completed: moved the worktree directory for %q into the cleanup queue at %q.", registered, capture))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Remaining: worktree %q registered while its directory sits at %q, branch \"feature/retained\".", registered, capture))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Recovery: inspect %q and whatever now occupies %q", capture, registered))
 	// Restoration failed because the rename would not replace what is at the
 	// path, so recommending a move that would is the one thing not to print.
 	assert.NotContains(t, err.Error(), "mv ")

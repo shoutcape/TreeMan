@@ -533,13 +533,20 @@ func assertBlocked(t *testing.T, result <-chan error) {
 func createGitTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
+	initGitTestRepo(t, repo)
+	return repo
+}
+
+// initGitTestRepo seeds a repository at a directory the caller chose, for tests
+// that need to control where it sits.
+func initGitTestRepo(t *testing.T, repo string) {
+	t.Helper()
 	gitTest(t, repo, "init", "--initial-branch=main")
 	gitTest(t, repo, "config", "user.email", "test@example.com")
 	gitTest(t, repo, "config", "user.name", "Test User")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("base\n"), 0o644))
 	gitTest(t, repo, "add", "file")
 	gitTest(t, repo, "commit", "-m", "base")
-	return repo
 }
 
 func gitTest(t *testing.T, dir string, args ...string) {
