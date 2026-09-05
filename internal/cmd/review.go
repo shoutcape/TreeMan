@@ -18,7 +18,7 @@ import (
 
 func newReviewCmd() *cobra.Command {
 	var setupOptions creationSetupOptions
-	var launchOptions worktreeLaunchOptions
+	var execCommand string
 	cmd := &cobra.Command{
 		Use:   "review [pr-number]",
 		Short: "Create a review worktree from a GitHub PR or GitLab MR",
@@ -29,28 +29,25 @@ If pr-number is omitted, an interactive fzf picker lists all open PRs/MRs.
 Supports GitHub (gh CLI) and GitLab (glab CLI), including self-hosted GitLab
 instances.
 
-The path of the new worktree is printed to stdout so that a shell wrapper
-can cd into it. With --exec, TreeMan runs the given command in the new
-worktree instead of printing the path.`,
+Shell integration changes directory to the new worktree; without it, the
+path is printed to stdout. With --exec, TreeMan runs the given command in
+the new worktree instead.`,
 		Aliases: []string{"wtpr", "wtmr"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := launchOptions.validate(cmd); err != nil {
-				return err
-			}
 			var prArg string
 			if len(args) > 0 {
 				prArg = args[0]
 			}
-			return runReview(cmd, prArg, setupOptions, launchOptions)
+			return runReview(cmd, prArg, setupOptions, execCommand)
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
-	addLaunchFlag(cmd, &launchOptions)
+	addLaunchFlag(cmd, &execCommand)
 	return cmd
 }
 
-func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions, launchOptions worktreeLaunchOptions) error {
+func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions, execCommand string) error {
 	created, err := createReviewWorktree(cmd, prArg)
 	if err != nil || created.worktree.Path == "" {
 		return err
@@ -66,7 +63,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(created.info.Title, 10)))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	return deliverWorktree(cmd, created.worktree.Path, launchOptions)
+	return deliverWorktree(cmd, created.worktree.Path, execCommand)
 }
 
 type reviewWorktreeCreation struct {

@@ -51,7 +51,7 @@ func TestRunReviewReportsNestedModules(t *testing.T) {
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	require.NoError(t, runReview(commandWithOutput(stdout, stderr), "1", creationSetupOptions{
 		skipEnv: true, skipDatabase: true, skipHooks: true,
-	}, worktreeLaunchOptions{}))
+	}, ""))
 
 	worktree := filepath.Join(repo, ".worktrees", "feature-review")
 	assert.Equal(t, worktree+"\n", stdout.String())
@@ -91,7 +91,7 @@ func TestRunSwitchDirectMatchesBranchAndPathWithoutFzf(t *testing.T) {
 			command := &cobra.Command{}
 			command.SetOut(buf)
 
-			require.NoError(t, runSwitch(command, query, worktreeLaunchOptions{}))
+			require.NoError(t, runSwitch(command, query, ""))
 			assert.Equal(t, worktree+"\n", buf.String())
 		})
 	}

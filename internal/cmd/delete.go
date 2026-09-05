@@ -344,15 +344,17 @@ func runDeletionPlan(cmd *cobra.Command, plan deletionPlan) error {
 	if err := batch.Flush(); err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed: %v", err)))
 	}
-	reportDeletedWorktree(cmd, plan.entry.Branch, plan.mainRoot, outcome)
-	return nil
+	return reportDeletedWorktree(cmd, plan.entry.Branch, plan.mainRoot, outcome)
 }
 
-func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) {
+func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) error {
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
-	if outcome.currentWorktree {
-		fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
+	if !outcome.currentWorktree {
+		return nil
 	}
+	// The caller's shell is standing in a worktree that no longer exists, so
+	// send it back to the main worktree.
+	return reportDestination(cmd, mainRoot)
 }
 
 // execute carries out a plan: the removal itself, the branch's exact-SHA

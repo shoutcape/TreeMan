@@ -180,11 +180,14 @@ mkdir -p "$FISH_WRAPPER_TARGET"
 mkdir -p "$FISH_MOCK_BIN"
 cat > "$FISH_MOCK_BIN/treeman" <<'EOF'
 #!/usr/bin/env bash
+# Report the destination the way the real binary does: through the file the
+# wrapper hands over, never through captured stdout.
 if [[ "${1:-}" == "create" && "${2:-}" == "fish-test" ]]; then
-  printf '%s\n' "$FISH_WRAPPER_TARGET"
+  printf '%s\n' "$FISH_WRAPPER_TARGET" > "$TREEMAN_CD_FILE"
   exit 0
 fi
-# Stand in for --exec: replace this process with the command, print no path.
+# Stand in for --exec: replace this process with the command, report no
+# destination.
 if [[ "${1:-}" == "create" && "${2:-}" == "fish-exec" && "${3:-}" == "-x" ]]; then
   cd "$FISH_WRAPPER_TARGET" || exit 1
   : > fish-exec-ran
@@ -201,8 +204,8 @@ if command -v fish >/dev/null 2>&1; then
     wt fish-test "$argv[2]"
     test (pwd) = "$argv[2]"; or exit 1
     cd "$origin"
-    # --exec owns the terminal, so the wrapper must not capture its output. A
-    # captured run would read this path and change directory into it.
+    # --exec reports no destination, so the shell stays where it was. The
+    # wrapper needs to know nothing about the flag to get this right.
     wt fish-exec -x "echo $argv[2]"
     test (pwd) = "$origin"; or exit 1
     test -f "$argv[2]/fish-exec-ran"
@@ -576,10 +579,14 @@ exit 1
 GLABEOF
 chmod +x "$MOCK_BIN/glab"
 
-# Use a minimal PATH for GitLab commands to prove jq is not required.
+# Use a minimal PATH for GitLab commands to prove jq is not required. The
+# coreutils that shell integration uses to receive a destination stay.
 mkdir -p "$NO_JQ_BIN"
 ln -s "$(command -v bash)" "$NO_JQ_BIN/bash"
 ln -s "$(command -v git)" "$NO_JQ_BIN/git"
+for _tool in mktemp cat rm; do
+  ln -s "$(command -v "$_tool")" "$NO_JQ_BIN/$_tool"
+done
 NO_JQ_PATH="$TEST_HOME/.treeman/bin:$MOCK_BIN:$NO_JQ_BIN"
 if PATH="$NO_JQ_PATH" command -v jq >/dev/null 2>&1; then
   fail "Expected jq to be absent from GitLab test PATH"
@@ -852,6 +859,12 @@ if wt feature/exec-empty -x '' 2>/dev/null; then
   fail "Expected an empty --exec to fail"
 fi
 assert_missing "$MAIN_REPO/.worktrees/feature-exec-empty"
+
+# Without shell integration there is no destination file, so the path falls
+# back to stdout. Scripts and pipes keep the original contract.
+EXEC_BARE_PATH="$(command treeman create feature/bare-stdout --skip-env --skip-database --skip-deps --skip-hooks)"
+assert_eq "bare treeman prints the path" "$MAIN_REPO/.worktrees/feature-bare-stdout" "$EXEC_BARE_PATH"
+assert_eq "shell directory after a bare run" "$MAIN_REPO" "$(pwd)"
 
 # ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)

@@ -36,37 +36,26 @@ func stubLaunch(t *testing.T, err error) *launchRecord {
 	return record
 }
 
-// execCommand builds a command that carries the --exec flag, so validate can
-// tell an unset flag from an empty one.
-func execCommand(t *testing.T, value string) (*cobra.Command, worktreeLaunchOptions) {
-	t.Helper()
-	var options worktreeLaunchOptions
-	cmd := commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{})
-	addLaunchFlag(cmd, &options)
-	require.NoError(t, cmd.Flags().Set(execFlagName, value))
-	return cmd, options
-}
-
-func TestDeliverWorktree_WithoutExecPrintsPath(t *testing.T) {
+func TestDeliverWorktree_WithoutExecReportsPath(t *testing.T) {
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	record := stubLaunch(t, nil)
 
-	require.NoError(t, deliverWorktree(commandWithOutput(stdout, stderr), "/tmp/worktree", worktreeLaunchOptions{}))
+	require.NoError(t, deliverWorktree(commandWithOutput(stdout, stderr), "/tmp/worktree", ""))
 
 	assert.Equal(t, "/tmp/worktree\n", stdout.String())
 	assert.False(t, record.called)
 }
 
-func TestDeliverWorktree_WithExecRunsCommandAndPrintsNoPath(t *testing.T) {
+func TestDeliverWorktree_WithExecRunsCommandAndReportsNoPath(t *testing.T) {
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	record := stubLaunch(t, nil)
 
-	require.NoError(t, deliverWorktree(commandWithOutput(stdout, stderr), "/tmp/worktree", worktreeLaunchOptions{command: "claude"}))
+	require.NoError(t, deliverWorktree(commandWithOutput(stdout, stderr), "/tmp/worktree", "claude"))
 
 	assert.True(t, record.called)
 	assert.Equal(t, "/tmp/worktree", record.dir)
 	assert.Equal(t, "claude", record.command)
-	// The launched command owns stdout, so the path contract does not apply.
+	// The launched command owns stdout, and there is no destination to report.
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "Running claude in /tmp/worktree")
 }
@@ -74,54 +63,86 @@ func TestDeliverWorktree_WithExecRunsCommandAndPrintsNoPath(t *testing.T) {
 func TestDeliverWorktree_ReportsHandoverFailure(t *testing.T) {
 	stubLaunch(t, errors.New("exec format error"))
 
-	err := deliverWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "/tmp/worktree", worktreeLaunchOptions{command: "claude"})
+	err := deliverWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "/tmp/worktree", "claude")
 
 	assert.ErrorContains(t, err, "exec format error")
 }
 
-func TestLaunchOptions_ValidateRejectsEmptyExec(t *testing.T) {
+// TestReportDestination_WritesTheCdFile covers the contract shell integration
+// relies on: TreeMan never has to be captured to report where to cd.
+func TestReportDestination_WritesTheCdFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "destination")
+	t.Setenv(cdFileEnv, file)
+	stdout := &bytes.Buffer{}
+
+	require.NoError(t, reportDestination(commandWithOutput(stdout, &bytes.Buffer{}), "/tmp/worktree"))
+
+	contents, err := os.ReadFile(file)
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/worktree\n", string(contents))
+	assert.Empty(t, stdout.String(), "the destination file replaces the stdout contract, it does not double it")
+}
+
+func TestReportDestination_FallsBackToStdout(t *testing.T) {
+	t.Setenv(cdFileEnv, "")
+	stdout := &bytes.Buffer{}
+
+	require.NoError(t, reportDestination(commandWithOutput(stdout, &bytes.Buffer{}), "/tmp/worktree"))
+
+	assert.Equal(t, "/tmp/worktree\n", stdout.String())
+}
+
+func TestReportDestination_ReportsAnUnwritableCdFile(t *testing.T) {
+	t.Setenv(cdFileEnv, filepath.Join(t.TempDir(), "absent", "destination"))
+
+	err := reportDestination(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "/tmp/worktree")
+
+	assert.ErrorContains(t, err, "could not report")
+}
+
+// TestLaunchFlag_RejectsEmptyExec exercises the check through Execute, because
+// registering the flag is what installs it -- a command cannot forget to call
+// it, and it must run before RunE creates anything.
+func TestLaunchFlag_RejectsEmptyExec(t *testing.T) {
 	for _, value := range []string{"", "   "} {
 		t.Run(fmt.Sprintf("%q", value), func(t *testing.T) {
-			cmd, options := execCommand(t, value)
+			ran := false
+			cmd := launchFlagCommand(&ran)
+			cmd.SetArgs([]string{"--" + execFlagName, value})
 
-			assert.ErrorContains(t, options.validate(cmd), "--exec needs a command")
+			assert.ErrorContains(t, cmd.Execute(), "--exec needs a command")
+			assert.False(t, ran, "the check runs before the command does any work")
 		})
 	}
 }
 
-func TestLaunchOptions_ValidateAcceptsCommandAndUnsetFlag(t *testing.T) {
-	cmd, options := execCommand(t, "nvim .")
-	require.NoError(t, options.validate(cmd))
+func TestLaunchFlag_AcceptsCommandAndUnsetFlag(t *testing.T) {
+	for name, args := range map[string][]string{
+		"a command": {"--" + execFlagName, "nvim ."},
+		"unset":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ran := false
+			cmd := launchFlagCommand(&ran)
+			cmd.SetArgs(args)
 
-	var unset worktreeLaunchOptions
-	bare := commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{})
-	addLaunchFlag(bare, &unset)
-	assert.NoError(t, unset.validate(bare))
+			require.NoError(t, cmd.Execute())
+			assert.True(t, ran)
+		})
+	}
 }
 
-func TestDeliverSwitchDestination_ExecRunsInCurrentWorktree(t *testing.T) {
-	worktree := t.TempDir()
-	chdirForTest(t, worktree)
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	record := stubLaunch(t, nil)
-
-	require.NoError(t, deliverSwitchDestination(commandWithOutput(stdout, stderr), worktree, worktreeLaunchOptions{command: "lazygit"}))
-
-	assert.True(t, record.called)
-	assert.Equal(t, worktree, record.dir)
-	assert.NotContains(t, stderr.String(), "Already in this worktree.")
-}
-
-func TestDeliverSwitchDestination_WithoutExecReportsDestination(t *testing.T) {
-	worktree := t.TempDir()
-	chdirForTest(t, worktree)
-	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	record := stubLaunch(t, nil)
-
-	require.NoError(t, deliverSwitchDestination(commandWithOutput(stdout, stderr), worktree, worktreeLaunchOptions{}))
-
-	assert.False(t, record.called)
-	assert.Contains(t, stderr.String(), "Already in this worktree.")
+// launchFlagCommand builds the smallest command that carries --exec, and
+// records whether its work ran.
+func launchFlagCommand(ran *bool) *cobra.Command {
+	var execCommand string
+	cmd := commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{})
+	cmd.RunE = func(*cobra.Command, []string) error {
+		*ran = true
+		return nil
+	}
+	addLaunchFlag(cmd, &execCommand)
+	return cmd
 }
 
 func TestWorktreeCommands_AcceptExecFlag(t *testing.T) {
@@ -137,36 +158,85 @@ func TestWorktreeCommands_AcceptExecFlag(t *testing.T) {
 	}
 }
 
-// TestPosixShellIntegration_ExecBypassesCapture runs the generated function
-// against a fake treeman. Without --exec the function reads stdout and changes
-// directory; with --exec it must not, because the launched command owns the
-// terminal that command substitution would take away.
-func TestPosixShellIntegration_ExecBypassesCapture(t *testing.T) {
-	bash, err := exec.LookPath("bash")
+// TestShellIntegration_ChangesDirectory runs each generated wrapper against a
+// fake treeman. The wrapper reads one path from the destination file, so it
+// needs to know nothing about TreeMan's flags: a run that reports no
+// destination -- what --exec does -- leaves the shell where it was.
+func TestShellIntegration_ChangesDirectory(t *testing.T) {
+	for _, shell := range []struct {
+		name   string
+		script string
+		call   string
+	}{
+		{name: "bash", script: fmt.Sprintf(posixShellIntegration, "bash"), call: `treeman switch "$@"` + "\n" + `printf 'cwd=%s\n' "$PWD"`},
+		{name: "zsh", script: fmt.Sprintf(posixShellIntegration, "zsh"), call: `treeman switch "$@"` + "\n" + `printf 'cwd=%s\n' "$PWD"`},
+		{name: "fish", script: fishShellIntegration, call: "treeman switch $argv\nprintf 'cwd=%s\\n' $PWD"},
+	} {
+		t.Run(shell.name, func(t *testing.T) {
+			shellPath, err := exec.LookPath(shell.name)
+			if err != nil {
+				t.Skipf("%s is not installed", shell.name)
+			}
+			destination := t.TempDir()
+			binDir := fakeTreeman(t, destination)
+
+			run := func(args ...string) string {
+				script := shell.script + "\n" + shell.call
+				argv := []string{"-c", script}
+				if shell.name != "fish" {
+					argv = append(argv, shell.name) // $0 for the -c script
+				}
+				command := exec.Command(shellPath, append(argv, args...)...)
+				command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+				command.Dir = t.TempDir()
+				output, err := command.CombinedOutput()
+				require.NoError(t, err, string(output))
+				return string(output)
+			}
+
+			assert.Contains(t, run(), "cwd="+destination,
+				"a reported destination changes the shell directory")
+			assert.NotContains(t, run("--exec", "true"), "cwd="+destination,
+				"--exec reports no destination, so the shell stays put")
+			assert.Contains(t, run("--exec", "true"), "exec-ran",
+				"the launched command still owns stdout")
+		})
+	}
+}
+
+// TestShellIntegration_WithoutMktemp covers the one dependency the wrapper
+// has. TreeMan must still run, and the lost directory change must be
+// explained rather than silently dropped.
+func TestShellIntegration_WithoutMktemp(t *testing.T) {
+	shellPath, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash is not installed")
 	}
-
-	binDir := t.TempDir()
 	destination := t.TempDir()
-	fake := filepath.Join(binDir, "treeman")
-	require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\nprintf '%s\\n' \""+destination+"\"\n"), 0o755))
+	binDir := fakeTreeman(t, destination)
 
-	script := fmt.Sprintf(posixShellIntegration, "bash") + `
-treeman switch "$@"
-printf 'cwd=%s\n' "$PWD"
-`
-	run := func(args ...string) string {
-		command := exec.Command(bash, append([]string{"-c", script, "bash"}, args...)...)
-		command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
-		command.Dir = t.TempDir()
-		output, err := command.CombinedOutput()
-		require.NoError(t, err, string(output))
-		return string(output)
-	}
+	script := fmt.Sprintf(posixShellIntegration, "bash") + "\ntreeman switch\nprintf 'cwd=%s\\n' \"$PWD\""
+	command := exec.Command(shellPath, "-c", script, "bash")
+	command.Env = append(os.Environ(), "PATH="+binDir) // no mktemp
+	command.Dir = t.TempDir()
 
-	assert.Contains(t, run(), "cwd="+destination, "without --exec the wrapper changes directory")
-	for _, args := range [][]string{{"-x", "true"}, {"--exec", "true"}, {"--exec=true"}} {
-		assert.NotContains(t, run(args...), "cwd="+destination, "--exec must not be captured: %v", args)
-	}
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.NotContains(t, string(output), "cwd="+destination)
+	assert.Contains(t, string(output), "mktemp is unavailable")
+}
+
+// fakeTreeman installs a treeman that reports destination through the
+// destination file, unless it was asked to exec -- which is how the real
+// binary behaves once a command takes over.
+func fakeTreeman(t *testing.T, destination string) string {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$arg\" in --exec|-x) echo exec-ran; exit 0 ;; esac\n" +
+		"done\n" +
+		"printf '%s\\n' \"" + destination + "\" > \"$TREEMAN_CD_FILE\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "treeman"), []byte(script), 0o755))
+	return binDir
 }

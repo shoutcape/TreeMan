@@ -283,7 +283,7 @@ func switchWithPickedRow(t *testing.T, row int) string {
 
 	var stdout, stderr bytes.Buffer
 	cmd := interactiveCommand(&stdout, &stderr)
-	require.NoError(t, runSwitch(cmd, "", worktreeLaunchOptions{}))
+	require.NoError(t, runSwitch(cmd, "", ""))
 
 	return strings.TrimSpace(stdout.String())
 }

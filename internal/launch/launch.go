@@ -14,7 +14,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/shoutcape/treeman/internal/hooks"
+	"github.com/shoutcape/treeman/internal/sh"
 )
 
 // InDir replaces the running process with command, which the system shell runs
@@ -23,7 +23,7 @@ import (
 // It returns only when the handover fails, so a caller must treat a nil return
 // as unreachable.
 func InDir(dir, command string) error {
-	shell, flag := hooks.Shell()
+	shell, flag := sh.Command()
 	binary, err := exec.LookPath(shell)
 	if err != nil {
 		return fmt.Errorf("could not find %s to run %q: %w", shell, command, err)

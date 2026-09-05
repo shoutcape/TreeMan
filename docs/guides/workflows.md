@@ -27,14 +27,14 @@ Run `wtb branch-name` for an exact remote branch name. This path does not need `
 
 ## Use a Script
 
-Native commands print a selected or new path to stdout. They send status to stderr.
+Native commands report a selected or new path for the caller's shell. They send status to stderr.
 
 ```bash
 path=$(treeman create feature/login)
 cd "$path"
 ```
 
-Successful `create` and `branch` commands print their worktree path to stdout.
+Successful `create` and `branch` commands report their worktree path.
 
 ## Start a Command in the Worktree
 

@@ -15,7 +15,7 @@ const databaseDocsURL = "https://github.com/shoutcape/TreeMan/blob/main/docs/int
 
 func newCreateCmd() *cobra.Command {
 	var setupOptions creationSetupOptions
-	var launchOptions worktreeLaunchOptions
+	var execCommand string
 	cmd := &cobra.Command{
 		Use:   "create <branch-name>",
 		Short: "Create a new worktree + branch",
@@ -28,24 +28,21 @@ short suffix that is derived from the branch name.
 .env* files are automatically copied from the main worktree, and
 dependencies are installed if a known lockfile is detected.
 
-The path of the new worktree is printed to stdout so that a shell wrapper
-can cd into it. With --exec, TreeMan runs the given command in the new
-worktree instead of printing the path.`,
+Shell integration changes directory to the new worktree; without it, the
+path is printed to stdout. With --exec, TreeMan runs the given command in
+the new worktree instead.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := launchOptions.validate(cmd); err != nil {
-				return err
-			}
-			return runCreate(cmd, args[0], setupOptions, launchOptions)
+			return runCreate(cmd, args[0], setupOptions, execCommand)
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
-	addLaunchFlag(cmd, &launchOptions)
+	addLaunchFlag(cmd, &execCommand)
 
 	return cmd
 }
 
-func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOptions, launchOptions worktreeLaunchOptions) error {
+func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOptions, execCommand string) error {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	// Validate branch name.
@@ -113,7 +110,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
 
-	// Print path to stdout so the shell wrapper can cd into it, or hand the
+	// Report the path so the shell wrapper can cd into it, or hand the
 	// worktree to --exec.
-	return deliverWorktree(cmd, worktreePath, launchOptions)
+	return deliverWorktree(cmd, worktreePath, execCommand)
 }

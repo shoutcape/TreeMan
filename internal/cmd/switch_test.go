@@ -97,7 +97,7 @@ func TestRunSwitch_SymlinkedQueryMatchesWorktree(t *testing.T) {
 	pathWithOnlyGit(t)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), link, worktreeLaunchOptions{}))
+	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), link, ""))
 
 	assert.Equal(t, worktree+"\n", stdout.String())
 }
@@ -110,8 +110,68 @@ func TestRunSwitch_SymlinkedCurrentWorktreeReportsAlreadyThere(t *testing.T) {
 	pathWithOnlyGit(t)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), "feature/symlink", worktreeLaunchOptions{}))
+	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), "feature/symlink", ""))
 
 	assert.Empty(t, stdout.String())
 	assert.Contains(t, stderr.String(), "Already in this worktree.")
+}
+
+func createSingleWorktreeRepository(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, os.Mkdir(repo, 0o755))
+	gitTest(t, repo, "init", "-b", "main")
+	gitTest(t, repo, "config", "user.name", "TreeMan Test")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644))
+	gitTest(t, repo, "add", "README.md")
+	gitTest(t, repo, "commit", "-m", "initial")
+	return repo
+}
+
+func TestSwitchCommand_SingleWorktree(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		args         []string
+		shouldLaunch bool
+		wantError    bool
+	}{
+		{name: "exact exec selection", args: []string{"switch", "main", "-x", "lazygit"}, shouldLaunch: true},
+		{name: "exec without query", args: []string{"switch", "-x", "lazygit"}, shouldLaunch: true},
+		{name: "without exec", args: []string{"switch"}},
+		{name: "unmatched exec query", args: []string{"switch", "mian", "-x", "lazygit"}, wantError: true},
+		{name: "partial exec query", args: []string{"switch", "mai", "-x", "lazygit"}, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := createSingleWorktreeRepository(t)
+			chdirForTest(t, repo)
+			pathWithOnlyGit(t)
+
+			record := stubLaunch(t, nil)
+			stderr := &bytes.Buffer{}
+			root := New("test", "", "")
+			root.SetOut(&bytes.Buffer{})
+			root.SetErr(stderr)
+			root.SetArgs(test.args)
+
+			err := root.Execute()
+			if test.wantError {
+				require.ErrorContains(t, err, "interactive selection is unavailable")
+				assert.False(t, record.called)
+				assert.NotContains(t, stderr.String(), "Only one worktree exists")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.shouldLaunch, record.called)
+			if test.shouldLaunch {
+				assert.Equal(t, repo, record.dir)
+				assert.Equal(t, "lazygit", record.command)
+				// The selection is the current worktree, and a command still
+				// has work to do there.
+				assert.NotContains(t, stderr.String(), "Already in this worktree.")
+			} else {
+				assert.Contains(t, stderr.String(), "Only one worktree exists")
+			}
+		})
+	}
 }

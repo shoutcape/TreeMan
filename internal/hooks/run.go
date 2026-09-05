@@ -10,7 +10,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
+
+	"github.com/shoutcape/treeman/internal/sh"
 )
 
 // RunResult describes the outcome of running a single hook command.
@@ -46,24 +47,15 @@ func RunPostCreate(dir string, cmds []string, outputs ...io.Writer) []RunResult 
 
 // runShellCommand executes a single command string via the system shell.
 func runShellCommand(dir, command string, output io.Writer) error {
-	shell, flag := Shell()
+	shell, flag := sh.Command()
 
 	cmd := exec.Command(shell, flag, command)
 	cmd.Dir = dir
-	cmd.Stdout = output // hooks output goes to stderr (stdout is reserved for the path)
+	cmd.Stdout = output // hook output is status, so it joins TreeMan's own on stderr
 	cmd.Stderr = output
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("command %q failed: %w", command, err)
 	}
 	return nil
-}
-
-// Shell returns the shell binary and flag that run a command string. Every
-// TreeMan feature that runs a user command string goes through this choice.
-func Shell() (string, string) {
-	if runtime.GOOS == "windows" {
-		return "cmd", "/C"
-	}
-	return "sh", "-c"
 }

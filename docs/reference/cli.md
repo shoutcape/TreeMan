@@ -1,8 +1,8 @@
 # Command Reference
 
-Run `treeman --help` for current command help. TreeMan sends status and warnings to stderr. Commands that select or create worktrees can send a path to stdout.
+Run `treeman --help` for current command help. TreeMan sends status and warnings to stderr. Commands that select, create, or delete a worktree report a destination directory for the caller's shell.
 
-Shell integration uses stdout destinations to change the current interactive shell directory. Native commands never change the caller directory.
+Shell integration uses that destination to change the current interactive shell directory. Native commands never change the caller directory. Read [How a destination reaches your shell](#how-a-destination-reaches-your-shell).
 
 `create`, `branch`, `review`, and `switch` accept `--exec` (`-x`). Read [Run a command in the worktree](#run-a-command-in-the-worktree).
 
@@ -40,8 +40,10 @@ treeman switch feature/login -x lazygit
 
 - The command owns the terminal and can be interactive.
 - The command reports its own exit status to your shell.
-- TreeMan does not print the worktree path. Status output before the handover stays on stderr.
+- TreeMan reports no destination. Status output before the handover stays on stderr.
 - Shell integration does not change your directory. When the command exits, your shell stays where it was.
+
+Shell integration needs no `--exec` handling of its own. It never captures TreeMan's output, so a launched command inherits the terminal whatever the flags were.
 
 A post-create hook is not an alternative. TreeMan runs hooks to completion and captures their output, which an interactive command cannot use.
 
@@ -117,7 +119,7 @@ treeman switch [query] [-x <command>]
 
 A path query resolves its symlinks before the comparison. Therefore a symlinked path selects the same worktree as its real path.
 
-It prints the selected path to stdout. It returns success without output when you cancel selection or select the current directory. A symlinked current directory counts as the current worktree. Shell integration changes directory when it receives a path.
+It reports the selected path as the shell's destination. It returns success without a destination when you cancel selection or select the current directory. A symlinked current directory counts as the current worktree. Shell integration changes directory when it receives a path.
 
 With `-x`, the command runs in the selected worktree and no path is printed. Read [Run a command in the worktree](#run-a-command-in-the-worktree).
 
@@ -154,7 +156,7 @@ A worktree whose directory was removed outside TreeMan is still deleted: the reg
 
 Removal renames the worktree directory into `.git/treeman/trash/` and hands the unlinking to a background process, so the command returns as soon as the workspace is clear rather than waiting on a dependency tree. Before the rename, TreeMan verifies the directory is still the worktree the repository registered there -- the check `git worktree remove` would have made, which renaming past it would otherwise skip. A worktree on a different filesystem cannot be renamed and is removed directly instead.
 
-When the deleted worktree is the current directory, TreeMan prints the main worktree path to stdout so shell integration can change directory safely.
+When the deleted worktree is the current directory, TreeMan reports the main worktree path so shell integration can change directory safely.
 
 ## `list`
 
@@ -227,7 +229,15 @@ This command prints version, commit, and build date when build data exists.
 
 ## Terminal Behavior
 
-TreeMan detects terminal capabilities separately for each input and output stream. Status messages and warnings use stderr. Commands that create, select, or delete a worktree can write a path to stdout for shell integration and scripts.
+TreeMan detects terminal capabilities separately for each input and output stream. Status messages and warnings use stderr. Commands that create, select, or delete a worktree report a destination path for shell integration and scripts.
+
+### How a Destination Reaches Your Shell
+
+A shell cannot change its own parent's directory, so TreeMan reports where to go and the shell wrapper performs the `cd`.
+
+When `TREEMAN_CD_FILE` names a file, TreeMan writes the destination there. Shell integration sets that variable, which is why it never runs TreeMan inside command substitution: a captured TreeMan could not hand its terminal to `--exec`, and the wrapper would have to parse TreeMan's own flags to know when to skip the capture.
+
+Without the variable -- a bare run, a script, a pipe -- the destination goes to stdout, which is the original contract.
 
 Color and rich terminal UI are enabled only when the relevant output stream is a terminal. Redirected output is plain. Set `NO_COLOR` to disable color. Set `TERM=dumb` to disable color and interactive selection.
 

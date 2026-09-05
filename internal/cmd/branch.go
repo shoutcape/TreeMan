@@ -17,7 +17,7 @@ import (
 
 func newBranchCmd() *cobra.Command {
 	var setupOptions creationSetupOptions
-	var launchOptions worktreeLaunchOptions
+	var execCommand string
 	cmd := &cobra.Command{
 		Use:   "branch [query]",
 		Short: "Create a worktree from a remote branch",
@@ -32,33 +32,30 @@ automatically without showing the picker.
 Requires the forge CLI (gh for GitHub, glab for GitLab) to list branches
 and open MRs/PRs.
 
-The path of the new worktree is printed to stdout so that a shell wrapper
-can cd into it. With --exec, TreeMan runs the given command in the new
-worktree instead of printing the path.`,
+Shell integration changes directory to the new worktree; without it, the
+path is printed to stdout. With --exec, TreeMan runs the given command in
+the new worktree instead.`,
 		Aliases: []string{"wtb"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := launchOptions.validate(cmd); err != nil {
-				return err
-			}
 			var query string
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runBranchWithSetup(cmd, query, setupOptions, launchOptions)
+			return runBranchWithSetup(cmd, query, setupOptions, execCommand)
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
-	addLaunchFlag(cmd, &launchOptions)
+	addLaunchFlag(cmd, &execCommand)
 
 	return cmd
 }
 
 func runBranch(cmd *cobra.Command, query string) error {
-	return runBranchWithSetup(cmd, query, creationSetupOptions{}, worktreeLaunchOptions{})
+	return runBranchWithSetup(cmd, query, creationSetupOptions{}, "")
 }
 
-func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions, launchOptions worktreeLaunchOptions) error {
+func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions, execCommand string) error {
 	created, err := createBranchWorktree(cmd, query)
 	if err != nil || created.worktree.Path == "" {
 		return err
@@ -75,7 +72,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	return deliverWorktree(cmd, created.worktree.Path, launchOptions)
+	return deliverWorktree(cmd, created.worktree.Path, execCommand)
 }
 
 type branchWorktreeCreation struct {
