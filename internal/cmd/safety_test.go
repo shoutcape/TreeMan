@@ -174,7 +174,7 @@ func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
 	chdirForTest(t, repo)
 	restoreRemove := removeWorktreeAndBranch
 	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
-		return gitpkg.RemoveWorktreeResult{}, assert.AnError
+		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeCandidate, Err: assert.AnError}
 	}
 	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
@@ -283,13 +283,43 @@ func TestRunDeleteDirectReportsPendingFileCleanup(t *testing.T) {
 	assert.Empty(t, stdout.String(), "diagnostics must not interfere with shell navigation")
 }
 
+// A capture that could not be restored keeps the registration and the branch,
+// which is what a plain refusal keeps too. What differs is the directory: it is
+// no longer at the registered path, so the recovery is a move, and no batch may
+// treat the worktree as untouched.
+func TestRunDeleteDirect_ReportsACaptureThatCouldNotBeRestored(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/retained")
+	chdirForTest(t, repo)
+	capture := filepath.Join(t.TempDir(), "worktree-job", "worktree")
+	restoreRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{
+			Scope:   gitpkg.RemovalScopeCaptureRetained,
+			Capture: capture,
+			Err:     assert.AnError,
+		}
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
+
+	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/retained", true, false)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), `worktree "`+worktree+`" was captured for removal and could not be restored`)
+	assert.Contains(t, err.Error(), `Completed: moved worktree "`+worktree+`" into the cleanup queue.`)
+	assert.Contains(t, err.Error(), `Remaining: worktree "`+worktree+`" registered with nothing at its path, branch "feature/retained".`)
+	assert.Contains(t, err.Error(), fmt.Sprintf("Recovery: move the captured directory back, then retry: mv %q %q", capture, worktree))
+	assert.False(t, refusedRemoval(err), "a batch must not skip a removal that needs manual recovery")
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/retained")
+}
+
 func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/branch-failure")
 	chdirForTest(t, repo)
 	restoreRemove := removeWorktreeAndBranch
 	removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
 		gitTest(t, mainRoot, "worktree", "remove", "--force", path)
-		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, assert.AnError
+		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 	}
 	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
@@ -316,7 +346,7 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		restoreRemove := removeWorktreeAndBranch
 		removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
 			events = append(events, "branch")
-			return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, assert.AnError
+			return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 		}
 		t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
@@ -393,7 +423,7 @@ func TestDeleteVerifiedWorktreePreservesBranchOnCompareAndDeleteMismatch(t *test
 	removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
 		gitTest(t, mainRoot, "worktree", "remove", "--force", path)
 		gitTest(t, repo, "update-ref", "refs/heads/feature/verified", movedSHA)
-		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, assert.AnError
+		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 	}
 	t.Cleanup(func() {
 		removeWorktreeAndBranch = originalRemove
@@ -425,7 +455,7 @@ func TestRunDeleteDirect_PreservesBranchMovedDuringDeletion(t *testing.T) {
 			removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
 				gitTest(t, mainRoot, "worktree", "remove", "--force", path)
 				gitTest(t, repo, "update-ref", "refs/heads/feature/moved", replacementSHA)
-				return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, assert.AnError
+				return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 			}
 			t.Cleanup(func() { removeWorktreeAndBranch = originalRemove })
 
@@ -538,6 +568,22 @@ func TestRunList_OutsideRepository(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not list worktrees")
+}
+
+func TestRepositoryReadFailureIsNotAPerCandidateRefusal(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/guard")
+	chdirForTest(t, repo)
+
+	_, refusal := planDeletion(worktree, "other", repo, deletionGuards{}, "")
+	require.Error(t, refusal)
+	assert.True(t, refusedRemoval(removalRefused{refusal}), "a decision about one worktree lets a batch skip it")
+
+	// Reading the worktree list is repository-wide: the next candidate would
+	// fail identically, so a batch must stop rather than blame each worktree.
+	chdirForTest(t, t.TempDir())
+	_, unavailable := planDeletion(worktree, "feature/guard", repo, deletionGuards{}, "")
+	require.Error(t, unavailable)
+	assert.False(t, refusedRemoval(removalRefused{unavailable}))
 }
 
 func createTestWorktree(t *testing.T, branch string) (string, string) {

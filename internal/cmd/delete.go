@@ -216,7 +216,7 @@ type deletionPlan struct {
 func planDeletion(dest, branch, mainRoot string, guards deletionGuards, expectedSHA string) (deletionPlan, error) {
 	entries, err := git.WorktreeList()
 	if err != nil {
-		return deletionPlan{}, err
+		return deletionPlan{}, repositoryUnavailable{err}
 	}
 	entry, branchSHA, err := git.ValidateWorktreeRemoval(mainRoot, entries, dest, branch, expectedSHA)
 	if err != nil {
@@ -224,7 +224,7 @@ func planDeletion(dest, branch, mainRoot string, guards deletionGuards, expected
 	}
 	defaultBranch, err := resolveDefaultBranch(entries, mainRoot)
 	if err != nil {
-		return deletionPlan{}, fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
+		return deletionPlan{}, repositoryUnavailable{fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)}
 	}
 	if branch == defaultBranch {
 		return deletionPlan{}, fmt.Errorf("cannot delete the default branch %q", branch)
@@ -372,16 +372,8 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 	if removal.CleanupError != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("pending file cleanup needs retry: %v", removal.CleanupError)))
 	}
-	if err != nil && !removal.WorktreeUnregistered {
-		return deleteWorktreeOutcome{}, removalRefused{deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))}
-	}
-	if err != nil && !removal.BranchDeleted {
-		return deleteWorktreeOutcome{}, deleteWorktreeFailure(
-			fmt.Errorf("branch %q was preserved after worktree removal: %w", entry.Branch, err),
-			fmt.Sprintf("removed worktree %q", entry.Path),
-			fmt.Sprintf("branch %q", entry.Branch),
-			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
-		)
+	if err != nil {
+		return deleteWorktreeOutcome{}, plan.removalFailure(err)
 	}
 	if commitDatabaseCleanup != nil {
 		if err := commitDatabaseCleanup(); err != nil {
@@ -392,19 +384,82 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path), cleanupJob: removal.CleanupJob}, nil
 }
 
-// removalRefused marks a deletion that left every Git resource in place:
-// planning is read-only, and a removal that never unregistered the worktree
-// touched nothing. A batch can skip such a candidate and keep going, whereas a
-// partially completed removal must stop the run so the user can act on the
-// inconsistent state it left behind.
+// removalFailure turns the removal's own account of what it left behind into
+// the error a batch acts on. Which durable transitions completed cannot answer
+// that on its own: a worktree that is still registered because its captured
+// directory could not be put back is not a worktree that was merely refused,
+// and both report the same unregistration. So the scope decides, and an
+// unclassified failure -- which claims nothing -- stops the run.
+func (plan deletionPlan) removalFailure(err error) error {
+	entry := plan.entry
+	remaining := fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch)
+	retry := fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force))
+	var failure *git.RemovalError
+	if !errors.As(err, &failure) {
+		return deleteWorktreeFailure(err, "unknown", remaining, retry)
+	}
+	switch failure.Scope {
+	case git.RemovalScopeRepository:
+		return repositoryUnavailable{deleteWorktreeFailure(err, "none", remaining, retry)}
+	case git.RemovalScopeCaptureRetained:
+		// Git kept both resources, but the working tree did not stay where the
+		// registration says it is, so the recovery is a move rather than a
+		// retry and the run stops until someone makes it.
+		return deleteWorktreeFailure(
+			fmt.Errorf("worktree %q was captured for removal and could not be restored: %w", entry.Path, err),
+			fmt.Sprintf("moved worktree %q into the cleanup queue", entry.Path),
+			fmt.Sprintf("worktree %q registered with nothing at its path, branch %q", entry.Path, entry.Branch),
+			fmt.Sprintf("move the captured directory back, then retry: mv %q %q && treeman delete --path %q --branch %q --yes%s", failure.Capture, entry.Path, entry.Path, entry.Branch, forceFlag(plan.guards.force)),
+		)
+	case git.RemovalScopeBranchRetained:
+		return deleteWorktreeFailure(
+			fmt.Errorf("branch %q was preserved after worktree removal: %w", entry.Branch, err),
+			fmt.Sprintf("removed worktree %q", entry.Path),
+			fmt.Sprintf("branch %q", entry.Branch),
+			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
+		)
+	default:
+		return removalRefused{deleteWorktreeFailure(err, "none", remaining, retry)}
+	}
+}
+
+// removalRefused marks a deletion the removal itself reported as a decision
+// about one worktree, having left every Git resource in place and nothing
+// captured. A batch can skip such a candidate and keep going, whereas a removal
+// that got further -- or that could not read what every candidate needs -- must
+// stop the run so the user can act on the state it left behind.
 type removalRefused struct{ err error }
 
 func (r removalRefused) Error() string { return r.err.Error() }
 
 func (r removalRefused) Unwrap() error { return r.err }
 
-// refusedRemoval reports whether err is a refusal that changed nothing.
+// repositoryUnavailable marks a failure to read repository-wide state rather
+// than a decision about one worktree. Nothing was removed, but the next
+// candidate would fail the same way, so a batch must stop instead of
+// reporting the repository's problem once per worktree as if each had been
+// individually refused.
+type repositoryUnavailable struct{ err error }
+
+func (r repositoryUnavailable) Error() string { return r.err.Error() }
+
+func (r repositoryUnavailable) Unwrap() error { return r.err }
+
+// refusedRemoval reports whether err is a refusal that changed nothing and
+// says nothing about the candidates still to come. It reads the classification
+// the removal supplied rather than re-deriving one.
 func refusedRemoval(err error) bool {
+	var unavailable repositoryUnavailable
+	if errors.As(err, &unavailable) {
+		return false
+	}
+	// Planning carries the same classification: a registration directory that
+	// cannot be read is unreadable for every candidate, not a decision about
+	// the one that happened to reach it first.
+	var failure *git.RemovalError
+	if errors.As(err, &failure) && failure.Scope != git.RemovalScopeCandidate {
+		return false
+	}
 	var refused removalRefused
 	return errors.As(err, &refused)
 }

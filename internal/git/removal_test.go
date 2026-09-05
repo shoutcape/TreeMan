@@ -304,6 +304,7 @@ func TestRetryTrashCleanupSkipsUnreadyJobWhileOriginalWorktreeIsRegistered(t *te
 	originalPath := filepath.Join(t.TempDir(), "worktree")
 	require.NoError(t, os.MkdirAll(job, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(originalPath), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(job, stagedWorktreeName), 0o700))
 
 	called := false
 	previous := detachRemoval
@@ -328,6 +329,7 @@ func TestRetryTrashCleanupPreservesUnreadyJobAfterOriginalWorktreeIsUnregistered
 	originalPath := filepath.Join(t.TempDir(), "worktree")
 	require.NoError(t, os.MkdirAll(job, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(originalPath), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(job, stagedWorktreeName), 0o700))
 
 	var cleaned string
 	previous := detachRemoval
@@ -375,6 +377,78 @@ func TestRetryTrashCleanupSkipsAnActiveJob(t *testing.T) {
 	assert.DirExists(t, job)
 }
 
+// removalFailureOf reads the classification a failed removal carried. Every
+// failure has to carry one: it is what tells a batch whether the run may go on.
+func removalFailureOf(t *testing.T, err error) *RemovalError {
+	t.Helper()
+	require.Error(t, err)
+	var failure *RemovalError
+	require.ErrorAs(t, err, &failure)
+	return failure
+}
+
+func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
+	t.Run("a restored capture refuses this worktree alone", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := addTestWorktree(t, repo, "feature")
+		sha := branchSHAForRemoval(t, repo, "feature")
+		require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("unsaved"), 0o644))
+		captureStagedRemoval(t)
+
+		_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+		failure := removalFailureOf(t, err)
+		assert.Equal(t, RemovalScopeCandidate, failure.Scope)
+		assert.Empty(t, failure.Capture, "a worktree that is back at its path needs no recovery")
+		assert.FileExists(t, filepath.Join(worktree, "scratch"))
+	})
+
+	t.Run("an unreadable cleanup queue is the repository's failure", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := addTestWorktree(t, repo, "feature")
+		sha := branchSHAForRemoval(t, repo, "feature")
+		commonDir, err := CommonDir(repo)
+		require.NoError(t, err)
+		trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+		require.NoError(t, os.MkdirAll(trashRoot, 0o700))
+		require.NoError(t, os.Chmod(trashRoot, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(trashRoot, 0o700) })
+		if _, err := os.ReadDir(trashRoot); err == nil {
+			t.Skip("the cleanup queue is readable despite its mode; this needs an unprivileged user")
+		}
+
+		_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+		// Every candidate reads this queue, so blaming the worktree that
+		// reached it first would repeat one repository problem per worktree.
+		failure := removalFailureOf(t, err)
+		assert.Equal(t, RemovalScopeRepository, failure.Scope)
+		assert.DirExists(t, worktree)
+		gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature")
+	})
+
+	t.Run("a branch that outlives its worktree is not a refusal", func(t *testing.T) {
+		repo := createGitTestRepo(t)
+		worktree := addTestWorktree(t, repo, "feature")
+		expectedSHA := branchSHAForRemoval(t, repo, "feature")
+		gitTest(t, repo, "commit", "--allow-empty", "-m", "advance main")
+		mainSHA := branchSHAForRemoval(t, repo, "main")
+		previous := detachRemoval
+		detachRemoval = func(_ string, job string) error {
+			require.NoError(t, os.RemoveAll(job))
+			gitTest(t, repo, "update-ref", "refs/heads/feature", mainSHA)
+			return nil
+		}
+		t.Cleanup(func() { detachRemoval = previous })
+
+		result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+
+		failure := removalFailureOf(t, err)
+		assert.Equal(t, RemovalScopeBranchRetained, failure.Scope)
+		assert.True(t, result.WorktreeUnregistered)
+	})
+}
+
 func TestRemoveWorktreeAndBranchReportsUnregisterBeforeCompareDeleteFailure(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
@@ -411,6 +485,11 @@ func TestRestoreStagedWorktreeDoesNotReplaceARecreatedPath(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "remains at "+strconv.Quote(stagedPath))
+	// The registration survives, so nothing about what completed distinguishes
+	// this from a refusal; the scope and the capture it names are what do.
+	failure := removalFailureOf(t, err)
+	assert.Equal(t, RemovalScopeCaptureRetained, failure.Scope)
+	assert.Equal(t, stagedPath, failure.Capture)
 	replacement, readErr := os.ReadFile(original)
 	require.NoError(t, readErr)
 	assert.Equal(t, "replacement", string(replacement))
@@ -439,7 +518,9 @@ func TestRemovalPreservesUnresolvedCaptureAcrossRetries(t *testing.T) {
 				cause := validateStagedWorktree(repo, worktree, staged.path, registration, false)
 				require.ErrorContains(t, cause, "uncommitted or untracked")
 				require.NoError(t, os.Mkdir(worktree, 0o700))
-				require.ErrorContains(t, restoreStagedWorktree(worktree, staged, cause), "remains at")
+				retained := restoreStagedWorktree(worktree, staged, cause)
+				require.ErrorContains(t, retained, "remains at")
+				require.Equal(t, RemovalScopeCaptureRetained, removalFailureOf(t, retained).Scope)
 				require.NoError(t, os.Remove(worktree))
 			}
 			cleaned := captureStagedRemoval(t)
@@ -482,4 +563,63 @@ func TestRemovalWithRelativeGitReferences(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
+}
+
+func TestRemovalRecoversAJobThatCapturedNothing(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+	require.NoError(t, os.MkdirAll(trashRoot, 0o700))
+	// Staging records the original path before the rename; a process stopped
+	// in that window leaves metadata with nothing behind it.
+	job, err := os.MkdirTemp(trashRoot, "worktree-")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(worktree), 0o600))
+
+	cleaned := captureStagedRemoval(t)
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+	require.NoError(t, err, "an empty capture must not refuse removal of its own worktree")
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
+	assert.NoDirExists(t, job, "metadata protecting nothing is disposable")
+	assert.Contains(t, *cleaned, filepath.Join(job, stagedWorktreeName))
+}
+
+func TestRemovalStillProtectsACaptureWhoseDirectoryExists(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+	require.NoError(t, os.MkdirAll(trashRoot, 0o700))
+	job, err := os.MkdirTemp(trashRoot, "worktree-")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(worktree), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(job, stagedWorktreeName), 0o700))
+
+	_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+
+	require.ErrorContains(t, err, "unresolved captured data remains")
+	assert.DirExists(t, filepath.Join(job, stagedWorktreeName))
+}
+
+func TestForcedRemovalSkipsTheUntrackedFileScan(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	registration, err := linkedRegistrationDir(commonDir, worktree)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("x"), 0o600))
+	// An unreadable index makes `git status` fail, so a call that still ran it
+	// would surface that failure rather than the waived answer.
+	require.NoError(t, os.WriteFile(filepath.Join(registration, "index"), []byte("not an index"), 0o600))
+
+	require.ErrorContains(t, validateStagedWorktree(repo, worktree, worktree, registration, false), "could not inspect staged worktree")
+	assert.NoError(t, validateStagedWorktree(repo, worktree, worktree, registration, true))
 }

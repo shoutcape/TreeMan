@@ -23,7 +23,62 @@ const (
 // detachRemoval is swapped in tests that need cleanup to finish synchronously.
 var detachRemoval = detachRemoveAll
 
-// RemoveWorktreeResult describes which durable state transitions completed.
+// RemovalScope classifies a failed removal by what it left behind. A caller
+// removing worktrees in a batch needs that answer to decide whether the next
+// candidate is still worth attempting, and it cannot be inferred from which
+// durable transitions completed: a capture that could not be restored leaves
+// the worktree registered too, and a repository whose state cannot be read
+// removes nothing either.
+type RemovalScope int
+
+const (
+	// RemovalScopeCandidate is a decision about this worktree alone. Nothing
+	// durable changed and the other candidates are unaffected, so a batch may
+	// skip it and keep going.
+	RemovalScopeCandidate RemovalScope = iota
+	// RemovalScopeRepository is a failure to read or prepare repository-wide
+	// state. Nothing changed, but every remaining candidate would fail the same
+	// way, so a batch stops rather than reporting one problem once per worktree.
+	RemovalScopeRepository
+	// RemovalScopeCaptureRetained means the worktree directory was moved into
+	// the cleanup queue and could not be put back. The registration survives,
+	// but nothing stands at the registered path: this is not an untouched
+	// worktree, and recovering it is manual.
+	RemovalScopeCaptureRetained
+	// RemovalScopeBranchRetained means the worktree was unregistered and its
+	// branch outlived it.
+	RemovalScopeBranchRetained
+)
+
+// RemovalError is the classification every RemoveWorktreeAndBranch failure
+// carries. Capture names where a retained capture remains, and is empty for
+// every other scope.
+type RemovalError struct {
+	Scope   RemovalScope
+	Capture string
+	Err     error
+}
+
+func (e *RemovalError) Error() string { return e.Err.Error() }
+
+func (e *RemovalError) Unwrap() error { return e.Err }
+
+func candidateRefusal(err error) error {
+	return &RemovalError{Scope: RemovalScopeCandidate, Err: err}
+}
+
+func repositoryFailure(err error) error {
+	return &RemovalError{Scope: RemovalScopeRepository, Err: err}
+}
+
+func branchRetained(err error) error {
+	return &RemovalError{Scope: RemovalScopeBranchRetained, Err: err}
+}
+
+// RemoveWorktreeResult describes which durable state transitions completed. It
+// reports progress, not classification: what a failure left behind is the
+// RemovalError's answer to give, because a registration that survives says
+// nothing about whether the directory is still standing at it.
 // File cleanup may remain queued after both Git resources have been removed.
 // CleanupJob names that queued directory so callers can ask whether it is still
 // on disk when they report, rather than being handed an answer sampled when the
@@ -58,31 +113,34 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 	err := withWorktreeMutationLock(mainRoot, func() error {
 		commonDir, err := CommonDir(mainRoot)
 		if err != nil {
-			return err
+			return repositoryFailure(err)
 		}
 		trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
 		if err := os.MkdirAll(trashRoot, 0o700); err != nil {
-			return fmt.Errorf("could not create worktree cleanup queue: %w", err)
+			return repositoryFailure(fmt.Errorf("could not create worktree cleanup queue: %w", err))
 		}
 
 		entries, err := worktreeListInDir(mainRoot)
 		if err != nil {
-			return err
+			return repositoryFailure(err)
 		}
 		jobs, err := inspectCleanupQueue(trashRoot)
 		if err != nil {
-			return err
+			return repositoryFailure(err)
 		}
 		result.CleanupError = retryTrashCleanup(trashRoot, jobs)
 
 		entry, branchSHA, err := ValidateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA)
 		if err != nil {
-			return err
+			return candidateRefusal(err)
 		}
 
+		// A capture left behind by an earlier run is this path's problem alone:
+		// the removal it belonged to already reported the recovery, and every
+		// other candidate is still removable.
 		for _, job := range jobs {
 			if job.state == cleanupUnresolved && sameRemovalPath(job.originalPath, entry.Path) {
-				return fmt.Errorf("cannot remove worktree %q: unresolved captured data remains at %q; recover it before retrying removal", entry.Path, filepath.Join(job.path, stagedWorktreeName))
+				return candidateRefusal(fmt.Errorf("cannot remove worktree %q: unresolved captured data remains at %q; recover it before retrying removal", entry.Path, filepath.Join(job.path, stagedWorktreeName)))
 			}
 		}
 
@@ -101,38 +159,61 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 		}
 
 		if err := runWorktreeRemove(mainRoot, entry.Path); err != nil {
+			removeErr := fmt.Errorf("failed to remove worktree %q: %w", entry.Path, err)
 			if staged != nil {
-				return restoreStagedWorktree(entry.Path, staged, fmt.Errorf("failed to remove worktree %q: %w", entry.Path, err))
+				return restoreStagedWorktree(entry.Path, staged, removeErr)
 			}
-			return fmt.Errorf("failed to remove worktree %q: %w", entry.Path, err)
+			return candidateRefusal(removeErr)
 		}
 		result.WorktreeUnregistered = true
 
 		if staged != nil {
+			// The readiness marker is what puts the job in the queue: without
+			// it the capture stays unresolved and no later removal retries it,
+			// so it must not be reported as cleanup that is merely pending.
 			if err := os.WriteFile(filepath.Join(staged.job, cleanupReadyFile), nil, 0o600); err != nil {
 				result.CleanupError = errors.Join(result.CleanupError, fmt.Errorf("could not mark staged worktree %q ready for cleanup: %w", staged.path, err))
-			} else if err := detachRemoval(trashRoot, staged.job); err != nil {
-				result.CleanupError = errors.Join(result.CleanupError, err)
+			} else {
+				result.CleanupJob = staged.job
+				if err := detachRemoval(trashRoot, staged.job); err != nil {
+					result.CleanupError = errors.Join(result.CleanupError, err)
+				}
 			}
-			result.CleanupJob = staged.job
 		}
 
+		// Past this point the registration is gone, so every remaining failure
+		// leaves the branch behind rather than refusing the removal.
 		entries, err = worktreeListInDir(mainRoot)
 		if err != nil {
-			return err
+			return branchRetained(err)
 		}
 		for _, other := range entries {
 			if other.Branch == branch {
-				return fmt.Errorf("branch %q is still checked out at worktree %q", branch, other.Path)
+				return branchRetained(fmt.Errorf("branch %q is still checked out at worktree %q", branch, other.Path))
 			}
 		}
 		if _, err := runInDir(mainRoot, "update-ref", "-d", "refs/heads/"+branch, branchSHA); err != nil {
-			return fmt.Errorf("branch %q could not be deleted at expected SHA %s: %w", branch, branchSHA, err)
+			return branchRetained(fmt.Errorf("branch %q could not be deleted at expected SHA %s: %w", branch, branchSHA, err))
 		}
 		result.BranchDeleted = true
 		return nil
 	})
-	return result, err
+	return result, classifiedRemovalFailure(err)
+}
+
+// classifiedRemovalFailure keeps the scope contract total at the boundary. A
+// failure that arrives without a scope -- acquiring the mutation lock, say --
+// happened before this worktree was reached at all, and the next candidate
+// would meet it too.
+func classifiedRemovalFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var failure *RemovalError
+	if errors.As(err, &failure) {
+		return err
+	}
+	return repositoryFailure(err)
 }
 
 // ValidateWorktreeRemoval checks registration and branch identity for preflight
@@ -189,7 +270,9 @@ func linkedRegistrationDir(commonDir, worktreePath string) (string, error) {
 	registrations := filepath.Join(commonDir, "worktrees")
 	entries, err := os.ReadDir(registrations)
 	if err != nil {
-		return "", fmt.Errorf("cannot remove worktree %q: could not read linked-worktree registrations: %w", worktreePath, err)
+		// Every removal reads the same directory, so losing it is the
+		// repository's failure rather than this worktree's.
+		return "", repositoryFailure(fmt.Errorf("cannot remove worktree %q: could not read linked-worktree registrations: %w", worktreePath, err))
 	}
 	var readErrors []error
 	for _, entry := range entries {
@@ -211,22 +294,24 @@ func linkedRegistrationDir(commonDir, worktreePath string) (string, error) {
 		}
 	}
 	if len(readErrors) > 0 {
-		return "", fmt.Errorf("cannot remove worktree %q: its registration is unreadable: %w", worktreePath, errors.Join(readErrors...))
+		return "", candidateRefusal(fmt.Errorf("cannot remove worktree %q: its registration is unreadable: %w", worktreePath, errors.Join(readErrors...)))
 	}
-	return "", fmt.Errorf("cannot remove worktree %q: its linked-worktree registration could not be found", worktreePath)
+	return "", candidateRefusal(fmt.Errorf("cannot remove worktree %q: its linked-worktree registration could not be found", worktreePath))
 }
 
 // stageWorktreeRemoval moves exactly one filesystem object into a new cleanup
 // job. Only ENOENT means there was no object to protect; files and every other
 // filesystem error remain deletion refusals.
 func stageWorktreeRemoval(trashRoot, path string) (*stagedWorktree, bool, error) {
+	// An unusable queue is the repository's failure: it stops the next removal
+	// exactly as it stopped this one.
 	job, err := os.MkdirTemp(trashRoot, "worktree-")
 	if err != nil {
-		return nil, false, fmt.Errorf("could not create worktree cleanup job: %w", err)
+		return nil, false, repositoryFailure(fmt.Errorf("could not create worktree cleanup job: %w", err))
 	}
 	if err := os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(path), 0o600); err != nil {
 		_ = os.RemoveAll(job)
-		return nil, false, fmt.Errorf("could not record staged worktree path: %w", err)
+		return nil, false, repositoryFailure(fmt.Errorf("could not record staged worktree path: %w", err))
 	}
 
 	staged := &stagedWorktree{job: job, path: filepath.Join(job, stagedWorktreeName)}
@@ -238,10 +323,10 @@ func stageWorktreeRemoval(trashRoot, path string) (*stagedWorktree, bool, error)
 				return nil, true, nil
 			}
 			if statErr != nil {
-				return nil, false, fmt.Errorf("could not determine whether worktree %q exists: %w", path, statErr)
+				return nil, false, candidateRefusal(fmt.Errorf("could not determine whether worktree %q exists: %w", path, statErr))
 			}
 		}
-		return nil, false, fmt.Errorf("could not stage worktree %q for removal: %w", path, err)
+		return nil, false, candidateRefusal(fmt.Errorf("could not stage worktree %q for removal: %w", path, err))
 	}
 	return staged, false, nil
 }
@@ -250,11 +335,17 @@ func validateStagedWorktree(mainRoot, originalPath, stagedPath, expectedGitDir s
 	if err := validateWorktreeIdentity(originalPath, stagedPath, expectedGitDir); err != nil {
 		return err
 	}
+	// --force waives the answer, so the question is not worth asking: listing
+	// every untracked file in a dependency tree is the cost this whole path
+	// exists to avoid, and it would be paid holding the mutation lock.
+	if force {
+		return nil
+	}
 	status, err := runInDir(mainRoot, "--git-dir="+expectedGitDir, "--work-tree="+stagedPath, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return fmt.Errorf("could not inspect staged worktree %q: %w", stagedPath, err)
 	}
-	if status != "" && !force {
+	if status != "" {
 		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", stagedPath)
 	}
 	return nil
@@ -298,14 +389,22 @@ func validateWorktreeIdentity(originalPath, stagedPath, expectedGitDir string) e
 	return nil
 }
 
+// restoreStagedWorktree puts the capture back and reports what the failure
+// left behind. A restored worktree is untouched and refuses only itself; a
+// capture that could not be restored is a registration with nothing at its
+// path, which no caller may treat as a worktree it merely declined to remove.
 func restoreStagedWorktree(originalPath string, staged *stagedWorktree, cause error) error {
 	if err := renameNoReplace(staged.path, originalPath); err != nil {
-		return fmt.Errorf("%w (the captured worktree could not be restored and remains at %q: %v)", cause, staged.path, err)
+		return &RemovalError{
+			Scope:   RemovalScopeCaptureRetained,
+			Capture: staged.path,
+			Err:     fmt.Errorf("%w (the captured worktree could not be restored and remains at %q: %v)", cause, staged.path, err),
+		}
 	}
 	if err := os.RemoveAll(staged.job); err != nil {
-		return errors.Join(cause, fmt.Errorf("could not remove restored worktree staging metadata at %q: %w", staged.job, err))
+		return candidateRefusal(errors.Join(cause, fmt.Errorf("could not remove restored worktree staging metadata at %q: %w", staged.job, err)))
 	}
-	return cause
+	return candidateRefusal(cause)
 }
 
 func runWorktreeRemove(dir, path string) error {
@@ -347,7 +446,18 @@ func inspectCleanupQueue(trashRoot string) ([]cleanupJob, error) {
 				if job.originalPath == "" {
 					return nil, fmt.Errorf("empty cleanup metadata for %q", job.path)
 				}
-				job.state = cleanupUnresolved
+				// Metadata alone protects nothing. Staging records the original
+				// path before the rename, so a process that stopped in that
+				// window -- or a restoration whose metadata outlived the
+				// directory it put back -- leaves a job with nothing captured
+				// in it. Calling that unresolved would refuse every later
+				// removal of the path forever, and name a recovery location
+				// that does not exist.
+				if _, statErr := os.Lstat(filepath.Join(job.path, stagedWorktreeName)); statErr == nil {
+					job.state = cleanupUnresolved
+				} else if !os.IsNotExist(statErr) {
+					return nil, fmt.Errorf("could not inspect captured worktree for %q: %w", job.path, statErr)
+				}
 			} else if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("could not read cleanup metadata for %q: %w", job.path, err)
 			}

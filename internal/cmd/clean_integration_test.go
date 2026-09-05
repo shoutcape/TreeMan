@@ -925,19 +925,34 @@ func TestCleanSkipsLockedWorktreeWithoutClassifying(t *testing.T) {
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
 
-func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
-	repo, refusedWorktree := createMergedCleanWorktree(t)
+// twoCleanCandidates gives a repository with two merged, clean worktrees, so a
+// batch has a second candidate to reach -- or to be stopped before reaching.
+func twoCleanCandidates(t *testing.T) (string, string, string, merge.ClassifierFunc) {
+	t.Helper()
+	repo, first := createMergedCleanWorktree(t)
 	runGitInDir(t, repo, "checkout", "-b", "second")
 	runGitInDir(t, repo, "push", "-u", "origin", "second")
 	runGitInDir(t, repo, "checkout", "main")
-	removableWorktree := filepath.Join(t.TempDir(), "second-worktree")
-	runGitInDir(t, repo, "worktree", "add", removableWorktree, "second")
+	second := filepath.Join(t.TempDir(), "second-worktree")
+	runGitInDir(t, repo, "worktree", "add", second, "second")
 	changeToDir(t, repo)
+	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+		cleanable := make([]merge.Candidate, 0, len(branches))
+		for _, branch := range branches {
+			cleanable = append(cleanable, merge.Candidate{Branch: branch, SHA: gitRevParse(t, repo, "refs/heads/"+branch)})
+		}
+		return merge.Result{Cleanable: cleanable}, nil
+	})
+	return repo, first, second, classifier
+}
+
+func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
+	repo, refusedWorktree, removableWorktree, classifier := twoCleanCandidates(t)
 
 	previousRemove := removeWorktreeAndBranch
 	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
 		if branch == "feature" {
-			return gitpkg.RemoveWorktreeResult{}, assert.AnError
+			return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeCandidate, Err: assert.AnError}
 		}
 		return previousRemove(mainRoot, path, branch, expectedSHA, force)
 	}
@@ -946,13 +961,6 @@ func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	command := &cobra.Command{}
 	command.SetErr(stderr)
-	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
-		cleanable := make([]merge.Candidate, 0, len(branches))
-		for _, branch := range branches {
-			cleanable = append(cleanable, merge.Candidate{Branch: branch, SHA: gitRevParse(t, repo, "refs/heads/"+branch)})
-		}
-		return merge.Result{Cleanable: cleanable}, nil
-	})
 
 	err := runCleanWithClassifier(command, classifier, false, true)
 
@@ -966,6 +974,73 @@ func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 	assert.NoDirExists(t, removableWorktree)
 	assert.Error(t, exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/second").Run())
+}
+
+// A removal that captured the worktree directory and could not put it back
+// leaves the registration intact, so nothing about which Git resources survived
+// tells it apart from a refusal. Only the removal's own classification does,
+// and the batch has to stop on it: the worktree is not where Git says it is.
+func TestCleanStopsWhenACaptureCouldNotBeRestored(t *testing.T) {
+	repo, first, second, classifier := twoCleanCandidates(t)
+	capture := filepath.Join(t.TempDir(), "worktree-job", "worktree")
+	var attempted []string
+	previousRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(_, _, branch, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+		attempted = append(attempted, branch)
+		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{
+			Scope:   gitpkg.RemovalScopeCaptureRetained,
+			Capture: capture,
+			Err:     assert.AnError,
+		}
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+
+	err := runCleanWithClassifier(command, classifier, false, true)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Contains(t, err.Error(), "was captured for removal and could not be restored")
+	assert.Contains(t, err.Error(), "Recovery: move the captured directory back")
+	assert.Contains(t, err.Error(), capture)
+	assert.Len(t, attempted, 1, "a removal that needs manual recovery stops the batch")
+	assert.NotContains(t, ui.StripANSI(stderr.String()), "skipping")
+	assert.DirExists(t, first)
+	assert.DirExists(t, second)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/second")
+}
+
+// Repository-wide state is read by every removal, so a failure to read it
+// during execution stops the run for the same reason it does during planning:
+// the next candidate would meet the identical error.
+func TestCleanStopsOnARepositoryWideRemovalFailure(t *testing.T) {
+	repo, first, second, classifier := twoCleanCandidates(t)
+	var attempted []string
+	previousRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(_, _, branch, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+		attempted = append(attempted, branch)
+		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeRepository, Err: assert.AnError}
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+
+	err := runCleanWithClassifier(command, classifier, false, true)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Len(t, attempted, 1, "the second candidate would fail identically")
+	assert.NotContains(t, ui.StripANSI(stderr.String()), "skipping")
+	assert.DirExists(t, first)
+	assert.DirExists(t, second)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/second")
 }
 
 func TestCleanPendingFileCleanupNoticeReflectsTheQueueWhenReported(t *testing.T) {
