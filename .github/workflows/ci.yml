@@ -7,6 +7,28 @@ permissions:
   contents: read
 
 jobs:
+  # Worktree removal takes a different path on Darwin: restoration falls back to
+  # a check before the rename, and cleanup addresses files by name rather than
+  # through inherited descriptors. Cross-compilation proves those files compile,
+  # not that they behave, and a restore that silently refuses would strand a
+  # user's worktree in the cleanup queue. So the unit tests run natively too --
+  # only those, because the shell smoke suite and the installer are exercised on
+  # the Linux job and would need their own macOS handling to add nothing here.
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Unit tests
+        run: go test ./...
+
   test:
     runs-on: ubuntu-latest
     steps:
