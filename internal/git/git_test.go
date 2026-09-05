@@ -361,40 +361,6 @@ func TestUnpushedCommitCount(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestDeleteBranchAtSHA(t *testing.T) {
-	t.Run("deletes matching ref", func(t *testing.T) {
-		repo := createGitTestRepo(t)
-		gitTest(t, repo, "branch", "feature")
-		sha := gitTestOutput(t, repo, "rev-parse", "feature")
-
-		require.NoError(t, DeleteBranchAtSHA(repo, "feature", sha))
-		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
-	})
-
-	t.Run("preserves moved ref", func(t *testing.T) {
-		repo := createGitTestRepo(t)
-		gitTest(t, repo, "branch", "feature")
-		sha := gitTestOutput(t, repo, "rev-parse", "feature")
-		gitTest(t, repo, "commit", "--allow-empty", "-m", "advance main")
-		movedSHA := gitTestOutput(t, repo, "rev-parse", "HEAD")
-		gitTest(t, repo, "update-ref", "refs/heads/feature", movedSHA)
-
-		require.Error(t, DeleteBranchAtSHA(repo, "feature", sha))
-		assert.Equal(t, movedSHA, gitTestOutput(t, repo, "rev-parse", "feature"))
-	})
-
-	t.Run("preserves checked out branch", func(t *testing.T) {
-		repo := createGitTestRepo(t)
-		worktree := filepath.Join(t.TempDir(), "feature")
-		gitTest(t, repo, "worktree", "add", "-b", "feature", worktree)
-		sha := gitTestOutput(t, repo, "rev-parse", "feature")
-
-		err := DeleteBranchAtSHA(repo, "feature", sha)
-		require.EqualError(t, err, `branch "feature" is still checked out at worktree "`+worktree+`"`)
-		assert.Equal(t, sha, gitTestOutput(t, repo, "rev-parse", "feature"))
-	})
-}
-
 func TestCreatedWorktreeLifecycleIsAtomic(t *testing.T) {
 	t.Run("create and remove owned worktree", func(t *testing.T) {
 		repo := createGitTestRepo(t)
@@ -520,18 +486,23 @@ func TestTreeManWorktreeMutationLockSerializesAddAndDelete(t *testing.T) {
 
 	t.Run("TreeMan guarded deletion", func(t *testing.T) {
 		repo := createGitTestRepo(t)
-		gitTest(t, repo, "branch", "feature")
+		worktree := filepath.Join(t.TempDir(), "feature")
+		gitTest(t, repo, "worktree", "add", "-b", "feature", worktree)
 		sha := gitTestOutput(t, repo, "rev-parse", "feature")
 		locked, release, finished := holdWorktreeMutationLock(t, repo)
 		<-locked
 
 		deleted := make(chan error, 1)
-		go func() { deleted <- DeleteBranchAtSHA(repo, "feature", sha) }()
+		go func() {
+			_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+			deleted <- err
+		}()
 		assertBlocked(t, deleted)
 		close(release)
 		require.NoError(t, <-finished)
 		require.NoError(t, <-deleted)
 		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
+		assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), worktree)
 	})
 }
 
