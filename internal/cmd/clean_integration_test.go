@@ -931,9 +931,12 @@ func TestCleanPendingFileCleanupNoticeReflectsTheQueueWhenReported(t *testing.T)
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "done", cleanupJob: finished}})
+	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "done", cleanupJob: finished, cleanupStarted: true}})
 	assert.Empty(t, stderr.String(), "a job that finished unlinking is not still pending")
 
-	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "queued", cleanupJob: t.TempDir()}})
+	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "stalled", cleanupJob: t.TempDir()}})
+	assert.Empty(t, stderr.String(), "a job whose unlinker never started is not running in the background")
+
+	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "queued", cleanupJob: t.TempDir(), cleanupStarted: true}})
 	assert.Contains(t, ui.StripANSI(stderr.String()), "File cleanup continues in the background.")
 }

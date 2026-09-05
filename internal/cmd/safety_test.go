@@ -259,28 +259,43 @@ func TestDeletionExecutionRevalidatesAfterPlanning(t *testing.T) {
 	}
 }
 
+// Queued files and a running unlinker are different facts, and the notice
+// speaks only to the second: a job whose background process never started is
+// waiting for a later removal, which the retry warning already says.
 func TestRunDeleteDirectReportsPendingFileCleanup(t *testing.T) {
-	repo, worktree := createTestWorktree(t, "feature/pending")
-	chdirForTest(t, repo)
-	previousRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
-		return gitpkg.RemoveWorktreeResult{
-			WorktreeUnregistered: true,
-			BranchDeleted:        true,
-			CleanupJob:           t.TempDir(),
-			CleanupError:         assert.AnError,
-		}, nil
+	for _, started := range []bool{true, false} {
+		t.Run(fmt.Sprintf("started=%t", started), func(t *testing.T) {
+			repo, worktree := createTestWorktree(t, "feature/pending")
+			chdirForTest(t, repo)
+			previousRemove := removeWorktreeAndBranch
+			removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+				return gitpkg.RemoveWorktreeResult{
+					WorktreeUnregistered: true,
+					BranchDeleted:        true,
+					CleanupJob:           t.TempDir(),
+					CleanupStarted:       started,
+					CleanupError:         assert.AnError,
+				}, nil
+			}
+			t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+			stderr, stdout := &bytes.Buffer{}, &bytes.Buffer{}
+			command := &cobra.Command{}
+			command.SetErr(stderr)
+			command.SetOut(stdout)
+
+			require.NoError(t, runDeleteDirect(command, worktree, "feature/pending", true, true))
+
+			assert.Contains(t, stderr.String(), "Deleted worktree and branch: feature/pending")
+			assert.Contains(t, stderr.String(), "pending file cleanup needs retry:")
+			if started {
+				assert.Contains(t, stderr.String(), "File cleanup continues in the background.")
+			} else {
+				assert.NotContains(t, stderr.String(), "File cleanup continues in the background.",
+					"nothing is running, so the notice would contradict the retry warning")
+			}
+			assert.Empty(t, stdout.String(), "diagnostics must not interfere with shell navigation")
+		})
 	}
-	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
-	stderr, stdout := &bytes.Buffer{}, &bytes.Buffer{}
-	command := &cobra.Command{}
-	command.SetErr(stderr)
-	command.SetOut(stdout)
-	require.NoError(t, runDeleteDirect(command, worktree, "feature/pending", true, true))
-	assert.Contains(t, stderr.String(), "Deleted worktree and branch: feature/pending")
-	assert.Contains(t, stderr.String(), "File cleanup continues in the background.")
-	assert.Contains(t, stderr.String(), "pending file cleanup needs retry:")
-	assert.Empty(t, stdout.String(), "diagnostics must not interfere with shell navigation")
 }
 
 // A capture that could not be restored keeps the registration and the branch,

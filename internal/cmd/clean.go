@@ -54,9 +54,10 @@ type cleanSelection struct {
 }
 
 type cleanResult struct {
-	branch     string
-	database   databaseCleanupOutcome
-	cleanupJob string
+	branch         string
+	database       databaseCleanupOutcome
+	cleanupJob     string
+	cleanupStarted bool
 }
 
 func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
@@ -212,9 +213,10 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 			return err
 		}
 		results = append(results, cleanResult{
-			branch:     candidate.entry.Branch,
-			database:   cleanupOutcome.database,
-			cleanupJob: cleanupOutcome.cleanupJob,
+			branch:         candidate.entry.Branch,
+			database:       cleanupOutcome.database,
+			cleanupJob:     cleanupOutcome.cleanupJob,
+			cleanupStarted: cleanupOutcome.cleanupStarted,
 		})
 		if cleanupOutcome.currentWorktree {
 			// The caller's shell is standing in a worktree that no longer
@@ -242,7 +244,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 
 func writeCleanPendingFileCleanupNotice(cmd *cobra.Command, results []cleanResult) {
 	for _, result := range results {
-		if git.CleanupPending(result.cleanupJob) {
+		if result.cleanupStarted && git.CleanupPending(result.cleanupJob) {
 			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "File cleanup continues in the background."))
 			return
 		}

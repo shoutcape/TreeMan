@@ -45,6 +45,7 @@ type deleteWorktreeOutcome struct {
 	database        databaseCleanupOutcome
 	currentWorktree bool
 	cleanupJob      string
+	cleanupStarted  bool
 }
 
 func newDeleteCmd() *cobra.Command {
@@ -324,7 +325,10 @@ func runDeletionPlan(cmd *cobra.Command, plan deletionPlan) error {
 
 func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) error {
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
-	if git.CleanupPending(outcome.cleanupJob) {
+	// Queued is not the same as running: a detach that failed leaves files
+	// behind for a later removal to retry, and the warning above already said
+	// so. Announcing background progress here as well would contradict it.
+	if outcome.cleanupStarted && git.CleanupPending(outcome.cleanupJob) {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "File cleanup continues in the background."))
 	}
 	if !outcome.currentWorktree {
@@ -381,7 +385,12 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 			cleanupOutcome.status = databaseCleanupUnavailable
 		}
 	}
-	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path), cleanupJob: removal.CleanupJob}, nil
+	return deleteWorktreeOutcome{
+		database:        cleanupOutcome,
+		currentWorktree: samePath(currentRoot, entry.Path),
+		cleanupJob:      removal.CleanupJob,
+		cleanupStarted:  removal.CleanupStarted,
+	}, nil
 }
 
 // removalFailure turns the removal's own account of what it left behind into
