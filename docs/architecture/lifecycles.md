@@ -58,13 +58,18 @@ sequenceDiagram
     TreeMan->>Git: verify linked worktree and branch
     TreeMan->>TreeMan: protect main and default branch; inspect dirty state
     TreeMan->>DB: load durable ownership record
+    TreeMan->>TreeMan: stage directory in Git common-dir treeman/trash
+    TreeMan->>TreeMan: validate captured directory identity and contents
     TreeMan->>Git: worktree remove
+    TreeMan->>TreeMan: asynchronously unlink staged directory
     TreeMan->>Git: compare-and-delete branch at verified SHA
     TreeMan->>DB: mark pending and try database cleanup
     TreeMan-->>TreeMan: return success or error
 ```
 
-TreeMan records database ownership before setup completes and reads that durable record before Git removes the worktree. It drops the database only after worktree and branch deletion succeed, retaining a pending record for retry if Docker cleanup fails. Branch deletion compares the current ref with the SHA that passed deletion checks. TreeMan serializes its own worktree additions and guarded deletions, preserving a branch that another TreeMan process checks out before deletion. Direct Git worktree mutation is not coordinated. `--force` permits deletion of dirty worktrees and of branches whose commits no remote-tracking ref and not the default branch can reach.
+TreeMan records database ownership before setup completes and reads that durable record before Git removes the worktree. It stages a removable directory under `treeman/trash` in the repository's Git common directory, validates the captured directory, then unregisters the worktree. It queues asynchronous unlinking before compare-and-deleting the branch. A successful Git deletion can therefore precede filesystem cleanup; queued cleanup is retried only by a later removal. If a staged directory cannot be restored after validation or unregistration fails, TreeMan reports its staged location for manual recovery. A subsequent branch-deletion failure instead preserves the branch but does not restore the removed worktree.
+
+TreeMan drops the database only after worktree and branch deletion succeed, retaining a pending record for retry if Docker cleanup fails. Branch deletion compares the current ref with the SHA that passed deletion checks. Planning and execution share registration and branch validation, with execution checking fresh state under the repository mutation lock. TreeMan serializes its own worktree additions and guarded deletions, preserving a branch that another TreeMan process checks out before deletion. Direct Git worktree mutation is not coordinated. `--force` permits deletion of dirty worktrees and of branches whose commits no remote-tracking ref and not the default branch can reach.
 
 ## List and Clean
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -43,7 +44,7 @@ type databaseCleanupOutcome struct {
 type deleteWorktreeOutcome struct {
 	database        databaseCleanupOutcome
 	currentWorktree bool
-	cleanupPending  bool
+	cleanupJob      string
 }
 
 func newDeleteCmd() *cobra.Command {
@@ -208,37 +209,18 @@ type deletionPlan struct {
 }
 
 // planDeletion decides whether a worktree and its branch may be removed, and
-// returns the facts that decision rested on. Every refusal lives here, so a
-// caller can put the question to the user before asking them to confirm it
-// rather than after. An expected SHA pins the exact commit whose merge was
+// returns the facts that decision rested on. Preflight refusals happen before
+// confirmation; execution revalidates mutable state under the mutation lock.
+// An expected SHA pins the exact commit whose merge was
 // verified; a branch that has moved since is no longer the branch it verified.
 func planDeletion(dest, branch, mainRoot string, guards deletionGuards, expectedSHA string) (deletionPlan, error) {
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return deletionPlan{}, err
 	}
-	entry, err := worktreeEntryAt(entries, dest)
+	entry, branchSHA, err := git.ValidateWorktreeRemoval(mainRoot, entries, dest, branch, expectedSHA)
 	if err != nil {
 		return deletionPlan{}, err
-	}
-	if samePath(entry.Path, mainRoot) {
-		return deletionPlan{}, fmt.Errorf("cannot delete the main worktree")
-	}
-	if entry.Branch != branch {
-		return deletionPlan{}, fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
-	}
-	// A lock says "do not remove this", and --force is the user waiving their
-	// own uncommitted changes, never a claim about the lock. Git refuses a
-	// locked worktree too, so the guard is here for the message rather than
-	// the outcome -- and it has to precede the staleness check below, because
-	// a legitimately absent directory (removable media, an unmounted share) is
-	// the case the lock exists for and must not be read as an abandoned one.
-	if entry.Locked {
-		reason := ""
-		if entry.LockReason != "" {
-			reason = ": " + entry.LockReason
-		}
-		return deletionPlan{}, fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
 	}
 	defaultBranch, err := resolveDefaultBranch(entries, mainRoot)
 	if err != nil {
@@ -246,13 +228,6 @@ func planDeletion(dest, branch, mainRoot string, guards deletionGuards, expected
 	}
 	if branch == defaultBranch {
 		return deletionPlan{}, fmt.Errorf("cannot delete the default branch %q", branch)
-	}
-	branchSHA, err := git.BranchSHA(branch)
-	if err != nil {
-		return deletionPlan{}, fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved: %w", entry.Path, branch, err)
-	}
-	if expectedSHA != "" && branchSHA != expectedSHA {
-		return deletionPlan{}, fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
 	}
 	plan := deletionPlan{
 		entry:            entry,
@@ -328,7 +303,7 @@ func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot, expected
 	}
 	plan, err := planDeletion(dest, branch, mainRoot, deletionGuards{mergeVerified: true}, expectedSHA)
 	if err != nil {
-		return deleteWorktreeOutcome{}, err
+		return deleteWorktreeOutcome{}, removalRefused{err}
 	}
 	return plan.execute(cmd, batch)
 }
@@ -349,7 +324,7 @@ func runDeletionPlan(cmd *cobra.Command, plan deletionPlan) error {
 
 func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) error {
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
-	if outcome.cleanupPending {
+	if git.CleanupPending(outcome.cleanupJob) {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "File cleanup continues in the background."))
 	}
 	if !outcome.currentWorktree {
@@ -361,8 +336,8 @@ func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome 
 }
 
 // execute carries out a plan: the removal itself, the branch's exact-SHA
-// deletion, and the database the worktree owned. Nothing here refuses -- every
-// refusal happened in planDeletion, before the user was asked to confirm.
+// deletion, and the database the worktree owned. Removal revalidates the plan
+// under the mutation lock and can refuse if the state has changed.
 func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
 	entry := plan.entry
 	currentRoot, err := git.CurrentWorktreeRoot()
@@ -393,16 +368,12 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 		cleanupOutcome.status = databaseCleanupPending
 		cleanupOutcome.database = databaseName
 	}
-	// TODO(phase-5): planDeletion and RemoveWorktreeAndBranch duplicate the
-	// main-worktree, branch-match, locked and SHA-compare refusals verbatim,
-	// error strings included. One shared validator, called at plan time for
-	// the message and under the lock for the guarantee.
 	removal, err := removeWorktreeAndBranch(plan.mainRoot, entry.Path, entry.Branch, plan.branchSHA, plan.guards.force)
 	if removal.CleanupError != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("pending file cleanup needs retry: %v", removal.CleanupError)))
 	}
 	if err != nil && !removal.WorktreeUnregistered {
-		return deleteWorktreeOutcome{}, deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))
+		return deleteWorktreeOutcome{}, removalRefused{deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))}
 	}
 	if err != nil && !removal.BranchDeleted {
 		return deleteWorktreeOutcome{}, deleteWorktreeFailure(
@@ -418,7 +389,24 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 			cleanupOutcome.status = databaseCleanupUnavailable
 		}
 	}
-	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path), cleanupPending: removal.CleanupPending}, nil
+	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path), cleanupJob: removal.CleanupJob}, nil
+}
+
+// removalRefused marks a deletion that left every Git resource in place:
+// planning is read-only, and a removal that never unregistered the worktree
+// touched nothing. A batch can skip such a candidate and keep going, whereas a
+// partially completed removal must stop the run so the user can act on the
+// inconsistent state it left behind.
+type removalRefused struct{ err error }
+
+func (r removalRefused) Error() string { return r.err.Error() }
+
+func (r removalRefused) Unwrap() error { return r.err }
+
+// refusedRemoval reports whether err is a refusal that changed nothing.
+func refusedRemoval(err error) bool {
+	var refused removalRefused
+	return errors.As(err, &refused)
 }
 
 func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {

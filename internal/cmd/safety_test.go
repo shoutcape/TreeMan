@@ -149,10 +149,21 @@ func TestRunDeleteDirect_PreservesBranchUsedByAnotherWorktree(t *testing.T) {
 	gitTest(t, repo, "worktree", "add", "--force", otherWorktree, "feature/shared")
 	chdirForTest(t, repo)
 
-	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/shared", true, true)
+	output := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(output)
+	command.SetOut(output)
+	events := []string{}
+	previousBatch := newCleanupBatch
+	newCleanupBatch = func() databaseCleanupBatch { return &recordingCleanupSession{events: &events} }
+	t.Cleanup(func() { newCleanupBatch = previousBatch })
+
+	err := runDeleteDirect(command, worktree, "feature/shared", false, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `branch "feature/shared" is also checked out at worktree "`+otherWorktree+`"`)
+	assert.Empty(t, output.String(), "refuse before asking for confirmation")
+	assert.Empty(t, events, "refuse before preparing database cleanup")
 	assert.DirExists(t, worktree)
 	assert.DirExists(t, otherWorktree)
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/shared")
@@ -176,6 +187,100 @@ func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), `Recovery: resolve the error, then retry: treeman delete --path "`+worktree+`" --branch "feature/remove-failure" --yes`)
 	assert.DirExists(t, worktree)
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/remove-failure")
+}
+
+func TestRemovalRefusalsMatchPreflight(t *testing.T) {
+	for _, refusal := range []string{"main", "branch mismatch", "locked", "moved", "duplicate checkout", "unregistered"} {
+		t.Run(refusal, func(t *testing.T) {
+			repo, worktree := createTestWorktree(t, "feature/guard")
+			chdirForTest(t, repo)
+			path, branch := worktree, "feature/guard"
+			sha := gitRevParse(t, repo, "refs/heads/"+branch)
+			switch refusal {
+			case "main":
+				path, branch = repo, "main"
+			case "branch mismatch":
+				branch = "other"
+			case "locked":
+				gitTest(t, repo, "worktree", "lock", "--reason", "keep", worktree)
+			case "moved":
+				advanceMainForTest(t, repo)
+				gitTest(t, repo, "update-ref", "refs/heads/"+branch, "refs/heads/main")
+			case "duplicate checkout":
+				gitTest(t, repo, "worktree", "add", "--force", filepath.Join(filepath.Dir(repo), "other"), branch)
+			case "unregistered":
+				path = filepath.Join(repo, "unknown")
+			}
+
+			_, preflightErr := planDeletion(path, branch, repo, deletionGuards{force: true}, sha)
+			require.Error(t, preflightErr)
+			result, removalErr := gitpkg.RemoveWorktreeAndBranch(repo, path, branch, sha, true)
+			require.EqualError(t, removalErr, preflightErr.Error())
+			assert.False(t, result.WorktreeUnregistered)
+			assert.False(t, result.BranchDeleted)
+			assert.DirExists(t, worktree)
+			gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/guard")
+		})
+	}
+}
+
+func TestDeletionExecutionRevalidatesAfterPlanning(t *testing.T) {
+	for _, change := range []string{"locked", "moved", "duplicate checkout", "branch mismatch"} {
+		t.Run(change, func(t *testing.T) {
+			repo, worktree := createTestWorktree(t, "feature/guard")
+			chdirForTest(t, repo)
+			plan, err := planDeletion(worktree, "feature/guard", repo, deletionGuards{force: true}, "")
+			require.NoError(t, err)
+			var want string
+			switch change {
+			case "locked":
+				gitTest(t, repo, "worktree", "lock", worktree)
+				want = "is locked"
+			case "moved":
+				advanceMainForTest(t, repo)
+				gitTest(t, repo, "update-ref", "refs/heads/feature/guard", "refs/heads/main")
+				want = "moved after merge verification"
+			case "duplicate checkout":
+				gitTest(t, repo, "worktree", "add", "--force", filepath.Join(filepath.Dir(repo), "other"), "feature/guard")
+				want = "also checked out"
+			case "branch mismatch":
+				gitTest(t, worktree, "checkout", "-b", "replacement")
+				want = `not "feature/guard"`
+			}
+			events := []string{}
+			_, err = plan.execute(&cobra.Command{}, &transitionCleanupSession{events: &events})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), want)
+			assert.Contains(t, err.Error(), "Completed: none.")
+			assert.Equal(t, []string{"active"}, events, "database cleanup must not be committed")
+			assert.FileExists(t, filepath.Join(worktree, "README.md"))
+			gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/guard")
+		})
+	}
+}
+
+func TestRunDeleteDirectReportsPendingFileCleanup(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/pending")
+	chdirForTest(t, repo)
+	previousRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+		return gitpkg.RemoveWorktreeResult{
+			WorktreeUnregistered: true,
+			BranchDeleted:        true,
+			CleanupJob:           t.TempDir(),
+			CleanupError:         assert.AnError,
+		}, nil
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+	stderr, stdout := &bytes.Buffer{}, &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+	command.SetOut(stdout)
+	require.NoError(t, runDeleteDirect(command, worktree, "feature/pending", true, true))
+	assert.Contains(t, stderr.String(), "Deleted worktree and branch: feature/pending")
+	assert.Contains(t, stderr.String(), "File cleanup continues in the background.")
+	assert.Contains(t, stderr.String(), "pending file cleanup needs retry:")
+	assert.Empty(t, stdout.String(), "diagnostics must not interfere with shell navigation")
 }
 
 func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {

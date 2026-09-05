@@ -25,11 +25,23 @@ var detachRemoval = detachRemoveAll
 
 // RemoveWorktreeResult describes which durable state transitions completed.
 // File cleanup may remain queued after both Git resources have been removed.
+// CleanupJob names that queued directory so callers can ask whether it is still
+// on disk when they report, rather than being handed an answer sampled when the
+// removal returned.
 type RemoveWorktreeResult struct {
 	WorktreeUnregistered bool
 	BranchDeleted        bool
-	CleanupPending       bool
+	CleanupJob           string
 	CleanupError         error
+}
+
+// CleanupPending reports whether a queued cleanup job still has files to
+// unlink. Unlinking is detached and usually finishes in the time it takes to
+// print a result, so this must be answered when the answer is used: sampling it
+// the instant the background process starts reports every removal as
+// outstanding, which tells the user nothing about the one that actually is.
+func CleanupPending(job string) bool {
+	return job != "" && pathExists(job)
 }
 
 type stagedWorktree struct {
@@ -57,37 +69,21 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 		if err != nil {
 			return err
 		}
-		result.CleanupError = retryTrashCleanup(trashRoot, entries)
-
-		entry, err := registeredWorktreeAt(entries, path)
+		jobs, err := inspectCleanupQueue(trashRoot)
 		if err != nil {
 			return err
 		}
-		if sameRemovalPath(entry.Path, mainRoot) {
-			return fmt.Errorf("cannot delete the main worktree")
-		}
-		if entry.Branch != branch {
-			return fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
-		}
-		if entry.Locked {
-			reason := ""
-			if entry.LockReason != "" {
-				reason = ": " + entry.LockReason
-			}
-			return fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
-		}
-		for _, other := range entries {
-			if other.Branch == branch && !sameRemovalPath(other.Path, entry.Path) {
-				return fmt.Errorf("branch %q is also checked out at worktree %q", branch, other.Path)
-			}
+		result.CleanupError = retryTrashCleanup(trashRoot, jobs)
+
+		entry, branchSHA, err := ValidateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA)
+		if err != nil {
+			return err
 		}
 
-		branchSHA, err := runInDir(mainRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
-		if err != nil {
-			return fmt.Errorf("could not resolve branch %q: %w", branch, err)
-		}
-		if expectedSHA != "" && branchSHA != expectedSHA {
-			return fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
+		for _, job := range jobs {
+			if job.state == cleanupUnresolved && sameRemovalPath(job.originalPath, entry.Path) {
+				return fmt.Errorf("cannot remove worktree %q: unresolved captured data remains at %q; recover it before retrying removal", entry.Path, filepath.Join(job.path, stagedWorktreeName))
+			}
 		}
 
 		expectedGitDir, err := linkedRegistrationDir(commonDir, entry.Path)
@@ -99,7 +95,7 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 			return err
 		}
 		if !missing {
-			if err := validateStagedWorktree(mainRoot, staged.path, expectedGitDir, force); err != nil {
+			if err := validateStagedWorktree(mainRoot, entry.Path, staged.path, expectedGitDir, force); err != nil {
 				return restoreStagedWorktree(entry.Path, staged, err)
 			}
 		}
@@ -115,11 +111,10 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 		if staged != nil {
 			if err := os.WriteFile(filepath.Join(staged.job, cleanupReadyFile), nil, 0o600); err != nil {
 				result.CleanupError = errors.Join(result.CleanupError, fmt.Errorf("could not mark staged worktree %q ready for cleanup: %w", staged.path, err))
-			}
-			if err := detachRemoval(trashRoot, staged.job); err != nil {
+			} else if err := detachRemoval(trashRoot, staged.job); err != nil {
 				result.CleanupError = errors.Join(result.CleanupError, err)
 			}
-			result.CleanupPending = pathExists(staged.job)
+			result.CleanupJob = staged.job
 		}
 
 		entries, err = worktreeListInDir(mainRoot)
@@ -138,6 +133,44 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 		return nil
 	})
 	return result, err
+}
+
+// ValidateWorktreeRemoval checks registration and branch identity for preflight
+// and execution. Its result is a snapshot, not authorization: execution must
+// supply freshly read entries and call it under the repository mutation lock.
+// Directory identity and cleanliness are checked separately after staging.
+func ValidateWorktreeRemoval(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
+	entry, err := registeredWorktreeAt(entries, path)
+	if err != nil {
+		return WorktreeEntry{}, "", err
+	}
+	if sameRemovalPath(entry.Path, mainRoot) {
+		return WorktreeEntry{}, "", fmt.Errorf("cannot delete the main worktree")
+	}
+	if entry.Branch != branch {
+		return WorktreeEntry{}, "", fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
+	}
+	// A lock protects even an absent directory; force never waives it.
+	if entry.Locked {
+		reason := ""
+		if entry.LockReason != "" {
+			reason = ": " + entry.LockReason
+		}
+		return WorktreeEntry{}, "", fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
+	}
+	for _, other := range entries {
+		if other.Branch == branch && !sameRemovalPath(other.Path, entry.Path) {
+			return WorktreeEntry{}, "", fmt.Errorf("branch %q is also checked out at worktree %q", branch, other.Path)
+		}
+	}
+	branchSHA, err := runInDir(mainRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return WorktreeEntry{}, "", fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved: %w", entry.Path, branch, err)
+	}
+	if expectedSHA != "" && branchSHA != expectedSHA {
+		return WorktreeEntry{}, "", fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
+	}
+	return entry, branchSHA, nil
 }
 
 func registeredWorktreeAt(entries []WorktreeEntry, path string) (WorktreeEntry, error) {
@@ -213,7 +246,23 @@ func stageWorktreeRemoval(trashRoot, path string) (*stagedWorktree, bool, error)
 	return staged, false, nil
 }
 
-func validateStagedWorktree(mainRoot, stagedPath, expectedGitDir string, force bool) error {
+func validateStagedWorktree(mainRoot, originalPath, stagedPath, expectedGitDir string, force bool) error {
+	if err := validateWorktreeIdentity(originalPath, stagedPath, expectedGitDir); err != nil {
+		return err
+	}
+	status, err := runInDir(mainRoot, "--git-dir="+expectedGitDir, "--work-tree="+stagedPath, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("could not inspect staged worktree %q: %w", stagedPath, err)
+	}
+	if status != "" && !force {
+		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", stagedPath)
+	}
+	return nil
+}
+
+// Inspect the captured object, but resolve its relative references from where
+// Git registered it, before staging changed its location.
+func validateWorktreeIdentity(originalPath, stagedPath, expectedGitDir string) error {
 	info, err := os.Lstat(stagedPath)
 	if err != nil {
 		return fmt.Errorf("cannot remove worktree %q: could not inspect the staged object: %w", stagedPath, err)
@@ -240,19 +289,12 @@ func validateStagedWorktree(mainRoot, stagedPath, expectedGitDir string, force b
 	}
 	gitDir = strings.TrimSpace(gitDir)
 	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(stagedPath, gitDir)
+		gitDir = filepath.Join(originalPath, gitDir)
 	}
 	if !sameRemovalPath(gitDir, expectedGitDir) {
 		return fmt.Errorf("cannot remove worktree %q: the staged directory belongs to a different registration", stagedPath)
 	}
 
-	status, err := runInDir(mainRoot, "--git-dir="+expectedGitDir, "--work-tree="+stagedPath, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		return fmt.Errorf("could not inspect staged worktree %q: %w", stagedPath, err)
-	}
-	if status != "" && !force {
-		return fmt.Errorf("worktree %q has uncommitted or untracked changes; use --force to delete it", stagedPath)
-	}
 	return nil
 }
 
@@ -271,36 +313,70 @@ func runWorktreeRemove(dir, path string) error {
 	return err
 }
 
-// retryTrashCleanup starts every safe leftover job. A new-format job whose
-// original path is still registered is a failed/refused restoration and is
-// never unlinked. Old trash entries have no metadata and are cleanup-ready.
-func retryTrashCleanup(trashRoot string, registrations []WorktreeEntry) error {
+type cleanupState int
+
+const (
+	cleanupUnresolved cleanupState = iota
+	cleanupEligible
+	cleanupActive
+)
+
+type cleanupJob struct {
+	path         string
+	originalPath string
+	state        cleanupState
+}
+
+// Queue inspection owns recovery classification. Registration loss is never
+// evidence that a captured directory passed validation.
+func inspectCleanupQueue(trashRoot string) ([]cleanupJob, error) {
 	entries, err := os.ReadDir(trashRoot)
 	if err != nil {
-		return fmt.Errorf("could not read worktree cleanup queue: %w", err)
+		return nil, fmt.Errorf("could not read worktree cleanup queue: %w", err)
 	}
-	var errs []error
+	var jobs []cleanupJob
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		job := filepath.Join(trashRoot, entry.Name())
-		ready, err := cleanupJobReady(job, registrations)
-		if err != nil {
-			errs = append(errs, err)
+		job := cleanupJob{path: filepath.Join(trashRoot, entry.Name()), state: cleanupEligible}
+		if _, err := os.Stat(filepath.Join(job.path, cleanupReadyFile)); os.IsNotExist(err) {
+			original, err := os.ReadFile(filepath.Join(job.path, cleanupOriginalPathFile))
+			if err == nil {
+				job.originalPath = strings.TrimSpace(string(original))
+				if job.originalPath == "" {
+					return nil, fmt.Errorf("empty cleanup metadata for %q", job.path)
+				}
+				job.state = cleanupUnresolved
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("could not read cleanup metadata for %q: %w", job.path, err)
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("could not inspect cleanup state for %q: %w", job.path, err)
+		}
+		// Metadata-free directories are legacy cleanup jobs. Unresolved jobs
+		// stay protected even if a cleanup lock happens to exist.
+		if job.state == cleanupEligible {
+			active, err := cleanupJobActive(trashRoot, job.path)
+			if err != nil {
+				return nil, err
+			}
+			if active {
+				job.state = cleanupActive
+			}
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+func retryTrashCleanup(trashRoot string, jobs []cleanupJob) error {
+	var errs []error
+	for _, queued := range jobs {
+		if queued.state != cleanupEligible {
 			continue
 		}
-		if !ready {
-			continue
-		}
-		active, err := cleanupJobActive(trashRoot, job)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if active {
-			continue
-		}
+		job := queued.path
 		if failure, err := os.ReadFile(cleanupErrorPath(trashRoot, job)); err == nil {
 			message := strings.TrimSpace(string(failure))
 			if message == "" {
@@ -315,27 +391,6 @@ func retryTrashCleanup(trashRoot string, registrations []WorktreeEntry) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func cleanupJobReady(job string, registrations []WorktreeEntry) (bool, error) {
-	if _, err := os.Stat(filepath.Join(job, cleanupReadyFile)); err == nil {
-		return true, nil
-	} else if !os.IsNotExist(err) {
-		return false, fmt.Errorf("could not inspect cleanup state for %q: %w", job, err)
-	}
-	original, err := os.ReadFile(filepath.Join(job, cleanupOriginalPathFile))
-	if os.IsNotExist(err) {
-		return true, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("could not read cleanup metadata for %q: %w", job, err)
-	}
-	for _, registration := range registrations {
-		if sameRemovalPath(strings.TrimSpace(string(original)), registration.Path) {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // detachRemoveAll starts an unlinking process that outlives this one. The job
@@ -532,36 +587,11 @@ func EnsureHoldsWorktree(mainRoot, path string) error {
 		return err
 	}
 
-	// A directory whose Git directory cannot be resolved at all is the
-	// strongest form of "not this worktree", so the failure is a refusal.
-	gitDir, err := runInDir(path, "rev-parse", "--absolute-git-dir")
+	gitDir, err := linkedRegistrationDir(commonDir, path)
 	if err != nil {
-		return fmt.Errorf("cannot remove worktree %q: it no longer looks like a Git worktree: %w", path, err)
+		return err
 	}
-	gitDir = canonicalRemovalPath(gitDir)
-
-	// The main worktree has no registration to point back at: its Git
-	// directory is the common directory, and that equality is the whole test.
-	if gitDir == canonicalRemovalPath(commonDir) {
-		return nil
-	}
-
-	registrations := filepath.Join(canonicalRemovalPath(commonDir), "worktrees")
-	if filepath.Dir(gitDir) != registrations {
-		return fmt.Errorf("cannot remove worktree %q: the directory belongs to a different repository", path)
-	}
-
-	recorded, err := os.ReadFile(filepath.Join(gitDir, "gitdir"))
-	if err != nil {
-		return fmt.Errorf("cannot remove worktree %q: its registration is unreadable: %w", path, err)
-	}
-	// The file records the worktree's `.git` entry, so the worktree is its
-	// parent directory.
-	recordedWorktree := filepath.Dir(canonicalRemovalPath(strings.TrimSpace(string(recorded))))
-	if recordedWorktree != canonicalRemovalPath(path) {
-		return fmt.Errorf("cannot remove worktree %q: the registration there records %q instead", path, recordedWorktree)
-	}
-	return nil
+	return validateWorktreeIdentity(path, path, gitDir)
 }
 
 // WorktreeDirectoryMissing reports whether the worktree directory is absent,

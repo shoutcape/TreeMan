@@ -3,7 +3,9 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -49,7 +51,7 @@ func TestRemoveWorktreeAndBranchStagesThroughTheTrashDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
-	assert.False(t, result.CleanupPending)
+	assert.False(t, CleanupPending(result.CleanupJob))
 	require.Len(t, *staged, 1)
 	assert.Contains(t, (*staged)[0], filepath.Join(".git", "treeman", "trash"))
 	assert.NoFileExists(t, worktree)
@@ -101,7 +103,7 @@ func TestRemoveWorktreeAndBranchReturnsWhileCleanupIsPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
-	assert.True(t, result.CleanupPending)
+	assert.True(t, CleanupPending(result.CleanupJob))
 	assert.NoDirExists(t, worktree)
 	assert.DirExists(t, cleanupJob)
 	assert.Less(t, elapsed, 2*time.Second)
@@ -243,7 +245,7 @@ func TestRemoveWorktreeAndBranchQueuesCleanupAfterDetachFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
-	assert.True(t, result.CleanupPending)
+	assert.True(t, CleanupPending(result.CleanupJob))
 	assert.ErrorIs(t, result.CleanupError, assert.AnError)
 }
 
@@ -257,7 +259,7 @@ func TestRemoveWorktreeAndBranchRetriesQueuedCleanup(t *testing.T) {
 
 	firstResult, err := RemoveWorktreeAndBranch(repo, first, "first", firstSHA, false)
 	require.NoError(t, err)
-	require.True(t, firstResult.CleanupPending)
+	require.True(t, CleanupPending(firstResult.CleanupJob))
 
 	second := addTestWorktree(t, repo, "second")
 	secondSHA := branchSHAForRemoval(t, repo, "second")
@@ -270,7 +272,7 @@ func TestRemoveWorktreeAndBranchRetriesQueuedCleanup(t *testing.T) {
 	secondResult, err := RemoveWorktreeAndBranch(repo, second, "second", secondSHA, false)
 
 	require.NoError(t, err)
-	assert.False(t, secondResult.CleanupPending)
+	assert.False(t, CleanupPending(secondResult.CleanupJob))
 	assert.Len(t, cleaned, 2, "the queued job and current removal should both be cleaned")
 }
 
@@ -296,6 +298,83 @@ func TestRemoveWorktreeAndBranchReportsDurableCleanupDiagnostic(t *testing.T) {
 	assert.NoDirExists(t, job)
 }
 
+func TestRetryTrashCleanupSkipsUnreadyJobWhileOriginalWorktreeIsRegistered(t *testing.T) {
+	trashRoot := filepath.Join(t.TempDir(), "treeman", "trash")
+	job := filepath.Join(trashRoot, "restoration-failed")
+	originalPath := filepath.Join(t.TempDir(), "worktree")
+	require.NoError(t, os.MkdirAll(job, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(originalPath), 0o600))
+
+	called := false
+	previous := detachRemoval
+	detachRemoval = func(string, string) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { detachRemoval = previous })
+
+	jobs, err := inspectCleanupQueue(trashRoot)
+	require.NoError(t, err)
+	err = retryTrashCleanup(trashRoot, jobs)
+
+	require.NoError(t, err)
+	assert.False(t, called)
+	assert.DirExists(t, job)
+}
+
+func TestRetryTrashCleanupPreservesUnreadyJobAfterOriginalWorktreeIsUnregistered(t *testing.T) {
+	trashRoot := filepath.Join(t.TempDir(), "treeman", "trash")
+	job := filepath.Join(trashRoot, "restoration-failed")
+	originalPath := filepath.Join(t.TempDir(), "worktree")
+	require.NoError(t, os.MkdirAll(job, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(originalPath), 0o600))
+
+	var cleaned string
+	previous := detachRemoval
+	detachRemoval = func(_ string, gotJob string) error {
+		cleaned = gotJob
+		return os.RemoveAll(gotJob)
+	}
+	t.Cleanup(func() { detachRemoval = previous })
+
+	jobs, err := inspectCleanupQueue(trashRoot)
+	require.NoError(t, err)
+	err = retryTrashCleanup(trashRoot, jobs)
+
+	require.NoError(t, err)
+	assert.Empty(t, cleaned)
+	assert.DirExists(t, job)
+}
+
+func TestRetryTrashCleanupSkipsAnActiveJob(t *testing.T) {
+	trashRoot := filepath.Join(t.TempDir(), "treeman", "trash")
+	job := filepath.Join(trashRoot, "active")
+	require.NoError(t, os.MkdirAll(job, 0o700))
+	lock, err := os.OpenFile(cleanupLockPath(trashRoot, job), os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
+	t.Cleanup(func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	})
+
+	called := false
+	previous := detachRemoval
+	detachRemoval = func(string, string) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { detachRemoval = previous })
+
+	jobs, err := inspectCleanupQueue(trashRoot)
+	require.NoError(t, err)
+	err = retryTrashCleanup(trashRoot, jobs)
+
+	require.NoError(t, err)
+	assert.False(t, called)
+	assert.DirExists(t, job)
+}
+
 func TestRemoveWorktreeAndBranchReportsUnregisterBeforeCompareDeleteFailure(t *testing.T) {
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
@@ -315,7 +394,7 @@ func TestRemoveWorktreeAndBranchReportsUnregisterBeforeCompareDeleteFailure(t *t
 	require.Error(t, err)
 	assert.True(t, result.WorktreeUnregistered)
 	assert.False(t, result.BranchDeleted)
-	assert.False(t, result.CleanupPending)
+	assert.False(t, CleanupPending(result.CleanupJob))
 	assert.Equal(t, mainSHA, branchSHAForRemoval(t, repo, "feature"))
 }
 
@@ -331,10 +410,76 @@ func TestRestoreStagedWorktreeDoesNotReplaceARecreatedPath(t *testing.T) {
 	err := restoreStagedWorktree(original, &stagedWorktree{job: job, path: stagedPath}, assert.AnError)
 
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remains at "+strconv.Quote(stagedPath))
 	replacement, readErr := os.ReadFile(original)
 	require.NoError(t, readErr)
 	assert.Equal(t, "replacement", string(replacement))
 	captured, readErr := os.ReadFile(stagedPath)
 	require.NoError(t, readErr)
 	assert.Equal(t, "captured", string(captured))
+}
+
+func TestRemovalPreservesUnresolvedCaptureAcrossRetries(t *testing.T) {
+	for _, refused := range []bool{false, true} {
+		t.Run(strconv.FormatBool(refused), func(t *testing.T) {
+			repo := createGitTestRepo(t)
+			worktree := addTestWorktree(t, repo, "feature")
+			sha := branchSHAForRemoval(t, repo, "feature")
+			require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("protected"), 0o600))
+			commonDir, err := CommonDir(repo)
+			require.NoError(t, err)
+			registration, err := linkedRegistrationDir(commonDir, worktree)
+			require.NoError(t, err)
+			trashRoot := filepath.Join(commonDir, filepath.FromSlash(trashDirName))
+			require.NoError(t, os.MkdirAll(trashRoot, 0o700))
+			staged, missing, err := stageWorktreeRemoval(trashRoot, worktree)
+			require.NoError(t, err)
+			require.False(t, missing)
+			if refused {
+				cause := validateStagedWorktree(repo, worktree, staged.path, registration, false)
+				require.ErrorContains(t, cause, "uncommitted or untracked")
+				require.NoError(t, os.Mkdir(worktree, 0o700))
+				require.ErrorContains(t, restoreStagedWorktree(worktree, staged, cause), "remains at")
+				require.NoError(t, os.Remove(worktree))
+			}
+			cleaned := captureStagedRemoval(t)
+			for i := 0; i < 2; i++ {
+				result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, true)
+				require.ErrorContains(t, err, staged.path)
+				assert.False(t, result.WorktreeUnregistered)
+				assert.False(t, result.BranchDeleted)
+				assert.Contains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), worktree)
+				assert.Equal(t, sha, branchSHAForRemoval(t, repo, "feature"))
+			}
+			// External registration removal must not authorize the capture either.
+			gitTest(t, repo, "worktree", "remove", worktree)
+			jobs, err := inspectCleanupQueue(trashRoot)
+			require.NoError(t, err)
+			require.NoError(t, retryTrashCleanup(trashRoot, jobs))
+			assert.Empty(t, *cleaned)
+			assert.FileExists(t, filepath.Join(staged.path, "scratch"))
+		})
+	}
+}
+
+func TestRemovalWithRelativeGitReferences(t *testing.T) {
+	repo := createGitTestRepo(t)
+	worktree := addTestWorktree(t, repo, "feature")
+	sha := branchSHAForRemoval(t, repo, "feature")
+	commonDir, err := CommonDir(repo)
+	require.NoError(t, err)
+	registration, err := linkedRegistrationDir(commonDir, worktree)
+	require.NoError(t, err)
+	relative, err := filepath.Rel(worktree, registration)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+relative+"\n"), 0o600))
+	backlink, err := filepath.Rel(registration, filepath.Join(worktree, ".git"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(registration, "gitdir"), []byte(backlink+"\n"), 0o600))
+	require.NoError(t, EnsureHoldsWorktree(repo, worktree))
+	captureStagedRemoval(t)
+	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	require.NoError(t, err)
+	assert.True(t, result.WorktreeUnregistered)
+	assert.True(t, result.BranchDeleted)
 }
