@@ -68,11 +68,20 @@ func TestDeliverWorktree_ReportsHandoverFailure(t *testing.T) {
 	assert.ErrorContains(t, err, "exec format error")
 }
 
+// reportingTo points TreeMan at a destination file for one test, standing in
+// for the variable startup takes out of the environment.
+func reportingTo(t *testing.T, file string) {
+	t.Helper()
+	previous := destinationFile
+	destinationFile = file
+	t.Cleanup(func() { destinationFile = previous })
+}
+
 // TestReportDestination_WritesTheCdFile covers the contract shell integration
 // relies on: TreeMan never has to be captured to report where to cd.
 func TestReportDestination_WritesTheCdFile(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "destination")
-	t.Setenv(cdFileEnv, file)
+	reportingTo(t, file)
 	stdout := &bytes.Buffer{}
 
 	require.NoError(t, reportDestination(commandWithOutput(stdout, &bytes.Buffer{}), "/tmp/worktree"))
@@ -84,7 +93,7 @@ func TestReportDestination_WritesTheCdFile(t *testing.T) {
 }
 
 func TestReportDestination_FallsBackToStdout(t *testing.T) {
-	t.Setenv(cdFileEnv, "")
+	reportingTo(t, "")
 	stdout := &bytes.Buffer{}
 
 	require.NoError(t, reportDestination(commandWithOutput(stdout, &bytes.Buffer{}), "/tmp/worktree"))
@@ -93,11 +102,28 @@ func TestReportDestination_FallsBackToStdout(t *testing.T) {
 }
 
 func TestReportDestination_ReportsAnUnwritableCdFile(t *testing.T) {
-	t.Setenv(cdFileEnv, filepath.Join(t.TempDir(), "absent", "destination"))
+	reportingTo(t, filepath.Join(t.TempDir(), "absent", "destination"))
 
 	err := reportDestination(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), "/tmp/worktree")
 
 	assert.ErrorContains(t, err, "could not report")
+}
+
+// TestTakeDestinationFile_KeepsTheHandshakeFromChildren proves the invariant
+// that makes --exec safe. The variable belongs to the one TreeMan the wrapper
+// started: a child that could still see it would write its own destination into
+// the wrapper's file, and the wrapper would cd there once the launched command
+// exited.
+func TestTakeDestinationFile_KeepsTheHandshakeFromChildren(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "destination")
+	t.Setenv(cdFileEnv, file)
+
+	assert.Equal(t, file, takeDestinationFile(), "startup keeps the file it took")
+
+	assert.Empty(t, os.Getenv(cdFileEnv))
+	inherited, err := exec.Command("sh", "-c", `printf %s "$`+cdFileEnv+`"`).Output()
+	require.NoError(t, err)
+	assert.Empty(t, string(inherited), "a hook or an --exec command must not inherit the destination file")
 }
 
 // TestLaunchFlag_RejectsEmptyExec exercises the check through Execute, because

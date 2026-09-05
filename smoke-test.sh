@@ -866,6 +866,15 @@ EXEC_BARE_PATH="$(command treeman create feature/bare-stdout --skip-env --skip-d
 assert_eq "bare treeman prints the path" "$MAIN_REPO/.worktrees/feature-bare-stdout" "$EXEC_BARE_PATH"
 assert_eq "shell directory after a bare run" "$MAIN_REPO" "$(pwd)"
 
+# A TreeMan started by --exec is a plain bare run: it never inherits the
+# destination file, so it prints its path to stdout and the outer shell is not
+# steered anywhere when the launched command exits.
+NESTED_WT="$MAIN_REPO/.worktrees/feature-exec-nested"
+wt feature/exec-outer --skip-env --skip-database --skip-deps --skip-hooks \
+  -x 'treeman create feature/exec-nested --skip-env --skip-database --skip-deps --skip-hooks > nested-stdout'
+assert_file_contains "$MAIN_REPO/.worktrees/feature-exec-outer/nested-stdout" "$NESTED_WT"
+assert_eq "shell directory after a nested treeman" "$MAIN_REPO" "$(pwd)"
+
 # ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)
 # ---------------------------------------------------------------------------

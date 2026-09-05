@@ -237,6 +237,8 @@ A shell cannot change its own parent's directory, so TreeMan reports where to go
 
 When `TREEMAN_CD_FILE` names a file, TreeMan writes the destination there. Shell integration sets that variable, which is why it never runs TreeMan inside command substitution: a captured TreeMan could not hand its terminal to `--exec`, and the wrapper would have to parse TreeMan's own flags to know when to skip the capture.
 
+The variable belongs to the one TreeMan the wrapper started. TreeMan removes it from its own environment at startup, so nothing it runs afterwards inherits it -- a hook, a dependency install, and a command given to `--exec` all see it unset. A TreeMan started from inside any of those is therefore a bare run: it prints its path to stdout and cannot steer the shell that is waiting outside.
+
 Without the variable -- a bare run, a script, a pipe -- the destination goes to stdout, which is the original contract.
 
 Color and rich terminal UI are enabled only when the relevant output stream is a terminal. Redirected output is plain. Set `NO_COLOR` to disable color. Set `TERM=dumb` to disable color and interactive selection.
