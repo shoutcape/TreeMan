@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
-	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -21,9 +19,10 @@ func newCreateCmd() *cobra.Command {
 		Short: "Create a new worktree + branch",
 		Long: `Create a new linked worktree and branch from the latest default branch.
 
-The worktree is placed under .worktrees/<branch-slug> inside the repository.
-If a different branch already has a worktree at that path, the path gets a
-short suffix that is derived from the branch name.
+The worktree is placed under .worktrees/<branch-slug> inside the repository,
+or under the worktree_dir configured in .treeman.toml. If a different branch
+already has a worktree at that path, the path gets a short suffix that is
+derived from the branch name.
 
 .env* files are automatically copied from the main worktree, and
 dependencies are installed if a known lockfile is detected.
@@ -72,36 +71,31 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		return fmt.Errorf("branch %q already exists locally", branch)
 	}
 
+	// Settle where the worktree goes before the network is touched. A
+	// destination that cannot be used is not worth a fetch, and the
+	// configuration that chooses it is the one setup will work from.
+	// Existing worktrees keep their path; a branch whose slug collides with
+	// another branch's worktree gets a suffixed path.
+	paths, err := prepareCreationPaths(mainRoot, branch)
+	if err != nil {
+		return err
+	}
+
 	// Fetch latest default branch.
 	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching latest %s from origin...", defaultBranch)))
 	if err := git.Fetch(defaultBranch); err != nil {
 		return err
 	}
 
-	// Build worktree path. Existing worktrees keep their path; a branch whose
-	// slug collides with another branch's worktree gets a suffixed path.
-	existing, err := git.WorktreeList()
-	if err != nil {
-		return err
-	}
-	worktreePath, err := worktree.ResolvePathForBranch(mainRoot, branch, existing)
-	if err != nil {
-		return err
-	}
-
-	// Guard: directory must not already exist.
-	if _, err := os.Stat(worktreePath); err == nil {
-		return fmt.Errorf("directory %q already exists", worktreePath)
-	}
-
 	// Create worktree + branch.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
-	created, err := git.CreateWorktree(worktreePath, branch, "origin/"+defaultBranch)
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch)))
+	created, err := git.CreatePlannedWorktree(paths.plan(branch), branch, "origin/"+defaultBranch)
 	if err != nil {
 		return err
 	}
+	worktreePath := created.Path
 
-	summary := setupCreatedWorktree(out, render, mainRoot, created, setupOptions)
+	summary := setupCreatedWorktree(out, render, paths, created, setupOptions)
 
 	// Print result to stderr for the user.
 	fmt.Fprintln(out, "")

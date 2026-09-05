@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"time"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
-	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -63,7 +61,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.mainRoot, created.worktree, setupOptions)
+	summary := setupCreatedWorktree(out, render, created.paths, created.worktree, setupOptions)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
@@ -76,12 +74,16 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 }
 
 type branchWorktreeCreation struct {
-	mainRoot string
+	paths    creationPaths
 	worktree git.CreatedWorktree
 	prMap    map[string]forge.PRInfo
 }
 
 func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreation, error) {
+	return createBranchWorktreeIn(cmd, query, "")
+}
+
+func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string) (branchWorktreeCreation, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
@@ -111,18 +113,11 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 	}
 
 	branch := selected.Name
-	existing, err := git.WorktreeList()
+	// Settle the destination before fetching, so an unusable one costs no
+	// network round trip and leaves no remote-tracking ref behind.
+	paths, err := prepareCreationPathsIn(mainRoot, branch, parentDir)
 	if err != nil {
 		return branchWorktreeCreation{}, err
-	}
-	worktreePath, err := worktree.ResolvePathForBranch(mainRoot, branch, existing)
-	if err != nil {
-		return branchWorktreeCreation{}, err
-	}
-
-	// Guard: directory must not exist.
-	if _, err := os.Stat(worktreePath); err == nil {
-		return branchWorktreeCreation{}, fmt.Errorf("directory %q already exists for branch %q", worktreePath, branch)
 	}
 
 	// Fetch the branch from origin.
@@ -132,18 +127,18 @@ func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreat
 	}
 
 	// Create the worktree tracking the remote branch.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", worktreePath, branch)))
-	created, err := git.CreateWorktreeFromRemote(worktreePath, branch)
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch)))
+	created, err := git.CreatePlannedWorktree(paths.plan(branch), branch, "origin/"+branch)
 	if err != nil {
 		return branchWorktreeCreation{}, err
 	}
 
 	// Set upstream so git pull/push work.
-	if err := git.SetUpstreamInDir(worktreePath, branch); err != nil {
+	if err := git.SetUpstreamInDir(created.Path, branch); err != nil {
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", branch, err)))
 	}
 
-	return branchWorktreeCreation{mainRoot: mainRoot, worktree: created, prMap: prMap}, nil
+	return branchWorktreeCreation{paths: paths, worktree: created, prMap: prMap}, nil
 }
 
 type branchPickerData struct {

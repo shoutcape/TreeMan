@@ -4,7 +4,7 @@ TreeMan has no database or daemon for its own state. It uses Git, files, Docker,
 
 ## Worktree Paths
 
-TreeMan creates worktrees under this path:
+By default, TreeMan creates worktrees under this path:
 
 ```text
 <main-worktree>/.worktrees/<branch-slug>
@@ -12,7 +12,7 @@ TreeMan creates worktrees under this path:
 
 The branch slug changes `/` to `-`. Therefore, different branch names can produce the same slug. For example, `feature/login` and `feature-login` both produce `feature-login`.
 
-The first branch to get a worktree keeps the plain slug. If a different branch holds that path, TreeMan adds a slug suffix:
+Set `worktree_dir` in `.treeman.toml` to choose another parent directory, including an external path. The first branch to get a worktree keeps the plain slug. If a different branch holds that path, TreeMan adds a slug suffix:
 
 ```text
 <main-worktree>/.worktrees/<branch-slug>-<slug-suffix>
@@ -22,7 +22,7 @@ The slug suffix comes from the full branch name. Therefore, one branch always ge
 
 Existing worktrees keep their paths. TreeMan reads the branch of a worktree from `git worktree list`, not from the directory name. Existing target directories that are not worktrees stop creation.
 
-TreeMan tries to add `.worktrees/` to the main `.gitignore`. This action is warning-only.
+When `update_gitignore` is enabled, TreeMan tries to add the resolved internal worktree directory to the main `.gitignore`. It does not add an entry for external directories. This action is warning-only.
 
 ## Environment Files
 

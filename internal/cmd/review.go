@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
-	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +53,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.mainRoot, created.worktree, setupOptions)
+	summary := setupCreatedWorktree(out, render, created.paths, created.worktree, setupOptions)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Review worktree ready:"))
@@ -67,12 +65,16 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 }
 
 type reviewWorktreeCreation struct {
-	mainRoot string
+	paths    creationPaths
 	worktree git.CreatedWorktree
 	info     forge.PRInfo
 }
 
 func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreation, error) {
+	return createReviewWorktreeIn(cmd, prArg, "")
+}
+
+func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string) (reviewWorktreeCreation, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
@@ -117,15 +119,6 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 		return reviewWorktreeCreation{}, err
 	}
 
-	existing, err := git.WorktreeList()
-	if err != nil {
-		return reviewWorktreeCreation{}, err
-	}
-	worktreePath, err := worktree.ResolvePathForBranch(mainRoot, info.Branch, existing)
-	if err != nil {
-		return reviewWorktreeCreation{}, err
-	}
-
 	// Guard: branch must not already exist locally.
 	if git.BranchExists(info.Branch) {
 		existing, _ := git.FindWorktreeForBranch(info.Branch)
@@ -135,9 +128,10 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 		return reviewWorktreeCreation{}, fmt.Errorf("PR/MR head branch %q already exists locally", info.Branch)
 	}
 
-	// Guard: directory must not exist.
-	if _, err := os.Stat(worktreePath); err == nil {
-		return reviewWorktreeCreation{}, fmt.Errorf("directory %q already exists for branch %q", worktreePath, info.Branch)
+	// Settle the destination before fetching the PR/MR ref.
+	paths, err := prepareCreationPathsIn(mainRoot, info.Branch, parentDir)
+	if err != nil {
+		return reviewWorktreeCreation{}, err
 	}
 
 	// Fetch the PR/MR ref.
@@ -149,8 +143,8 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 	}
 
 	// Create the worktree.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating review worktree at %s (branch: %s)...", worktreePath, info.Branch)))
-	created, err := git.CreateWorktree(worktreePath, info.Branch, fetchedSHA)
+	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating review worktree at %s (branch: %s)...", paths.path, info.Branch)))
+	created, err := git.CreatePlannedWorktree(paths.plan(info.Branch), info.Branch, fetchedSHA)
 	if err != nil {
 		return reviewWorktreeCreation{}, err
 	}
@@ -160,11 +154,11 @@ func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreat
 	// Non-fatal: fork PRs may not have the branch on origin.
 	if err := git.Fetch(info.Branch); err != nil {
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not fetch branch %q (upstream not set): %v", info.Branch, err)))
-	} else if err := git.SetUpstreamInDir(worktreePath, info.Branch); err != nil {
+	} else if err := git.SetUpstreamInDir(created.Path, info.Branch); err != nil {
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", info.Branch, err)))
 	}
 
-	return reviewWorktreeCreation{mainRoot: mainRoot, worktree: created, info: info}, nil
+	return reviewWorktreeCreation{paths: paths, worktree: created, info: info}, nil
 }
 
 type reviewForge struct {

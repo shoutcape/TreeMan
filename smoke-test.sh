@@ -876,6 +876,41 @@ assert_file_contains "$MAIN_REPO/.worktrees/feature-exec-outer/nested-stdout" "$
 assert_eq "shell directory after a nested treeman" "$MAIN_REPO" "$(pwd)"
 
 # ---------------------------------------------------------------------------
+# configurable external worktree directory
+# ---------------------------------------------------------------------------
+
+echo "==> configurable external worktree directory"
+
+EXTERNAL_PARENT="$TMP_DIR/external worktrees/project"
+EXTERNAL_WT="$EXTERNAL_PARENT/external-smoke"
+cat > "$MAIN_REPO/.treeman.toml" <<EOF
+worktree_dir = "$TMP_DIR/external worktrees/{repo}"
+
+[database]
+env_key = "DATABASE_URL"
+
+[hooks]
+post_create = ["touch hook-ran"]
+EOF
+
+cd "$MAIN_REPO"
+EXTERNAL_RESULT="$(command treeman create external/smoke --skip-env --skip-database --skip-deps --skip-hooks)"
+assert_eq "configured external path" "$EXTERNAL_WT" "$EXTERNAL_RESULT"
+assert_exists "$EXTERNAL_WT"
+LIST_JSON="$(command treeman list --json)"
+[[ "$LIST_JSON" == *"$EXTERNAL_WT"* ]] || fail "Expected list --json to include external worktree path"
+
+# Existing worktrees remain discoverable after the setting changes.
+cat > "$MAIN_REPO/.treeman.toml" <<'EOF'
+worktree_dir = ".worktrees"
+EOF
+wts external/smoke
+assert_eq "switch after worktree_dir change" "$EXTERNAL_WT" "$(pwd)"
+cd "$MAIN_REPO"
+command treeman delete --path "$EXTERNAL_WT" --branch external/smoke --yes
+assert_missing "$EXTERNAL_WT"
+
+# ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)
 # ---------------------------------------------------------------------------
 

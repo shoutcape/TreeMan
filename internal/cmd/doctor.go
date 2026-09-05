@@ -12,6 +12,7 @@ import (
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
+	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -129,6 +130,12 @@ func collectConfigDiagnostics() []diagnostic {
 		return []diagnostic{{
 			status: diagnosticFail, name: "Configuration", message: "Invalid .treeman.toml",
 			hint: "Fix " + result.Warning,
+		}}
+	}
+	if _, err := worktree.ResolveDir(root, result.Config.WorktreeDirSetting()); err != nil {
+		return []diagnostic{{
+			status: diagnosticFail, name: "Configuration", message: "Invalid .treeman.toml",
+			hint: "Fix " + err.Error(),
 		}}
 	}
 	if result.Path == "" {

@@ -8,7 +8,6 @@ import (
 
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
-	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -59,14 +58,19 @@ func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox
 		if err != nil {
 			return err
 		}
-		path := worktree.PathForBranch(sandbox.repo, deleteBenchmarkBranch)
-		created, err = git.CreateWorktree(path, deleteBenchmarkBranch, "origin/"+defaultBranch)
+		// The fixture goes through production path validation but stays under
+		// the sandbox, which owns every disposable benchmark artifact.
+		paths, err := prepareCreationPathsIn(sandbox.repo, deleteBenchmarkBranch, sandbox.worktreeDir())
+		if err != nil {
+			return err
+		}
+		created, err = git.CreatePlannedWorktree(paths.plan(deleteBenchmarkBranch), deleteBenchmarkBranch, "origin/"+defaultBranch)
 		if err != nil {
 			return err
 		}
 
 		var setupOutput bytes.Buffer
-		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), sandbox.repo, created, setup)
+		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), paths, created, setup)
 		if failures := summary.failures(); len(failures) > 0 {
 			setupErr := fmt.Errorf("benchmark worktree setup failed: %s (rerun with %s to measure deletion without that step)",
 				strings.Join(failures, "; "), strings.Join(failedSetupFlags(summary), " "))

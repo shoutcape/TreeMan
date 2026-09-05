@@ -63,6 +63,24 @@ func TestDeleteBenchmarkPreparesArtifactsBeforeTimedDeletion(t *testing.T) {
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 }
 
+func TestDeleteBenchmarkOwnsConfiguredExternalDestination(t *testing.T) {
+	external := filepath.Join(t.TempDir(), "production-worktrees")
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{worktreeDir: external})
+
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
+
+	run, err := runner(&cobra.Command{})
+	require.NoError(t, err)
+	preparedPath := fixture.lastPreparedPath(t)
+	assert.Equal(t, filepath.Join(sandbox.worktreeDir(), deleteBenchmarkBranch), preparedPath)
+	assert.NoDirExists(t, external)
+
+	measurement, runErr := run()
+	require.NoError(t, finishBenchmarkIteration(runErr, measurement.cleanup))
+}
+
 func TestDeleteBenchmarkClearsSetupDriftBeforeTimedDeletion(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
@@ -211,7 +229,7 @@ func TestDeleteBenchmarkSkipsRequestedSetupSteps(t *testing.T) {
 	require.NoError(t, finishBenchmarkIteration(runErr, measurement.cleanup))
 	assert.Contains(t, measurement.preparation, "hooks skipped")
 	assert.Contains(t, measurement.preparation, "dependencies completed")
-	assert.NoDirExists(t, worktree.PathForBranch(sandbox.repo, deleteBenchmarkBranch))
+	assert.NoDirExists(t, worktree.PathForBranch(sandbox.worktreeDir(), deleteBenchmarkBranch))
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 	// Skipping one step leaves the rest of the measured path intact: the
 	// branch database is still created and still dropped by the deletion.
@@ -238,6 +256,9 @@ type deleteBenchmarkProject struct {
 	// not ignore, the shape of project where clearing setup drift also removes
 	// what the deletion would have had to remove.
 	unignoredOutput bool
+	// worktreeDir is committed as the project's production destination. The
+	// benchmark must retain ownership by overriding it inside its sandbox.
+	worktreeDir string
 }
 
 func newDeleteBenchmarkFixture(t *testing.T, project deleteBenchmarkProject) deleteBenchmarkFixture {
@@ -282,13 +303,15 @@ func createDeleteBenchmarkRepo(t *testing.T, project deleteBenchmarkProject) str
 	if project.failingHook {
 		hook += " && false"
 	}
-	config := fmt.Sprintf(`[database]
+	config := fmt.Sprintf(`worktree_dir = %q
+
+[database]
 env_key = "DATABASE_URL"
 container = "payload-testing-lab-postgres"
 
 [hooks]
 post_create = [%q]
-`, hook)
+`, project.worktreeDir, hook)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte(config), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "package-lock.json"), []byte("{}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".env\nnode_modules/\n.benchmark-hook\n"), 0o644))

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/shoutcape/treeman/internal/fsutil"
 	"golang.org/x/sys/unix"
 )
 
@@ -768,22 +769,15 @@ func sameRemovalPath(a, b string) bool {
 // registration. So the deepest ancestor that does exist is resolved and the
 // missing tail is re-attached to it.
 func CanonicalPath(path string) string {
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		absolute = filepath.Clean(path)
+	canonical, err := fsutil.CanonicalPath(path)
+	if err == nil {
+		return canonical
 	}
-	return canonicalExistingPrefix(filepath.Clean(absolute))
-}
-
-func canonicalExistingPrefix(absolute string) string {
-	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
-		return filepath.Clean(resolved)
+	absolute, absErr := filepath.Abs(path)
+	if absErr != nil {
+		return filepath.Clean(path)
 	}
-	parent := filepath.Dir(absolute)
-	if parent == absolute {
-		return absolute
-	}
-	return filepath.Join(canonicalExistingPrefix(parent), filepath.Base(absolute))
+	return filepath.Clean(absolute)
 }
 
 func canonicalExistingPath(path string) (string, error) {

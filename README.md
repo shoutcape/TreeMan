@@ -47,11 +47,11 @@ TreeMan keeps Git worktrees as the foundation. It can run the project setup that
 wt feature/login
 ```
 
-TreeMan fetches the default branch, creates `feature/login`, and creates its worktree at `.worktrees/feature-login` under the main worktree.
+TreeMan fetches the default branch, creates `feature/login`, and creates its worktree at `.worktrees/feature-login` under the main worktree. Set `worktree_dir` in `.treeman.toml` to use another internal or external parent directory.
 
 After creation, TreeMan performs these steps in order:
 
-1. Tries to add `.worktrees/` to `.gitignore`.
+1. Tries to add the internal worktree directory to `.gitignore` when `update_gitignore` is enabled.
 2. Copies `.env*` files unless you use `--skip-env`.
 3. Creates a PostgreSQL branch database when configured.
 4. Installs project dependencies when it detects a supported project.

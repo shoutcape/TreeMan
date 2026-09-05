@@ -115,3 +115,31 @@ func TestPreflightConfigurationStatusReportsInvalidConfiguration(t *testing.T) {
 	assert.Equal(t, "unavailable: configuration is invalid", preflightDatabaseStatus(t.TempDir(), result).message)
 	assert.Equal(t, "unavailable: configuration is invalid", preflightHooksStatus(result).message)
 }
+
+func TestPreflightRejectsInvalidWorktreeDirectoryAndExcludesConfiguredDirectory(t *testing.T) {
+	repo, _ := createTestWorktree(t, "feature/preflight-path")
+	chdirForTest(t, repo)
+	configuredModule := filepath.Join(repo, "build", "trees", "old", "go.mod")
+	unrelatedModule := filepath.Join(repo, "packages", "trees", "go.mod")
+	for _, path := range []string{configuredModule, unrelatedModule} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \"build/trees\"\n"), 0o600))
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	command := New("", "", "")
+	command.SetOut(stdout)
+	command.SetErr(stderr)
+	command.SetArgs([]string{"preflight"})
+	require.NoError(t, command.Execute())
+
+	out := ui.StripANSI(stderr.String())
+	assert.NotContains(t, out, "build/trees/old")
+	assert.Contains(t, out, "packages/trees (go.mod)")
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \"{branch}\"\n"), 0o600))
+	stderr.Reset()
+	require.NoError(t, command.Execute())
+	assert.Contains(t, ui.StripANSI(stderr.String()), "Configuration  unavailable: worktree_dir")
+}

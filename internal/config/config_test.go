@@ -33,6 +33,16 @@ env_key = "DATABASE_URI"
 	assert.Equal(t, "DATABASE_URI", result.Config.Database.EnvKey)
 }
 
+func TestLoad_WorktreeDir(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("worktree_dir = \"../trees/{repo}\"\n"), 0o600))
+
+	result := Load(dir)
+
+	require.Empty(t, result.Warning)
+	assert.Equal(t, "../trees/{repo}", result.Config.WorktreeDirSetting())
+}
+
 func TestLoad_DatabaseURL(t *testing.T) {
 	dir := t.TempDir()
 	content := `[database]
@@ -157,7 +167,8 @@ func TestDatabaseEnvKey_WithDatabase(t *testing.T) {
 
 func TestFindConfig_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
-	result := findConfig(dir)
+	result, err := findConfig(dir)
+	require.NoError(t, err)
 	assert.Equal(t, "", result)
 }
 
@@ -166,7 +177,8 @@ func TestFindConfig_FileInDir(t *testing.T) {
 	configPath := filepath.Join(dir, ConfigFileName)
 	require.NoError(t, os.WriteFile(configPath, []byte("[database]\n"), 0600))
 
-	result := findConfig(dir)
+	result, err := findConfig(dir)
+	require.NoError(t, err)
 	assert.Equal(t, configPath, result)
 }
 

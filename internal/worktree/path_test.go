@@ -1,6 +1,8 @@
 package worktree_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/git"
@@ -30,40 +32,40 @@ func TestBranchSlug(t *testing.T) {
 
 func TestPathForBranch(t *testing.T) {
 	tests := []struct {
-		name     string
-		mainRoot string
-		branch   string
-		want     string
+		name      string
+		parentDir string
+		branch    string
+		want      string
 	}{
 		{
-			name:     "feature branch with slash",
-			mainRoot: "/home/user/Github/my-project",
-			branch:   "feature/cool-thing",
-			want:     "/home/user/Github/my-project/.worktrees/feature-cool-thing",
+			name:      "feature branch with slash",
+			parentDir: "/home/user/Github/my-project/.worktrees",
+			branch:    "feature/cool-thing",
+			want:      "/home/user/Github/my-project/.worktrees/feature-cool-thing",
 		},
 		{
-			name:     "fix branch with slash",
-			mainRoot: "/home/user/Github/my-project",
-			branch:   "fix/bug-123",
-			want:     "/home/user/Github/my-project/.worktrees/fix-bug-123",
+			name:      "fix branch with slash",
+			parentDir: "/home/user/Github/my-project/.worktrees",
+			branch:    "fix/bug-123",
+			want:      "/home/user/Github/my-project/.worktrees/fix-bug-123",
 		},
 		{
-			name:     "simple branch no slash",
-			mainRoot: "/home/user/Github/my-project",
-			branch:   "hotfix",
-			want:     "/home/user/Github/my-project/.worktrees/hotfix",
+			name:      "simple branch no slash",
+			parentDir: "/home/user/Github/my-project/.worktrees",
+			branch:    "hotfix",
+			want:      "/home/user/Github/my-project/.worktrees/hotfix",
 		},
 		{
-			name:     "review branch matches smoke test naming",
-			mainRoot: "/tmp/project",
-			branch:   "feature/review-alpha",
-			want:     "/tmp/project/.worktrees/feature-review-alpha",
+			name:      "review branch matches smoke test naming",
+			parentDir: "/tmp/project/.worktrees",
+			branch:    "feature/review-alpha",
+			want:      "/tmp/project/.worktrees/feature-review-alpha",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, worktree.PathForBranch(tt.mainRoot, tt.branch))
+			assert.Equal(t, tt.want, worktree.PathForBranch(tt.parentDir, tt.branch))
 		})
 	}
 }
@@ -92,7 +94,7 @@ func TestSlugSuffixIsStable(t *testing.T) {
 }
 
 func TestResolvePathForBranch(t *testing.T) {
-	const mainRoot = "/repo"
+	const parentDir = "/repo/.worktrees"
 
 	slashLogin := git.WorktreeEntry{Path: "/repo/.worktrees/feature-login", Branch: "feature/login"}
 	dashLogin := git.WorktreeEntry{Path: "/repo/.worktrees/feature-login", Branch: "feature-login"}
@@ -160,7 +162,7 @@ func TestResolvePathForBranch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := worktree.ResolvePathForBranch(mainRoot, tt.branch, tt.existing)
+			got, err := worktree.ResolvePathForBranch(parentDir, tt.branch, tt.existing)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -168,7 +170,7 @@ func TestResolvePathForBranch(t *testing.T) {
 }
 
 func TestResolvePathForBranchErrors(t *testing.T) {
-	const mainRoot = "/repo"
+	const parentDir = "/repo/.worktrees"
 
 	tests := []struct {
 		name     string
@@ -198,11 +200,72 @@ func TestResolvePathForBranchErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := worktree.ResolvePathForBranch(mainRoot, tt.branch, tt.existing)
+			_, err := worktree.ResolvePathForBranch(parentDir, tt.branch, tt.existing)
 			require.Error(t, err)
 			for _, want := range tt.contains {
 				assert.Contains(t, err.Error(), want)
 			}
 		})
 	}
+}
+
+func TestResolvePathForBranchDetectsCanonicalCollision(t *testing.T) {
+	realParent := filepath.Join(t.TempDir(), "real")
+	require.NoError(t, os.Mkdir(realParent, 0o755))
+	linkedParent := filepath.Join(t.TempDir(), "linked")
+	require.NoError(t, os.Symlink(realParent, linkedParent))
+
+	got, err := worktree.ResolvePathForBranch(linkedParent, "feature/login", []git.WorktreeEntry{{
+		Path:   filepath.Join(realParent, "feature-login"),
+		Branch: "feature-login",
+	}})
+
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(linkedParent, "feature-login-df7c7a"), got)
+}
+
+func TestResolveDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "my project")
+	require.NoError(t, os.Mkdir(root, 0o755))
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name       string
+		configured string
+		want       string
+	}{
+		{name: "default", want: filepath.Join(root, ".worktrees")},
+		{name: "relative", configured: "../trees/{repo}", want: filepath.Join(filepath.Dir(root), "trees", "my project")},
+		{name: "absolute", configured: filepath.Join(home, "absolute trees"), want: filepath.Join(home, "absolute trees")},
+		{name: "home", configured: "~/trees/{repo}", want: filepath.Join(home, "trees", "my project")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := worktree.ResolveDir(root, tt.configured)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.True(t, filepath.IsAbs(got))
+		})
+	}
+}
+
+func TestResolveDirRejectsInvalidExpansion(t *testing.T) {
+	for _, configured := range []string{".", "{branch}", "{unknown}", "{repo", "repo}", "}x{repo}", "~other/trees"} {
+		t.Run(configured, func(t *testing.T) {
+			_, err := worktree.ResolveDir(t.TempDir(), configured)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestResolveDirRejectsSymlinkAliasOfMainRoot(t *testing.T) {
+	root := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "repo-link")
+	require.NoError(t, os.Symlink(root, alias))
+
+	_, err := worktree.ResolveDir(root, alias)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "main worktree root")
 }

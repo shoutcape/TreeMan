@@ -14,7 +14,6 @@ import (
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
-	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -377,18 +376,8 @@ func finishBenchmarkIteration(runErr error, cleanup func() error) error {
 }
 
 func newBranchBenchmarkRunner(branch string) (benchmarkRunner, benchmarkSandbox, error) {
-	mainRoot, err := git.MainWorktreeRoot()
-	if err != nil {
-		return nil, benchmarkSandbox{}, err
-	}
-	worktreePath := worktree.PathForBranch(mainRoot, branch)
 	if git.BranchExists(branch) {
 		return nil, benchmarkSandbox{}, fmt.Errorf("cannot benchmark branch %q: it already exists locally", branch)
-	}
-	if _, err := os.Stat(worktreePath); err == nil {
-		return nil, benchmarkSandbox{}, fmt.Errorf("cannot benchmark branch %q: directory %q already exists", branch, worktreePath)
-	} else if !os.IsNotExist(err) {
-		return nil, benchmarkSandbox{}, fmt.Errorf("cannot inspect benchmark worktree path %q: %w", worktreePath, err)
 	}
 
 	sandbox, err := newBenchmarkSandbox()
@@ -399,9 +388,9 @@ func newBranchBenchmarkRunner(branch string) (benchmarkRunner, benchmarkSandbox,
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
 			err := sandbox.run(func() error {
-				created, err := createBranchWorktree(runCmd, branch)
+				created, err := createBranchWorktreeIn(runCmd, branch, sandbox.worktreeDir())
 				if created.worktree.Path != "" {
-					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.mainRoot, created.worktree) }
+					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
 				}
 				return err
 			})
@@ -423,9 +412,9 @@ func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, benchmarkSandbox, 
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
 			err := sandbox.run(func() error {
-				created, err := createReviewWorktree(runCmd, prArg)
+				created, err := createReviewWorktreeIn(runCmd, prArg, sandbox.worktreeDir())
 				if created.worktree.Path != "" {
-					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.mainRoot, created.worktree) }
+					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
 				}
 				return err
 			})
@@ -438,6 +427,10 @@ func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, benchmarkSandbox, 
 type benchmarkSandbox struct {
 	root string
 	repo string
+}
+
+func (sandbox benchmarkSandbox) worktreeDir() string {
+	return filepath.Join(sandbox.root, "worktrees")
 }
 
 // newBenchmarkSandbox clones the current repository's origin into a temporary

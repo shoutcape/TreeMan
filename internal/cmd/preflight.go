@@ -9,6 +9,7 @@ import (
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
+	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -38,10 +39,17 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	configResult := config.Load(mainRoot)
+	var worktreeDir string
+	if configResult.Warning == "" {
+		worktreeDir, err = worktree.ResolveDir(mainRoot, configResult.Config.WorktreeDirSetting())
+		if err != nil {
+			configResult.Warning = err.Error()
+		}
+	}
 	statuses := []preflightStatus{
 		preflightEnvironmentStatus(mainRoot),
 	}
-	statuses = append(statuses, preflightDependenciesStatuses(mainRoot)...)
+	statuses = append(statuses, preflightDependenciesStatuses(mainRoot, worktreeDir)...)
 	statuses = append(statuses, preflightConfigurationStatus(configResult))
 	statuses = append(statuses,
 		preflightDatabaseStatus(mainRoot, configResult),
@@ -62,14 +70,14 @@ func preflightEnvironmentStatus(dir string) preflightStatus {
 	return preflightStatus{name: "Environment", message: fmt.Sprintf("ready: %d .env file(s) will be copied", len(files)), tone: ui.ToneSuccess, symbol: "✓"}
 }
 
-func preflightDependenciesStatuses(dir string) []preflightStatus {
+func preflightDependenciesStatuses(dir string, excluded ...string) []preflightStatus {
 	detection, err := deps.Detect(dir)
 	if err != nil {
 		return []preflightStatus{{name: "Dependencies", message: fmt.Sprintf("unavailable: %v", err), tone: ui.ToneFailure, symbol: "✗"}}
 	}
 
 	statuses := []preflightStatus{preflightDependenciesStatus(detection)}
-	modules, err := deps.DiscoverNestedModules(dir)
+	modules, err := deps.DiscoverNestedModules(dir, excluded...)
 	if err != nil {
 		return append(statuses, preflightStatus{name: "Nested modules", message: fmt.Sprintf("unavailable: %v", err), tone: ui.ToneFailure, symbol: "✗"})
 	}

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -536,6 +537,36 @@ func TestTreeManWorktreeMutationLockSerializesAddAndDelete(t *testing.T) {
 		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
 		assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), worktree)
 	})
+}
+
+func TestCreatePlannedWorktreeReselectsAfterWaitingForLock(t *testing.T) {
+	repo := createGitTestRepo(t)
+	destination := filepath.Join(t.TempDir(), "occupied")
+	locked, release, finished := holdWorktreeMutationLock(t, repo)
+	<-locked
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := createPlannedWorktree(repo, func(existing []WorktreeEntry) (string, error) {
+			for _, entry := range existing {
+				if filepath.Clean(entry.Path) == filepath.Clean(destination) {
+					return "", fmt.Errorf("destination became occupied by %s", entry.Branch)
+				}
+			}
+			return destination, nil
+		}, "feature-second", "HEAD")
+		created <- err
+	}()
+	assertBlocked(t, created)
+
+	gitTest(t, repo, "worktree", "add", "-b", "feature-first", destination)
+	close(release)
+	require.NoError(t, <-finished)
+	err := <-created
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "destination became occupied")
+	assert.Equal(t, "feature-first", gitTestOutput(t, destination, "branch", "--show-current"))
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature-second")
 }
 
 func holdWorktreeMutationLock(t *testing.T, repo string) (locked <-chan struct{}, release chan<- struct{}, finished <-chan error) {
