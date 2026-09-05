@@ -239,47 +239,82 @@ func TestWorktreeCommands_AcceptExecFlag(t *testing.T) {
 	}
 }
 
+// shellIntegration is one generated wrapper, with the snippet that reports how
+// the wrapper left the shell: the status it returned, and the directory the
+// shell is in once it has.
+type shellIntegration struct {
+	name        string
+	integration string
+	report      string
+}
+
+var integratedShells = []shellIntegration{
+	{name: "bash", integration: fmt.Sprintf(posixShellIntegration, "bash"), report: `printf 'status=%s cwd=%s\n' "$?" "$PWD"`},
+	{name: "zsh", integration: fmt.Sprintf(posixShellIntegration, "zsh"), report: `printf 'status=%s cwd=%s\n' "$?" "$PWD"`},
+	{name: "fish", integration: fishShellIntegration, report: `printf 'status=%s cwd=%s\n' $status $PWD`},
+}
+
+// runWithIntegration runs one treeman call through the shell's own wrapper,
+// against a fake treeman, and returns everything the run printed.
+func runWithIntegration(t *testing.T, shell shellIntegration, binDir, treemanArgs string) string {
+	t.Helper()
+	shellPath, err := exec.LookPath(shell.name)
+	if err != nil {
+		t.Skipf("%s is not installed", shell.name)
+	}
+
+	// TreeMan's arguments belong in the script. Passing them as the shell's own
+	// arguments makes fish read a leading dash as one of its options, and makes
+	// the POSIX shells need a $0 first.
+	script := shell.integration + "\ntreeman switch " + treemanArgs + "\n" + shell.report
+	command := exec.Command(shellPath, "-c", script)
+	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+	command.Dir = t.TempDir()
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	return string(output)
+}
+
 // TestShellIntegration_ChangesDirectory runs each generated wrapper against a
 // fake treeman. The wrapper reads one path from the destination file, so it
 // needs to know nothing about TreeMan's flags: a run that reports no
 // destination -- what --exec does -- leaves the shell where it was.
 func TestShellIntegration_ChangesDirectory(t *testing.T) {
-	for _, shell := range []struct {
-		name        string
-		integration string
-		reportPWD   string
-	}{
-		{name: "bash", integration: fmt.Sprintf(posixShellIntegration, "bash"), reportPWD: `printf 'cwd=%s\n' "$PWD"`},
-		{name: "zsh", integration: fmt.Sprintf(posixShellIntegration, "zsh"), reportPWD: `printf 'cwd=%s\n' "$PWD"`},
-		{name: "fish", integration: fishShellIntegration, reportPWD: `printf 'cwd=%s\n' $PWD`},
-	} {
+	for _, shell := range integratedShells {
 		t.Run(shell.name, func(t *testing.T) {
-			shellPath, err := exec.LookPath(shell.name)
-			if err != nil {
-				t.Skipf("%s is not installed", shell.name)
-			}
 			destination := t.TempDir()
 			binDir := fakeTreeman(t, destination)
 
-			// TreeMan's arguments belong in the script. Passing them as the
-			// shell's own arguments makes fish read a leading dash as one of
-			// its options, and makes the POSIX shells need a $0 first.
-			run := func(treemanArgs string) string {
-				script := shell.integration + "\ntreeman switch " + treemanArgs + "\n" + shell.reportPWD
-				command := exec.Command(shellPath, "-c", script)
-				command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
-				command.Dir = t.TempDir()
-				output, err := command.CombinedOutput()
-				require.NoError(t, err, string(output))
-				return string(output)
-			}
-
-			assert.Contains(t, run(""), "cwd="+destination,
+			assert.Contains(t, runWithIntegration(t, shell, binDir, ""), "cwd="+destination,
 				"a reported destination changes the shell directory")
-			assert.NotContains(t, run("--exec true"), "cwd="+destination,
+
+			launched := runWithIntegration(t, shell, binDir, "--exec 'echo exec-ran'")
+			assert.NotContains(t, launched, "cwd="+destination,
 				"--exec reports no destination, so the shell stays put")
-			assert.Contains(t, run("--exec true"), "exec-ran",
+			assert.Contains(t, launched, "exec-ran",
 				"the launched command still owns stdout")
+		})
+	}
+}
+
+// TestShellIntegration_PropagatesCommandStatus keeps a failed --exec command
+// visible to the caller. The wrapper stands between that command and the shell
+// that started TreeMan, so a status it swallowed would make every launched
+// command look like it had succeeded.
+func TestShellIntegration_PropagatesCommandStatus(t *testing.T) {
+	for _, shell := range integratedShells {
+		t.Run(shell.name, func(t *testing.T) {
+			destination := t.TempDir()
+			binDir := fakeTreeman(t, destination)
+
+			failed := runWithIntegration(t, shell, binDir, "--exec 'exit 7'")
+			assert.Contains(t, failed, "status=7",
+				"the launched command's own status reaches the caller")
+			assert.NotContains(t, failed, "cwd="+destination,
+				"a command that failed leaves the shell where it was")
+
+			assert.Contains(t, runWithIntegration(t, shell, binDir, "--exec 'exit 0'"), "status=0",
+				"and a command that succeeded is not reported as a failure")
 		})
 	}
 }
@@ -307,14 +342,19 @@ func TestShellIntegration_WithoutMktemp(t *testing.T) {
 }
 
 // fakeTreeman installs a treeman that reports destination through the
-// destination file, unless it was asked to exec -- which is how the real
-// binary behaves once a command takes over.
+// destination file, unless it was asked to exec -- which it does by replacing
+// itself with the command, the way the real binary hands the terminal over.
+// The command's status is then TreeMan's own.
 func fakeTreeman(t *testing.T, destination string) string {
 	t.Helper()
 	binDir := t.TempDir()
 	script := "#!/bin/sh\n" +
-		"for arg in \"$@\"; do\n" +
-		"  case \"$arg\" in --exec|-x) echo exec-ran; exit 0 ;; esac\n" +
+		"while [ $# -gt 0 ]; do\n" +
+		"  case \"$1\" in\n" +
+		"    --exec|-x) shift; exec sh -c \"$1\" ;;\n" +
+		"    --exec=*|-x=*) exec sh -c \"${1#*=}\" ;;\n" +
+		"  esac\n" +
+		"  shift\n" +
 		"done\n" +
 		"printf '%s\\n' \"" + destination + "\" > \"$TREEMAN_CD_FILE\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "treeman"), []byte(script), 0o755))
