@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/database"
@@ -14,9 +14,8 @@ import (
 )
 
 var (
-	removeWorktree    = git.WorktreeRemove
-	deleteBranchAtSHA = git.DeleteBranchAtSHA
-	newCleanupBatch   = func() databaseCleanupBatch { return database.NewCleanupBatch() }
+	removeWorktreeAndBranch = git.RemoveWorktreeAndBranch
+	newCleanupBatch         = func() databaseCleanupBatch { return database.NewCleanupBatch() }
 )
 
 type databaseCleanupPreparer interface {
@@ -44,6 +43,8 @@ type databaseCleanupOutcome struct {
 type deleteWorktreeOutcome struct {
 	database        databaseCleanupOutcome
 	currentWorktree bool
+	cleanupJob      string
+	cleanupStarted  bool
 }
 
 func newDeleteCmd() *cobra.Command {
@@ -208,51 +209,25 @@ type deletionPlan struct {
 }
 
 // planDeletion decides whether a worktree and its branch may be removed, and
-// returns the facts that decision rested on. Every refusal lives here, so a
-// caller can put the question to the user before asking them to confirm it
-// rather than after. An expected SHA pins the exact commit whose merge was
+// returns the facts that decision rested on. Preflight refusals happen before
+// confirmation; execution revalidates mutable state under the mutation lock.
+// An expected SHA pins the exact commit whose merge was
 // verified; a branch that has moved since is no longer the branch it verified.
 func planDeletion(dest, branch, mainRoot string, guards deletionGuards, expectedSHA string) (deletionPlan, error) {
 	entries, err := git.WorktreeList()
 	if err != nil {
-		return deletionPlan{}, err
+		return deletionPlan{}, repositoryUnavailable{err}
 	}
-	entry, err := worktreeEntryAt(entries, dest)
+	entry, branchSHA, err := git.ValidateWorktreeRemoval(mainRoot, entries, dest, branch, expectedSHA)
 	if err != nil {
 		return deletionPlan{}, err
-	}
-	if samePath(entry.Path, mainRoot) {
-		return deletionPlan{}, fmt.Errorf("cannot delete the main worktree")
-	}
-	if entry.Branch != branch {
-		return deletionPlan{}, fmt.Errorf("worktree %q is checked out on branch %q, not %q", entry.Path, entry.Branch, branch)
-	}
-	// A lock says "do not remove this", and --force is the user waiving their
-	// own uncommitted changes, never a claim about the lock. Git refuses a
-	// locked worktree too, so the guard is here for the message rather than
-	// the outcome -- and it has to precede the staleness check below, because
-	// a legitimately absent directory (removable media, an unmounted share) is
-	// the case the lock exists for and must not be read as an abandoned one.
-	if entry.Locked {
-		reason := ""
-		if entry.LockReason != "" {
-			reason = ": " + entry.LockReason
-		}
-		return deletionPlan{}, fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
 	}
 	defaultBranch, err := resolveDefaultBranch(entries, mainRoot)
 	if err != nil {
-		return deletionPlan{}, fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)
+		return deletionPlan{}, repositoryUnavailable{fmt.Errorf("cannot delete branch %q because the default branch could not be detected: %w", branch, err)}
 	}
 	if branch == defaultBranch {
 		return deletionPlan{}, fmt.Errorf("cannot delete the default branch %q", branch)
-	}
-	branchSHA, err := git.BranchSHA(branch)
-	if err != nil {
-		return deletionPlan{}, fmt.Errorf("cannot remove worktree %q because branch %q could not be resolved: %w", entry.Path, branch, err)
-	}
-	if expectedSHA != "" && branchSHA != expectedSHA {
-		return deletionPlan{}, fmt.Errorf("cannot remove worktree %q: branch %q moved after merge verification (expected %s, found %s)", entry.Path, branch, expectedSHA, branchSHA)
 	}
 	plan := deletionPlan{
 		entry:            entry,
@@ -328,7 +303,7 @@ func deleteVerifiedWorktree(cmd *cobra.Command, dest, branch, mainRoot, expected
 	}
 	plan, err := planDeletion(dest, branch, mainRoot, deletionGuards{mergeVerified: true}, expectedSHA)
 	if err != nil {
-		return deleteWorktreeOutcome{}, err
+		return deleteWorktreeOutcome{}, removalRefused{err}
 	}
 	return plan.execute(cmd, batch)
 }
@@ -349,6 +324,12 @@ func runDeletionPlan(cmd *cobra.Command, plan deletionPlan) error {
 
 func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome deleteWorktreeOutcome) error {
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneSuccess, "✓", "Deleted worktree and branch: "+branch))
+	// Queued is not the same as running: a detach that failed leaves files
+	// behind for a later removal to retry, and the warning above already said
+	// so. Announcing background progress here as well would contradict it.
+	if outcome.cleanupStarted && git.CleanupPending(outcome.cleanupJob) {
+		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "File cleanup continues in the background."))
+	}
 	if !outcome.currentWorktree {
 		return nil
 	}
@@ -358,8 +339,8 @@ func reportDeletedWorktree(cmd *cobra.Command, branch, mainRoot string, outcome 
 }
 
 // execute carries out a plan: the removal itself, the branch's exact-SHA
-// deletion, and the database the worktree owned. Nothing here refuses -- every
-// refusal happened in planDeletion, before the user was asked to confirm.
+// deletion, and the database the worktree owned. Removal revalidates the plan
+// under the mutation lock and can refuse if the state has changed.
 func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPreparer) (deleteWorktreeOutcome, error) {
 	entry := plan.entry
 	currentRoot, err := git.CurrentWorktreeRoot()
@@ -390,16 +371,12 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 		cleanupOutcome.status = databaseCleanupPending
 		cleanupOutcome.database = databaseName
 	}
-	if err := removeWorktree(plan.mainRoot, entry.Path, plan.guards.force); err != nil {
-		return deleteWorktreeOutcome{}, deleteWorktreeFailure(err, "none", fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch), fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))
+	removal, err := removeWorktreeAndBranch(plan.mainRoot, entry.Path, entry.Branch, plan.branchSHA, plan.guards.force)
+	if removal.CleanupError != nil {
+		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("pending file cleanup needs retry: %v", removal.CleanupError)))
 	}
-	if err := deleteBranchAtSHA(plan.mainRoot, entry.Branch, plan.branchSHA); err != nil {
-		return deleteWorktreeOutcome{}, deleteWorktreeFailure(
-			fmt.Errorf("branch %q was preserved after deletion checks: %w", entry.Branch, err),
-			fmt.Sprintf("removed worktree %q", entry.Path),
-			fmt.Sprintf("branch %q", entry.Branch),
-			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
-		)
+	if err != nil {
+		return deleteWorktreeOutcome{}, plan.removalFailure(err)
 	}
 	if commitDatabaseCleanup != nil {
 		if err := commitDatabaseCleanup(); err != nil {
@@ -407,7 +384,102 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 			cleanupOutcome.status = databaseCleanupUnavailable
 		}
 	}
-	return deleteWorktreeOutcome{database: cleanupOutcome, currentWorktree: samePath(currentRoot, entry.Path)}, nil
+	return deleteWorktreeOutcome{
+		database:        cleanupOutcome,
+		currentWorktree: samePath(currentRoot, entry.Path),
+		cleanupJob:      removal.CleanupJob,
+		cleanupStarted:  removal.CleanupStarted,
+	}, nil
+}
+
+// removalFailure turns the removal's own account of what it left behind into
+// the error a batch acts on. Which durable transitions completed cannot answer
+// that on its own: a worktree that is still registered because its captured
+// directory could not be put back is not a worktree that was merely refused,
+// and both report the same unregistration. So the scope decides, and only the
+// scope that claims nothing changed lets a batch continue: an unrecognized one
+// and an unclassified failure both claim nothing at all, and stop the run.
+func (plan deletionPlan) removalFailure(err error) error {
+	entry := plan.entry
+	remaining := fmt.Sprintf("worktree %q, branch %q", entry.Path, entry.Branch)
+	retry := fmt.Sprintf("resolve the error, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force))
+	// A failure that classified nothing supports no claim about what survived
+	// it, so its report names what to look at rather than what is still there.
+	unknown := deleteWorktreeFailure(err, "unknown",
+		fmt.Sprintf("unknown; inspect worktree %q and branch %q", entry.Path, entry.Branch),
+		fmt.Sprintf("confirm what survived, then retry: treeman delete --path %q --branch %q --yes%s", entry.Path, entry.Branch, forceFlag(plan.guards.force)))
+	var failure *git.RemovalError
+	if !errors.As(err, &failure) {
+		return unknown
+	}
+	switch failure.Scope {
+	case git.RemovalScopeCandidate:
+		return removalRefused{deleteWorktreeFailure(err, "none", remaining, retry)}
+	case git.RemovalScopeRepository:
+		return repositoryUnavailable{deleteWorktreeFailure(err, "none", remaining, retry)}
+	case git.RemovalScopeCaptureRetained:
+		// Git kept both resources, but the working tree is no longer where the
+		// registration says it is. Restoring it is a move TreeMan already tried
+		// and could not make -- most likely because something occupies the
+		// path -- so the report names both locations and leaves the move to
+		// someone who can see what is in the way.
+		return deleteWorktreeFailure(
+			fmt.Errorf("worktree %q was captured for removal and could not be restored: %w", entry.Path, err),
+			fmt.Sprintf("moved the worktree directory for %q into the cleanup queue at %q", entry.Path, failure.Capture),
+			fmt.Sprintf("worktree %q registered while its directory sits at %q, branch %q", entry.Path, failure.Capture, entry.Branch),
+			fmt.Sprintf("inspect %q and whatever now occupies %q, restore the directory there once the path is free, then retry: treeman delete --path %q --branch %q --yes%s", failure.Capture, entry.Path, entry.Path, entry.Branch, forceFlag(plan.guards.force)),
+		)
+	case git.RemovalScopeBranchRetained:
+		return deleteWorktreeFailure(
+			fmt.Errorf("branch %q was preserved after worktree removal: %w", entry.Branch, err),
+			fmt.Sprintf("removed worktree %q", entry.Path),
+			fmt.Sprintf("branch %q", entry.Branch),
+			fmt.Sprintf("inspect branch %q, then delete it manually if appropriate: git -C %q branch -D %q", entry.Branch, plan.mainRoot, entry.Branch),
+		)
+	default:
+		return unknown
+	}
+}
+
+// removalRefused marks a deletion the removal itself reported as a decision
+// about one worktree, having left every Git resource in place and nothing
+// captured. A batch can skip such a candidate and keep going, whereas a removal
+// that got further -- or that could not read what every candidate needs -- must
+// stop the run so the user can act on the state it left behind.
+type removalRefused struct{ err error }
+
+func (r removalRefused) Error() string { return r.err.Error() }
+
+func (r removalRefused) Unwrap() error { return r.err }
+
+// repositoryUnavailable marks a failure to read repository-wide state rather
+// than a decision about one worktree. Nothing was removed, but the next
+// candidate would fail the same way, so a batch must stop instead of
+// reporting the repository's problem once per worktree as if each had been
+// individually refused.
+type repositoryUnavailable struct{ err error }
+
+func (r repositoryUnavailable) Error() string { return r.err.Error() }
+
+func (r repositoryUnavailable) Unwrap() error { return r.err }
+
+// refusedRemoval reports whether err is a refusal that changed nothing and
+// says nothing about the candidates still to come. It reads the classification
+// the removal supplied rather than re-deriving one.
+func refusedRemoval(err error) bool {
+	var unavailable repositoryUnavailable
+	if errors.As(err, &unavailable) {
+		return false
+	}
+	// Planning carries the same classification: a registration directory that
+	// cannot be read is unreadable for every candidate, not a decision about
+	// the one that happened to reach it first.
+	var failure *git.RemovalError
+	if errors.As(err, &failure) && failure.Scope != git.RemovalScopeCandidate {
+		return false
+	}
+	var refused removalRefused
+	return errors.As(err, &refused)
 }
 
 func deleteWorktreeFailure(err error, completed, remaining, recovery string) error {
@@ -470,23 +542,13 @@ func mainWorktreeBranch(entries []git.WorktreeEntry, mainRoot string) (string, b
 // samePath reports whether two paths name the same directory. Symlinked or
 // relative paths reach one directory through different raw text, therefore
 // TreeMan compares canonical paths.
+//
+// It shares git.CanonicalPath with the removal itself deliberately. These two
+// answers are compared against each other -- planning decides which worktree
+// the removal then acts on -- so two implementations that disagree about a
+// path would disagree about which worktree that is.
 func samePath(a, b string) bool {
-	return canonicalPath(a) == canonicalPath(b)
-}
-
-// canonicalPath makes path absolute and resolves its symlinks. A path that the
-// operating system cannot resolve keeps its cleaned absolute form, therefore a
-// missing directory does not cause a failure.
-func canonicalPath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err == nil {
-		return filepath.Clean(resolved)
-	}
-	return filepath.Clean(abs)
+	return git.CanonicalPath(a) == git.CanonicalPath(b)
 }
 
 // confirmDeletion puts the plan to the user and, once they answer, re-runs it

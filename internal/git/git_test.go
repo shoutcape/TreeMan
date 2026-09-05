@@ -361,38 +361,36 @@ func TestUnpushedCommitCount(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestDeleteBranchAtSHA(t *testing.T) {
-	t.Run("deletes matching ref", func(t *testing.T) {
-		repo := createGitTestRepo(t)
-		gitTest(t, repo, "branch", "feature")
-		sha := gitTestOutput(t, repo, "rev-parse", "feature")
+// Git records the path it resolved, not the text the caller passed. Reached
+// through a symlinked prefix -- which is every temporary directory on macOS --
+// a rollback that matched on the text found nothing to remove and reported
+// success while leaving the worktree and its branch in place.
+func TestRemoveCreatedWorktreeMatchesThroughASymlinkedPrefix(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	require.NoError(t, os.Mkdir(real, 0o700))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(real, link))
+	repo := filepath.Join(real, "repo")
+	require.NoError(t, os.Mkdir(repo, 0o755))
+	initGitTestRepo(t, repo)
 
-		require.NoError(t, DeleteBranchAtSHA(repo, "feature", sha))
-		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
-	})
+	previousDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
 
-	t.Run("preserves moved ref", func(t *testing.T) {
-		repo := createGitTestRepo(t)
-		gitTest(t, repo, "branch", "feature")
-		sha := gitTestOutput(t, repo, "rev-parse", "feature")
-		gitTest(t, repo, "commit", "--allow-empty", "-m", "advance main")
-		movedSHA := gitTestOutput(t, repo, "rev-parse", "HEAD")
-		gitTest(t, repo, "update-ref", "refs/heads/feature", movedSHA)
+	// The caller names the worktree through the link; Git will record the
+	// directory it resolved.
+	worktree := filepath.Join(link, "feature")
+	created, err := CreateWorktree(worktree, "feature", "HEAD")
+	require.NoError(t, err)
 
-		require.Error(t, DeleteBranchAtSHA(repo, "feature", sha))
-		assert.Equal(t, movedSHA, gitTestOutput(t, repo, "rev-parse", "feature"))
-	})
+	require.NoError(t, RemoveCreatedWorktree(repo, created))
 
-	t.Run("preserves checked out branch", func(t *testing.T) {
-		repo := createGitTestRepo(t)
-		worktree := filepath.Join(t.TempDir(), "feature")
-		gitTest(t, repo, "worktree", "add", "-b", "feature", worktree)
-		sha := gitTestOutput(t, repo, "rev-parse", "feature")
-
-		err := DeleteBranchAtSHA(repo, "feature", sha)
-		require.EqualError(t, err, `branch "feature" is still checked out at worktree "`+worktree+`"`)
-		assert.Equal(t, sha, gitTestOutput(t, repo, "rev-parse", "feature"))
-	})
+	assert.NoDirExists(t, filepath.Join(real, "feature"))
+	assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), "feature")
+	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
 }
 
 func TestCreatedWorktreeLifecycleIsAtomic(t *testing.T) {
@@ -520,18 +518,23 @@ func TestTreeManWorktreeMutationLockSerializesAddAndDelete(t *testing.T) {
 
 	t.Run("TreeMan guarded deletion", func(t *testing.T) {
 		repo := createGitTestRepo(t)
-		gitTest(t, repo, "branch", "feature")
+		worktree := filepath.Join(t.TempDir(), "feature")
+		gitTest(t, repo, "worktree", "add", "-b", "feature", worktree)
 		sha := gitTestOutput(t, repo, "rev-parse", "feature")
 		locked, release, finished := holdWorktreeMutationLock(t, repo)
 		<-locked
 
 		deleted := make(chan error, 1)
-		go func() { deleted <- DeleteBranchAtSHA(repo, "feature", sha) }()
+		go func() {
+			_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+			deleted <- err
+		}()
 		assertBlocked(t, deleted)
 		close(release)
 		require.NoError(t, <-finished)
 		require.NoError(t, <-deleted)
 		gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature")
+		assert.NotContains(t, gitTestOutput(t, repo, "worktree", "list", "--porcelain"), worktree)
 	})
 }
 
@@ -562,13 +565,20 @@ func assertBlocked(t *testing.T, result <-chan error) {
 func createGitTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
+	initGitTestRepo(t, repo)
+	return repo
+}
+
+// initGitTestRepo seeds a repository at a directory the caller chose, for tests
+// that need to control where it sits.
+func initGitTestRepo(t *testing.T, repo string) {
+	t.Helper()
 	gitTest(t, repo, "init", "--initial-branch=main")
 	gitTest(t, repo, "config", "user.email", "test@example.com")
 	gitTest(t, repo, "config", "user.name", "Test User")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "file"), []byte("base\n"), 0o644))
 	gitTest(t, repo, "add", "file")
 	gitTest(t, repo, "commit", "-m", "base")
-	return repo
 }
 
 func gitTest(t *testing.T, dir string, args ...string) {

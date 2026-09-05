@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
@@ -53,8 +54,10 @@ type cleanSelection struct {
 }
 
 type cleanResult struct {
-	branch   string
-	database databaseCleanupOutcome
+	branch         string
+	database       databaseCleanupOutcome
+	cleanupJob     string
+	cleanupStarted bool
 }
 
 func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
@@ -69,10 +72,11 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 
 	out := cmd.ErrOrStderr()
-	cleanEntries, err := cleanLinkedWorktreeEntries(mainRoot, entries)
+	cleanEntries, lockedDiagnostics, err := cleanLinkedWorktreeEntries(mainRoot, entries)
 	if err != nil {
 		return err
 	}
+	writeMergeDiagnostics(out, render, lockedDiagnostics)
 	var defaultBranch string
 	preview := cleanSelection{}
 	if len(cleanEntries) > 0 {
@@ -186,19 +190,34 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("pending database cleanup failed: %v", err)))
 	}
 	results := make([]cleanResult, 0, len(candidates))
+	var refused []string
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
 		cleanupOutcome, err := deleteVerifiedWorktree(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, candidate.verifiedSHA, cleanupBatch)
+		if refusedRemoval(err) {
+			// Nothing was removed for this candidate, so the remaining ones are
+			// still safe to process. Abandoning them would leave a batch at the
+			// mercy of whichever candidate happened to be refused first.
+			refused = append(refused, candidate.entry.Branch)
+			fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("skipping %q: %v", candidate.entry.Branch, err)))
+			continue
+		}
 		if err != nil {
 			removedDatabases, cleanupErr := cleanupBatch.FlushWithResult()
 			writeCleanResults(out, render, results, removedDatabases)
+			writeCleanPendingFileCleanupNotice(cmd, results)
 			if cleanupErr != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", cleanupErr)))
 			}
 			return err
 		}
-		results = append(results, cleanResult{branch: candidate.entry.Branch, database: cleanupOutcome.database})
+		results = append(results, cleanResult{
+			branch:         candidate.entry.Branch,
+			database:       cleanupOutcome.database,
+			cleanupJob:     cleanupOutcome.cleanupJob,
+			cleanupStarted: cleanupOutcome.cleanupStarted,
+		})
 		if cleanupOutcome.currentWorktree {
 			// The caller's shell is standing in a worktree that no longer
 			// exists, so send it back to the main worktree. A shell that
@@ -210,11 +229,26 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	}
 	removedDatabases, err = cleanupBatch.FlushWithResult()
 	writeCleanResults(out, render, results, removedDatabases)
+	writeCleanPendingFileCleanupNotice(cmd, results)
 	if err != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", fmt.Sprintf("database cleanup failed; retry treeman clean: %v", err)))
 	}
 	fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Removed %d merged, clean worktree(s).", len(results))))
+	// Each refusal was reported as it happened; the run still exits unsuccessfully
+	// so that a caller is never told a partially completed cleanup succeeded.
+	if len(refused) > 0 {
+		return fmt.Errorf("%d worktree(s) could not be removed: %s", len(refused), strings.Join(refused, ", "))
+	}
 	return nil
+}
+
+func writeCleanPendingFileCleanupNotice(cmd *cobra.Command, results []cleanResult) {
+	for _, result := range results {
+		if result.cleanupStarted && git.CleanupPending(result.cleanupJob) {
+			fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneMuted, "○", "File cleanup continues in the background."))
+			return
+		}
+	}
 }
 
 func renderCleanCandidateDatabase(render ui.Renderer, databaseName string) string {
@@ -306,6 +340,10 @@ func revalidateCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, m
 			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "no longer eligible"))
 			continue
 		}
+		if entry.Locked {
+			selection.diagnostics = append(selection.diagnostics, lockedDiagnostic(entry.Branch, entry.LockReason))
+			continue
+		}
 		state, err := git.InspectWorktree(entry.Path)
 		if err != nil {
 			return cleanSelection{}, err
@@ -366,21 +404,30 @@ func cleanOmittedDiagnostic(candidate cleanCandidate, reason string) merge.Diagn
 	return merge.Diagnostic{Operation: fmt.Sprintf("skipping %q: %s", candidate.entry.Branch, reason)}
 }
 
-func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([]git.WorktreeEntry, error) {
+func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([]git.WorktreeEntry, []merge.Diagnostic, error) {
 	eligible := make([]git.WorktreeEntry, 0, len(entries))
+	var diagnostics []merge.Diagnostic
 	for _, entry := range entries {
 		if entry.Branch == "" || samePath(entry.Path, mainRoot) {
+			continue
+		}
+		// A lock is a refusal Git itself makes and force never waives, so a
+		// locked worktree must not be offered: the preview would promise a
+		// removal execution has to refuse. The omission is announced because
+		// the user locked it deliberately and can unlock it.
+		if entry.Locked {
+			diagnostics = append(diagnostics, lockedDiagnostic(entry.Branch, entry.LockReason))
 			continue
 		}
 		eligible = append(eligible, entry)
 	}
 	if len(eligible) == 0 {
-		return nil, nil
+		return nil, diagnostics, nil
 	}
 
 	inspected, err := git.InspectWorktrees(eligible)
 	if err != nil {
-		return nil, err
+		return nil, diagnostics, err
 	}
 	cleanEntries := make([]git.WorktreeEntry, 0, len(eligible))
 	for _, worktree := range inspected {
@@ -388,7 +435,14 @@ func cleanLinkedWorktreeEntries(mainRoot string, entries []git.WorktreeEntry) ([
 			cleanEntries = append(cleanEntries, worktree.Entry)
 		}
 	}
-	return cleanEntries, nil
+	return cleanEntries, diagnostics, nil
+}
+
+func lockedDiagnostic(branch, reason string) merge.Diagnostic {
+	if reason != "" {
+		return merge.Diagnostic{Operation: fmt.Sprintf("skipping %q: locked: %s", branch, reason)}
+	}
+	return merge.Diagnostic{Operation: fmt.Sprintf("skipping %q: locked", branch)}
 }
 
 func classifyCleanCandidates(classifier merge.ClassifierFunc, defaultBranch string, entries []git.WorktreeEntry) (cleanSelection, error) {

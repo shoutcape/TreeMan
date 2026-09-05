@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	gitpkg "github.com/shoutcape/treeman/internal/git"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,12 +149,22 @@ func TestRunDeleteDirect_PreservesBranchUsedByAnotherWorktree(t *testing.T) {
 	gitTest(t, repo, "worktree", "add", "--force", otherWorktree, "feature/shared")
 	chdirForTest(t, repo)
 
-	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/shared", true, true)
+	output := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(output)
+	command.SetOut(output)
+	events := []string{}
+	previousBatch := newCleanupBatch
+	newCleanupBatch = func() databaseCleanupBatch { return &recordingCleanupSession{events: &events} }
+	t.Cleanup(func() { newCleanupBatch = previousBatch })
+
+	err := runDeleteDirect(command, worktree, "feature/shared", false, true)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `branch "feature/shared" was preserved after deletion checks`)
-	assert.Contains(t, err.Error(), `branch "feature/shared" is still checked out at worktree "`+otherWorktree+`"`)
-	assert.NoDirExists(t, worktree)
+	assert.Contains(t, err.Error(), `branch "feature/shared" is also checked out at worktree "`+otherWorktree+`"`)
+	assert.Empty(t, output.String(), "refuse before asking for confirmation")
+	assert.Empty(t, events, "refuse before preparing database cleanup")
+	assert.DirExists(t, worktree)
 	assert.DirExists(t, otherWorktree)
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/shared")
 }
@@ -161,9 +172,11 @@ func TestRunDeleteDirect_PreservesBranchUsedByAnotherWorktree(t *testing.T) {
 func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/remove-failure")
 	chdirForTest(t, repo)
-	restoreRemove := removeWorktree
-	removeWorktree = func(string, string, bool) error { return assert.AnError }
-	t.Cleanup(func() { removeWorktree = restoreRemove })
+	restoreRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeCandidate, Err: assert.AnError}
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
 	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/remove-failure", true, false)
 
@@ -176,12 +189,160 @@ func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/remove-failure")
 }
 
+func TestRemovalRefusalsMatchPreflight(t *testing.T) {
+	for _, refusal := range []string{"main", "branch mismatch", "locked", "moved", "duplicate checkout", "unregistered"} {
+		t.Run(refusal, func(t *testing.T) {
+			repo, worktree := createTestWorktree(t, "feature/guard")
+			chdirForTest(t, repo)
+			path, branch := worktree, "feature/guard"
+			sha := gitRevParse(t, repo, "refs/heads/"+branch)
+			switch refusal {
+			case "main":
+				path, branch = repo, "main"
+			case "branch mismatch":
+				branch = "other"
+			case "locked":
+				gitTest(t, repo, "worktree", "lock", "--reason", "keep", worktree)
+			case "moved":
+				advanceMainForTest(t, repo)
+				gitTest(t, repo, "update-ref", "refs/heads/"+branch, "refs/heads/main")
+			case "duplicate checkout":
+				gitTest(t, repo, "worktree", "add", "--force", filepath.Join(filepath.Dir(repo), "other"), branch)
+			case "unregistered":
+				path = filepath.Join(repo, "unknown")
+			}
+
+			_, preflightErr := planDeletion(path, branch, repo, deletionGuards{force: true}, sha)
+			require.Error(t, preflightErr)
+			result, removalErr := gitpkg.RemoveWorktreeAndBranch(repo, path, branch, sha, true)
+			require.EqualError(t, removalErr, preflightErr.Error())
+			assert.False(t, result.WorktreeUnregistered)
+			assert.False(t, result.BranchDeleted)
+			assert.DirExists(t, worktree)
+			gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/guard")
+		})
+	}
+}
+
+func TestDeletionExecutionRevalidatesAfterPlanning(t *testing.T) {
+	for _, change := range []string{"locked", "moved", "duplicate checkout", "branch mismatch"} {
+		t.Run(change, func(t *testing.T) {
+			repo, worktree := createTestWorktree(t, "feature/guard")
+			chdirForTest(t, repo)
+			plan, err := planDeletion(worktree, "feature/guard", repo, deletionGuards{force: true}, "")
+			require.NoError(t, err)
+			var want string
+			switch change {
+			case "locked":
+				gitTest(t, repo, "worktree", "lock", worktree)
+				want = "is locked"
+			case "moved":
+				advanceMainForTest(t, repo)
+				gitTest(t, repo, "update-ref", "refs/heads/feature/guard", "refs/heads/main")
+				want = "moved after merge verification"
+			case "duplicate checkout":
+				gitTest(t, repo, "worktree", "add", "--force", filepath.Join(filepath.Dir(repo), "other"), "feature/guard")
+				want = "also checked out"
+			case "branch mismatch":
+				gitTest(t, worktree, "checkout", "-b", "replacement")
+				want = `not "feature/guard"`
+			}
+			events := []string{}
+			_, err = plan.execute(&cobra.Command{}, &transitionCleanupSession{events: &events})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), want)
+			assert.Contains(t, err.Error(), "Completed: none.")
+			assert.Equal(t, []string{"active"}, events, "database cleanup must not be committed")
+			assert.FileExists(t, filepath.Join(worktree, "README.md"))
+			gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/guard")
+		})
+	}
+}
+
+// Queued files and a running unlinker are different facts, and the notice
+// speaks only to the second: a job whose background process never started is
+// waiting for a later removal, which the retry warning already says.
+func TestRunDeleteDirectReportsPendingFileCleanup(t *testing.T) {
+	for _, started := range []bool{true, false} {
+		t.Run(fmt.Sprintf("started=%t", started), func(t *testing.T) {
+			repo, worktree := createTestWorktree(t, "feature/pending")
+			chdirForTest(t, repo)
+			previousRemove := removeWorktreeAndBranch
+			removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+				return gitpkg.RemoveWorktreeResult{
+					WorktreeUnregistered: true,
+					BranchDeleted:        true,
+					CleanupJob:           t.TempDir(),
+					CleanupStarted:       started,
+					CleanupError:         assert.AnError,
+				}, nil
+			}
+			t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+			stderr, stdout := &bytes.Buffer{}, &bytes.Buffer{}
+			command := &cobra.Command{}
+			command.SetErr(stderr)
+			command.SetOut(stdout)
+
+			require.NoError(t, runDeleteDirect(command, worktree, "feature/pending", true, true))
+
+			assert.Contains(t, stderr.String(), "Deleted worktree and branch: feature/pending")
+			assert.Contains(t, stderr.String(), "pending file cleanup needs retry:")
+			if started {
+				assert.Contains(t, stderr.String(), "File cleanup continues in the background.")
+			} else {
+				assert.NotContains(t, stderr.String(), "File cleanup continues in the background.",
+					"nothing is running, so the notice would contradict the retry warning")
+			}
+			assert.Empty(t, stdout.String(), "diagnostics must not interfere with shell navigation")
+		})
+	}
+}
+
+// A capture that could not be restored keeps the registration and the branch,
+// which is what a plain refusal keeps too. What differs is the directory: it is
+// no longer at the registered path, so the recovery is a move, and no batch may
+// treat the worktree as untouched.
+func TestRunDeleteDirect_ReportsACaptureThatCouldNotBeRestored(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/retained")
+	chdirForTest(t, repo)
+	capture := filepath.Join(t.TempDir(), "worktree-job", "worktree")
+	restoreRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{
+			Scope:   gitpkg.RemovalScopeCaptureRetained,
+			Capture: capture,
+			Err:     assert.AnError,
+		}
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
+
+	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/retained", true, false)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	// The report names the worktree as Git records it, which is the resolved
+	// path, not the text the caller happened to pass.
+	registered := gitpkg.CanonicalPath(worktree)
+	assert.Contains(t, err.Error(), `worktree "`+registered+`" was captured for removal and could not be restored`)
+	assert.Contains(t, err.Error(), fmt.Sprintf("Completed: moved the worktree directory for %q into the cleanup queue at %q.", registered, capture))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Remaining: worktree %q registered while its directory sits at %q, branch \"feature/retained\".", registered, capture))
+	assert.Contains(t, err.Error(), fmt.Sprintf("Recovery: inspect %q and whatever now occupies %q", capture, registered))
+	// Restoration failed because the rename would not replace what is at the
+	// path, so recommending a move that would is the one thing not to print.
+	assert.NotContains(t, err.Error(), "mv ")
+	assert.False(t, refusedRemoval(err), "a batch must not skip a removal that needs manual recovery")
+	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/retained")
+}
+
 func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/branch-failure")
 	chdirForTest(t, repo)
-	restoreDelete := deleteBranchAtSHA
-	deleteBranchAtSHA = func(string, string, string) error { return assert.AnError }
-	t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
+	restoreRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+		gitTest(t, mainRoot, "worktree", "remove", "--force", path)
+		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
 	err := runDeleteDirect(&cobra.Command{}, worktree, "feature/branch-failure", true, true)
 
@@ -189,7 +350,7 @@ func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Contains(t, err.Error(), `Completed: removed worktree "`+worktree+`".`)
 	assert.Contains(t, err.Error(), `Remaining: branch "feature/branch-failure".`)
-	assert.Contains(t, err.Error(), `branch "feature/branch-failure" was preserved after deletion checks`)
+	assert.Contains(t, err.Error(), `branch "feature/branch-failure" was preserved after worktree removal`)
 	assert.Contains(t, err.Error(), `Recovery: inspect branch "feature/branch-failure"`)
 	assert.NoDirExists(t, worktree)
 	gitTest(t, repo, "show-ref", "--verify", "refs/heads/feature/branch-failure")
@@ -203,9 +364,12 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		restoreBatch := newCleanupBatch
 		newCleanupBatch = func() databaseCleanupBatch { return &recordingCleanupSession{events: &events} }
 		t.Cleanup(func() { newCleanupBatch = restoreBatch })
-		restoreDelete := deleteBranchAtSHA
-		deleteBranchAtSHA = func(string, string, string) error { events = append(events, "branch"); return assert.AnError }
-		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
+		restoreRemove := removeWorktreeAndBranch
+		removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+			events = append(events, "branch")
+			return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
+		}
+		t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
 		err := deleteForTest(t, &cobra.Command{}, worktree, "feature/cleanup-failure", repo, true)
 
@@ -220,12 +384,12 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		restoreBatch := newCleanupBatch
 		newCleanupBatch = func() databaseCleanupBatch { return &recordingCleanupSession{events: &events} }
 		t.Cleanup(func() { newCleanupBatch = restoreBatch })
-		restoreDelete := deleteBranchAtSHA
-		deleteBranchAtSHA = func(dir, branch, sha string) error {
+		restoreRemove := removeWorktreeAndBranch
+		removeWorktreeAndBranch = func(dir, path, branch, sha string, force bool) (gitpkg.RemoveWorktreeResult, error) {
 			events = append(events, "branch")
-			return restoreDelete(dir, branch, sha)
+			return restoreRemove(dir, path, branch, sha, force)
 		}
-		t.Cleanup(func() { deleteBranchAtSHA = restoreDelete })
+		t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
 		require.NoError(t, deleteForTest(t, &cobra.Command{}, worktree, "feature/cleanup-success", repo, true))
 		assert.Equal(t, []string{"prepare", "branch", "flush"}, events)
@@ -276,23 +440,21 @@ func TestDeleteVerifiedWorktreePreservesBranchOnCompareAndDeleteMismatch(t *test
 	movedSHA := advanceMainForTest(t, repo)
 	chdirForTest(t, repo)
 
-	originalRemove := removeWorktree
-	removeWorktree = func(mainRoot, path string, force bool) error {
-		if err := originalRemove(mainRoot, path, force); err != nil {
-			return err
-		}
+	originalRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+		gitTest(t, mainRoot, "worktree", "remove", "--force", path)
 		gitTest(t, repo, "update-ref", "refs/heads/feature/verified", movedSHA)
-		return nil
+		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 	}
 	t.Cleanup(func() {
-		removeWorktree = originalRemove
+		removeWorktreeAndBranch = originalRemove
 	})
 
 	err := deleteVerifiedWorktreeForTest(t, &cobra.Command{}, worktree, "feature/verified", repo, expectedSHA)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Completed: removed worktree")
-	assert.Contains(t, err.Error(), "branch \"feature/verified\" was preserved after deletion checks")
+	assert.Contains(t, err.Error(), "branch \"feature/verified\" was preserved after worktree removal")
 	assert.Contains(t, err.Error(), "Recovery: inspect branch")
 	assert.NoDirExists(t, worktree)
 	assert.Equal(t, movedSHA, gitRevParse(t, repo, "refs/heads/feature/verified"))
@@ -310,20 +472,18 @@ func TestRunDeleteDirect_PreservesBranchMovedDuringDeletion(t *testing.T) {
 			gitTest(t, repo, "checkout", "main")
 			chdirForTest(t, repo)
 
-			originalRemove := removeWorktree
-			removeWorktree = func(mainRoot, path string, removeForce bool) error {
-				if err := originalRemove(mainRoot, path, removeForce); err != nil {
-					return err
-				}
+			originalRemove := removeWorktreeAndBranch
+			removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+				gitTest(t, mainRoot, "worktree", "remove", "--force", path)
 				gitTest(t, repo, "update-ref", "refs/heads/feature/moved", replacementSHA)
-				return nil
+				return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 			}
-			t.Cleanup(func() { removeWorktree = originalRemove })
+			t.Cleanup(func() { removeWorktreeAndBranch = originalRemove })
 
 			err := runDeleteDirect(&cobra.Command{}, worktree, "feature/moved", true, force)
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "was preserved after deletion checks")
+			assert.Contains(t, err.Error(), "was preserved after worktree removal")
 			assert.NoDirExists(t, worktree)
 			assert.Equal(t, replacementSHA, gitRevParse(t, repo, "refs/heads/feature/moved"))
 		})
@@ -375,6 +535,7 @@ func TestRunDeleteDirect_RejectsKnownDefaultBranch(t *testing.T) {
 	gitTest(t, repo, "push", "origin", "master")
 	gitTest(t, filepath.Join(filepath.Dir(repo), "origin.git"), "config", "receive.denyDeleteCurrent", "ignore")
 	gitTest(t, repo, "push", "origin", "--delete", "main")
+	gitTest(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 	gitTest(t, repo, "worktree", "add", worktree, "master")
 	chdirForTest(t, repo)
 
@@ -428,6 +589,22 @@ func TestRunList_OutsideRepository(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not list worktrees")
+}
+
+func TestRepositoryReadFailureIsNotAPerCandidateRefusal(t *testing.T) {
+	repo, worktree := createTestWorktree(t, "feature/guard")
+	chdirForTest(t, repo)
+
+	_, refusal := planDeletion(worktree, "other", repo, deletionGuards{}, "")
+	require.Error(t, refusal)
+	assert.True(t, refusedRemoval(removalRefused{refusal}), "a decision about one worktree lets a batch skip it")
+
+	// Reading the worktree list is repository-wide: the next candidate would
+	// fail identically, so a batch must stop rather than blame each worktree.
+	chdirForTest(t, t.TempDir())
+	_, unavailable := planDeletion(worktree, "feature/guard", repo, deletionGuards{}, "")
+	require.Error(t, unavailable)
+	assert.False(t, refusedRemoval(removalRefused{unavailable}))
 }
 
 func createTestWorktree(t *testing.T, branch string) (string, string) {

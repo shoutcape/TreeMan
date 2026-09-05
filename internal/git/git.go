@@ -611,27 +611,6 @@ func UnpushedCommitCount(dir, branch, defaultBranch string) (int, error) {
 	return count, nil
 }
 
-// DeleteBranchAtSHA atomically deletes branch only when it still points at
-// expectedSHA. This prevents deletion from discarding later work.
-func DeleteBranchAtSHA(dir, branch, expectedSHA string) error {
-	return withWorktreeMutationLock(dir, func() error {
-		entries, err := worktreeListInDir(dir)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if entry.Branch == branch {
-				return fmt.Errorf("branch %q is still checked out at worktree %q", branch, entry.Path)
-			}
-		}
-		_, err = runInDir(dir, "update-ref", "-d", "refs/heads/"+branch, expectedSHA)
-		if err != nil {
-			return fmt.Errorf("branch %q could not be deleted at expected SHA %s: %w", branch, expectedSHA, err)
-		}
-		return nil
-	})
-}
-
 // RemoveCreatedWorktree removes a worktree and its unchanged branch while
 // holding the repository mutation lock for the complete operation. It is
 // idempotent: a worktree or branch that is already gone leaves nothing to do
@@ -644,7 +623,12 @@ func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 			return err
 		}
 		for _, entry := range entries {
-			if entry.Path != created.Path {
+			// Git records the path it resolved, which is not always the text
+			// the caller gave: reached through a symlinked prefix -- /var and
+			// /tmp on macOS both are -- the two name one worktree and compare
+			// unequal as strings. Matching on the text left the worktree in
+			// place and the rollback silently incomplete.
+			if !sameRemovalPath(entry.Path, created.Path) {
 				continue
 			}
 			if entry.Branch != created.Branch {
@@ -847,7 +831,8 @@ func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Path == path && entry.Branch == branch {
+		// Compared canonically for the reason RemoveCreatedWorktree gives.
+		if sameRemovalPath(entry.Path, path) && entry.Branch == branch {
 			if _, removeErr := runInDir(dir, "worktree", "remove", "--force", path); removeErr != nil {
 				errs = append(errs, fmt.Errorf("rolling back worktree %q: %w", path, removeErr))
 			}
