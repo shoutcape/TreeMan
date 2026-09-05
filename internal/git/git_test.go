@@ -549,7 +549,7 @@ func TestCreatePlannedWorktreeReselectsAfterWaitingForLock(t *testing.T) {
 	go func() {
 		_, err := createPlannedWorktree(repo, func(existing []WorktreeEntry) (string, error) {
 			for _, entry := range existing {
-				if filepath.Clean(entry.Path) == filepath.Clean(destination) {
+				if sameRemovalPath(entry.Path, destination) {
 					return "", fmt.Errorf("destination became occupied by %s", entry.Branch)
 				}
 			}
