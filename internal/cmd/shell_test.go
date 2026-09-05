@@ -154,10 +154,10 @@ case "$1" in
     if [[ "${2:-}" == "--help" ]]; then
       printf 'create help\n'
     else
-      printf '%s\n' "$TREEMAN_TEST_DEST"
+      printf '%s\n' "$TREEMAN_TEST_DEST" > "$TREEMAN_CD_FILE"
     fi
     ;;
-  wts) printf '%s\n' "$TREEMAN_TEST_DEST" ;;
+  wts) printf '%s\n' "$TREEMAN_TEST_DEST" > "$TREEMAN_CD_FILE" ;;
   version) printf 'test version\n' ;;
 esac
 `), 0o755))
@@ -177,9 +177,12 @@ esac
 	require.NoError(t, err)
 	assert.Equal(t, target, string(output))
 
-	command = exec.Command("bash", "-c", `source "$1"; treeman create --help`, "bash", integrationPath)
+	// Output that is not a destination reaches the terminal directly, because
+	// the wrapper no longer captures stdout to find the path.
+	command = exec.Command("bash", "-c", `source "$1"; treeman create --help; printf '%s' "$PWD"`, "bash", integrationPath)
+	command.Dir = binDir
 	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
 	output, err = command.Output()
 	require.NoError(t, err)
-	assert.Equal(t, "create help\n", string(output))
+	assert.Equal(t, "create help\n"+binDir, string(output), "no destination means no directory change")
 }

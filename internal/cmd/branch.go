@@ -17,6 +17,7 @@ import (
 
 func newBranchCmd() *cobra.Command {
 	var setupOptions creationSetupOptions
+	var execCommand string
 	cmd := &cobra.Command{
 		Use:   "branch [query]",
 		Short: "Create a worktree from a remote branch",
@@ -31,8 +32,9 @@ automatically without showing the picker.
 Requires the forge CLI (gh for GitHub, glab for GitLab) to list branches
 and open MRs/PRs.
 
-The path of the new worktree is printed to stdout so that a shell wrapper
-can cd into it.`,
+Shell integration changes directory to the new worktree; without it, the
+path is printed to stdout. With --exec, TreeMan runs the given command in
+the new worktree instead.`,
 		Aliases: []string{"wtb"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -40,19 +42,20 @@ can cd into it.`,
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runBranchWithSetup(cmd, query, setupOptions)
+			return runBranchWithSetup(cmd, query, setupOptions, execCommand)
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
+	addLaunchFlag(cmd, &execCommand)
 
 	return cmd
 }
 
 func runBranch(cmd *cobra.Command, query string) error {
-	return runBranchWithSetup(cmd, query, creationSetupOptions{})
+	return runBranchWithSetup(cmd, query, creationSetupOptions{}, "")
 }
 
-func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions) error {
+func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions, execCommand string) error {
 	created, err := createBranchWorktree(cmd, query)
 	if err != nil || created.worktree.Path == "" {
 		return err
@@ -69,8 +72,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	fmt.Fprintln(cmd.OutOrStdout(), created.worktree.Path)
-	return nil
+	return deliverWorktree(cmd, created.worktree.Path, execCommand)
 }
 
 type branchWorktreeCreation struct {

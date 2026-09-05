@@ -51,13 +51,67 @@ func TestRunReviewReportsNestedModules(t *testing.T) {
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	require.NoError(t, runReview(commandWithOutput(stdout, stderr), "1", creationSetupOptions{
 		skipEnv: true, skipDatabase: true, skipHooks: true,
-	}))
+	}, ""))
 
 	worktree := filepath.Join(repo, ".worktrees", "feature-review")
 	assert.Equal(t, worktree+"\n", stdout.String())
 	assert.DirExists(t, worktree)
 	assert.Contains(t, stderr.String(), "Nested module apps/web (package-lock.json): skipped; not installed automatically.")
 	assert.NotContains(t, stderr.String(), "npm is not installed")
+}
+
+// TestRunBranchLaunchesTheExecCommand follows the whole branch workflow to the
+// handover: the worktree it created and made ready is the one the launcher is
+// given, and no destination goes out to the shell behind the command's back.
+func TestRunBranchLaunchesTheExecCommand(t *testing.T) {
+	repo := createRemoteRepoWithNestedModule(t)
+	gitTest(t, repo, "checkout", "-b", "feature/direct")
+	gitTest(t, repo, "push", "-u", "origin", "feature/direct")
+	gitTest(t, repo, "checkout", "main")
+	gitTest(t, repo, "branch", "-D", "feature/direct")
+	chdirForTest(t, repo)
+	pathWithOnlyGit(t)
+	record := stubLaunch(t, nil)
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	require.NoError(t, runBranchWithSetup(commandWithOutput(stdout, stderr), "feature/direct", creationSetupOptions{
+		skipEnv: true, skipDatabase: true, skipHooks: true,
+	}, "nvim ."))
+
+	worktree := filepath.Join(repo, ".worktrees", "feature-direct")
+	assert.DirExists(t, worktree)
+	require.True(t, record.called, "a ready worktree is handed to the command")
+	assert.Equal(t, worktree, record.dir)
+	assert.Equal(t, "nvim .", record.command)
+	assert.Empty(t, stdout.String(), "the launched command owns stdout, and there is no destination to report")
+}
+
+// TestRunReviewLaunchesTheExecCommand is the same handover for a review
+// worktree, which reaches it by a different creation path.
+func TestRunReviewLaunchesTheExecCommand(t *testing.T) {
+	repo := createRemoteRepoWithNestedModule(t)
+	gitTest(t, repo, "checkout", "-b", "feature/review")
+	gitTest(t, repo, "push", "-u", "origin", "feature/review")
+	gitTest(t, repo, "push", "origin", "feature/review:refs/pull/1/head")
+	gitTest(t, repo, "checkout", "main")
+	gitTest(t, repo, "branch", "-D", "feature/review")
+	chdirForTest(t, repo)
+	pathWithGitAndGH(t)
+	t.Setenv("_TREEMAN_FORGE", "github")
+	t.Setenv("_TREEMAN_GH_REPO", "owner/repo")
+	record := stubLaunch(t, nil)
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	require.NoError(t, runReview(commandWithOutput(stdout, stderr), "1", creationSetupOptions{
+		skipEnv: true, skipDatabase: true, skipHooks: true,
+	}, "nvim ."))
+
+	worktree := filepath.Join(repo, ".worktrees", "feature-review")
+	assert.DirExists(t, worktree)
+	require.True(t, record.called, "a ready worktree is handed to the command")
+	assert.Equal(t, worktree, record.dir)
+	assert.Equal(t, "nvim .", record.command)
+	assert.Empty(t, stdout.String(), "the launched command owns stdout, and there is no destination to report")
 }
 
 func createRemoteRepoWithNestedModule(t *testing.T) string {
@@ -91,7 +145,7 @@ func TestRunSwitchDirectMatchesBranchAndPathWithoutFzf(t *testing.T) {
 			command := &cobra.Command{}
 			command.SetOut(buf)
 
-			require.NoError(t, runSwitch(command, query))
+			require.NoError(t, runSwitch(command, query, ""))
 			assert.Equal(t, worktree+"\n", buf.String())
 		})
 	}

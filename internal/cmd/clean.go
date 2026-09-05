@@ -200,7 +200,12 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 		}
 		results = append(results, cleanResult{branch: candidate.entry.Branch, database: cleanupOutcome.database})
 		if cleanupOutcome.currentWorktree {
-			fmt.Fprintln(cmd.OutOrStdout(), mainRoot)
+			// The caller's shell is standing in a worktree that no longer
+			// exists, so send it back to the main worktree. A shell that
+			// cannot be told is worth a warning, not an abandoned cleanup.
+			if err := reportDestination(cmd, mainRoot); err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", err.Error()))
+			}
 		}
 	}
 	removedDatabases, err = cleanupBatch.FlushWithResult()

@@ -33,8 +33,12 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.NotContains(t, out, "lg()")
 	assert.NotContains(t, out, "wto()")
 	assert.Contains(t, out, "create|branch|review|switch|clean|delete|wtb|wtpr|wtmr|wts|wtc|wtd)")
-	assert.Contains(t, out, "if [ -d \"$_tm_output\" ]")
-	assert.Contains(t, out, "printf '%s\\n' \"$_tm_output\"")
+	// TreeMan reports where to cd through a file, so the wrapper never runs it
+	// inside command substitution and never has to read its flags.
+	assert.Contains(t, out, "TREEMAN_CD_FILE=\"$_tm_file\" command treeman \"$@\"")
+	assert.Contains(t, out, "cd -- \"$(cat \"$_tm_file\")\"")
+	assert.NotContains(t, out, "$(command treeman")
+	assert.NotContains(t, out, "_tm_arg", "the wrapper does not scan TreeMan's arguments")
 }
 
 func TestRootCmd_HasNoOpenCommand(t *testing.T) {
@@ -139,8 +143,12 @@ func TestInitCmd_Fish(t *testing.T) {
 	assert.Contains(t, out, "treeman shell init fish")
 	assert.Contains(t, out, "function wt")
 	assert.Contains(t, out, "function treeman")
-	assert.Contains(t, out, "set -l _tm_output (command treeman $argv)")
-	assert.Contains(t, out, "if test -d \"$_tm_output\"")
+	assert.Contains(t, out, "set -lx TREEMAN_CD_FILE \"$_tm_file\"")
+	assert.Contains(t, out, "cd (cat \"$_tm_file\")")
+	assert.Contains(t, out, "if type -q mktemp",
+		"fish reports a missing command itself, so the wrapper asks before calling")
+	assert.NotContains(t, out, "(command treeman $argv)")
+	assert.NotContains(t, out, "_tm_arg", "the wrapper does not scan TreeMan's arguments")
 	assert.Contains(t, out, "function wtc; treeman clean $argv; end")
 	assert.NotContains(t, out, "function lg")
 }

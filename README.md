@@ -92,6 +92,18 @@ Use `treeman review`, `wtpr`, or `wtmr` to add a review worktree. TreeMan detect
 
 Use `treeman switch` or `wts` to select a worktree. Shell integration changes the current shell directory to the selected worktree.
 
+### Start Work in the New Worktree
+
+`create`, `branch`, `review`, and `switch` accept `-x <command>`. TreeMan runs the command in the ready worktree instead of printing its path.
+
+```bash
+wt feature/login -x claude
+wtpr 42 -x nvim
+wts -x lazygit
+```
+
+The command replaces TreeMan, so it owns the terminal, it can be interactive, and it reports its own exit status. Your shell directory does not change. Read the [Command Reference](docs/reference/cli.md#run-a-command-in-the-worktree).
+
 ### Clean Finished Worktrees
 
 Use `treeman clean` or `wtc` to remove clean worktrees whose branches are merged into the default branch. TreeMan can also recognize verified squash or rebase merges after the remote branch is deleted. It retains branches that it cannot verify.
@@ -101,7 +113,9 @@ Use `treeman clean` or `wtc` to remove clean worktrees whose branches are merged
 
 ### Use TreeMan in Agents and Scripts
 
-Native TreeMan commands never change the caller directory. Commands that create or select a worktree can print its path to stdout. Shell integration uses that path to change the current interactive shell directory.
+Native TreeMan commands never change the caller directory. Commands that create or select a worktree report its path, and shell integration uses that report to change the current interactive shell directory. Run TreeMan without shell integration and the path goes to stdout, so scripts and pipes keep working.
+
+Use `-x <command>` to start an agent or an editor in the worktree that TreeMan just made ready. The command replaces TreeMan and receives the terminal.
 
 Use `treeman list --json` for machine-readable worktree state and `treeman doctor` to check repository readiness and optional integrations.
 

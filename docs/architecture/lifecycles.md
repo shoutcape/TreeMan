@@ -16,9 +16,11 @@ sequenceDiagram
     CLI->>Git: add linked worktree and branch
     CLI->>Setup: update ignore file and copy environment files
     CLI->>Setup: load config, database, dependencies, and hooks
-    CLI-->>Shell: path on stdout
+    CLI-->>Shell: destination path
     Shell->>Shell: cd to path
 ```
+
+With `--exec`, TreeMan replaces its own process with the command after setup. It reports no destination, so the shell wrapper does not change directory.
 
 ## Remote Branch and Review
 
@@ -41,7 +43,9 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     A[Read Git worktrees] --> B[Select with fzf]
-    B --> C[Print path to stdout]
+    B --> C{--exec given?}
+    C -->|No| D[Report destination path]
+    C -->|Yes| E[Replace process with command]
 ```
 
 ## Delete

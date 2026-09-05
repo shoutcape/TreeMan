@@ -13,15 +13,17 @@ import (
 )
 
 func newSwitchCmd() *cobra.Command {
-	return &cobra.Command{
+	var execCommand string
+	cmd := &cobra.Command{
 		Use:   "switch [query]",
 		Short: "Switch between worktrees via fzf",
 		Long: `Open an interactive fzf picker listing all worktrees.
 
 An optional query pre-filters the list.
 
-The selected worktree path is printed to stdout so that a shell wrapper
-can cd into it.`,
+Shell integration changes directory to the selection; without it, the path
+is printed to stdout. With --exec, TreeMan runs the given command in the
+selected worktree instead.`,
 		Aliases: []string{"wts"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -29,39 +31,67 @@ can cd into it.`,
 			if len(args) > 0 {
 				query = args[0]
 			}
-			return runSwitch(cmd, query)
+			return runSwitch(cmd, query, execCommand)
 		},
 	}
+	addLaunchFlag(cmd, &execCommand)
+
+	return cmd
 }
 
-func runSwitch(cmd *cobra.Command, query string) error {
+func runSwitch(cmd *cobra.Command, query, execCommand string) error {
+	dest, err := selectWorktree(cmd, query, execCommand != "")
+	if err != nil || dest == "" {
+		return err
+	}
+	if execCommand != "" {
+		// A launched command runs in the selection even when it is the current
+		// worktree, because it is what the caller asked to run and not a
+		// directory change that would do nothing.
+		return deliverWorktree(cmd, dest, execCommand)
+	}
+	return printSwitchDestination(cmd, dest)
+}
+
+// selectWorktree resolves the worktree the caller wants, by exact query match
+// or through the fzf picker. An empty path with a nil error means there is
+// nothing to select or the picker was cancelled; either way the reason is
+// already on stderr.
+//
+// launching reports whether a command will run in the selection, which is work
+// worth doing in the current worktree even though changing directory to it is
+// not.
+func selectWorktree(cmd *cobra.Command, query string, launching bool) (string, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	entries, err := git.WorktreeList()
 	if err != nil {
-		return fmt.Errorf("not in a git repository or no worktrees found")
+		return "", fmt.Errorf("not in a git repository or no worktrees found")
 	}
 	if len(entries) == 0 {
-		return fmt.Errorf("no worktrees found")
+		return "", fmt.Errorf("no worktrees found")
 	}
-	if len(entries) == 1 {
+	if len(entries) == 1 && !launching {
 		fmt.Fprintln(out, "Only one worktree exists - nothing to switch to.")
-		return nil
+		return "", nil
 	}
 
 	if query != "" {
 		for _, entry := range entries {
 			if entry.Branch == query || samePath(entry.Path, query) {
-				return printSwitchDestination(cmd, entry.Path)
+				return entry.Path, nil
 			}
 		}
-	}
-	if !canInteract(cmd) {
-		return fmt.Errorf("interactive selection is unavailable; pass an exact branch name or worktree path")
+	} else if len(entries) == 1 {
+		// Nothing to choose between, so the picker would ask an empty question.
+		return entries[0].Path, nil
 	}
 
+	if !canInteract(cmd) {
+		return "", fmt.Errorf("interactive selection is unavailable; pass an exact branch name or worktree path")
+	}
 	if _, err := exec.LookPath("fzf"); err != nil {
-		return fmt.Errorf("fzf is required for switch. Install it from https://github.com/junegunn/fzf")
+		return "", fmt.Errorf("fzf is required for switch. Install it from https://github.com/junegunn/fzf")
 	}
 
 	// Keep fzf's visible label separate from its stable row identity.
@@ -72,39 +102,35 @@ func runSwitch(cmd *cobra.Command, query string) error {
 		fullPaths = append(fullPaths, e.Path)
 	}
 
-	display := strings.Join(displayLines, "\n")
-
 	fzfArgs := pickerArgs(sessionFor(cmd).errorOutput.Color, " worktrees ", "switch > ")
 	if query != "" {
 		fzfArgs = append(fzfArgs, "--query", query)
 	}
 
 	fzfCmd := exec.Command("fzf", fzfArgs...)
-	fzfCmd.Stdin = strings.NewReader(display)
+	fzfCmd.Stdin = strings.NewReader(strings.Join(displayLines, "\n"))
 	fzfCmd.Stderr = out
 
 	selectionOutput, err := fzfCmd.Output()
 	if err != nil {
 		if pickerCancelled(err) {
 			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
-			return nil
+			return "", nil
 		}
-		return fmt.Errorf("fzf failed while selecting a worktree: %w", err)
+		return "", fmt.Errorf("fzf failed while selecting a worktree: %w", err)
 	}
 
 	selection := strings.TrimSpace(string(selectionOutput))
 	if selection == "" {
 		fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
-		return nil
+		return "", nil
 	}
 
 	idx := pickerSelectionIndex(selection, len(fullPaths))
 	if idx < 0 {
-		return fmt.Errorf("could not map fzf selection to a worktree path")
+		return "", fmt.Errorf("could not map fzf selection to a worktree path")
 	}
-	dest := fullPaths[idx]
-
-	return printSwitchDestination(cmd, dest)
+	return fullPaths[idx], nil
 }
 
 func printSwitchDestination(cmd *cobra.Command, dest string) error {
@@ -120,8 +146,5 @@ func printSwitchDestination(cmd *cobra.Command, dest string) error {
 	short := filepath.Base(dest)
 	fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneInfo, "→", fmt.Sprintf("cd .../%s", short)))
 
-	// Print path to stdout for shell wrapper cd.
-	fmt.Fprintln(cmd.OutOrStdout(), dest)
-
-	return nil
+	return reportDestination(cmd, dest)
 }

@@ -18,6 +18,7 @@ import (
 
 func newReviewCmd() *cobra.Command {
 	var setupOptions creationSetupOptions
+	var execCommand string
 	cmd := &cobra.Command{
 		Use:   "review [pr-number]",
 		Short: "Create a review worktree from a GitHub PR or GitLab MR",
@@ -28,8 +29,9 @@ If pr-number is omitted, an interactive fzf picker lists all open PRs/MRs.
 Supports GitHub (gh CLI) and GitLab (glab CLI), including self-hosted GitLab
 instances.
 
-The path of the new worktree is printed to stdout so that a shell wrapper
-can cd into it.`,
+Shell integration changes directory to the new worktree; without it, the
+path is printed to stdout. With --exec, TreeMan runs the given command in
+the new worktree instead.`,
 		Aliases: []string{"wtpr", "wtmr"},
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -37,14 +39,15 @@ can cd into it.`,
 			if len(args) > 0 {
 				prArg = args[0]
 			}
-			return runReview(cmd, prArg, setupOptions)
+			return runReview(cmd, prArg, setupOptions, execCommand)
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
+	addLaunchFlag(cmd, &execCommand)
 	return cmd
 }
 
-func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions) error {
+func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions, execCommand string) error {
 	created, err := createReviewWorktree(cmd, prArg)
 	if err != nil || created.worktree.Path == "" {
 		return err
@@ -60,8 +63,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(created.info.Title, 10)))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	fmt.Fprintln(cmd.OutOrStdout(), created.worktree.Path)
-	return nil
+	return deliverWorktree(cmd, created.worktree.Path, execCommand)
 }
 
 type reviewWorktreeCreation struct {

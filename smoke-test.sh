@@ -180,9 +180,18 @@ mkdir -p "$FISH_WRAPPER_TARGET"
 mkdir -p "$FISH_MOCK_BIN"
 cat > "$FISH_MOCK_BIN/treeman" <<'EOF'
 #!/usr/bin/env bash
+# Report the destination the way the real binary does: through the file the
+# wrapper hands over, never through captured stdout.
 if [[ "${1:-}" == "create" && "${2:-}" == "fish-test" ]]; then
-  printf '%s\n' "$FISH_WRAPPER_TARGET"
+  printf '%s\n' "$FISH_WRAPPER_TARGET" > "$TREEMAN_CD_FILE"
   exit 0
+fi
+# Stand in for --exec: replace this process with the command, report no
+# destination.
+if [[ "${1:-}" == "create" && "${2:-}" == "fish-exec" && "${3:-}" == "-x" ]]; then
+  cd "$FISH_WRAPPER_TARGET" || exit 1
+  : > fish-exec-ran
+  exec sh -c "${4:-}"
 fi
 exit 1
 EOF
@@ -191,8 +200,15 @@ if command -v fish >/dev/null 2>&1; then
   FISH_WRAPPER_TARGET="$FISH_WRAPPER_TARGET" fish -c '
     source "$argv[1]"
     set -gx PATH "$argv[3]" $PATH
+    set -l origin (pwd)
     wt fish-test "$argv[2]"
-    test (pwd) = "$argv[2]"
+    test (pwd) = "$argv[2]"; or exit 1
+    cd "$origin"
+    # --exec reports no destination, so the shell stays where it was. The
+    # wrapper needs to know nothing about the flag to get this right.
+    wt fish-exec -x "echo $argv[2]"
+    test (pwd) = "$origin"; or exit 1
+    test -f "$argv[2]/fish-exec-ran"
   ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET" "$FISH_MOCK_BIN"
 else
   echo "warning: Fish is not installed. Skipping Fish wrapper runtime test."
@@ -563,10 +579,14 @@ exit 1
 GLABEOF
 chmod +x "$MOCK_BIN/glab"
 
-# Use a minimal PATH for GitLab commands to prove jq is not required.
+# Use a minimal PATH for GitLab commands to prove jq is not required. The
+# coreutils that shell integration uses to receive a destination stay.
 mkdir -p "$NO_JQ_BIN"
 ln -s "$(command -v bash)" "$NO_JQ_BIN/bash"
 ln -s "$(command -v git)" "$NO_JQ_BIN/git"
+for _tool in mktemp cat rm; do
+  ln -s "$(command -v "$_tool")" "$NO_JQ_BIN/$_tool"
+done
 NO_JQ_PATH="$TEST_HOME/.treeman/bin:$MOCK_BIN:$NO_JQ_BIN"
 if PATH="$NO_JQ_PATH" command -v jq >/dev/null 2>&1; then
   fail "Expected jq to be absent from GitLab test PATH"
@@ -815,6 +835,45 @@ git push origin main >/dev/null
 wt feature/yarn-smoke --skip-env --skip-database --skip-hooks
 assert_exists "$YARN_WORKTREE_REPO"
 assert_file_contains "$COREPACK_CALLS" "yarn install"
+
+# ---------------------------------------------------------------------------
+# --exec -- the command runs in the worktree and the shell stays where it was
+# ---------------------------------------------------------------------------
+
+echo "==> worktree exec (-x)"
+
+cd "$MAIN_REPO"
+EXEC_WT="$MAIN_REPO/.worktrees/feature-exec-smoke"
+wt feature/exec-smoke --skip-env --skip-database --skip-deps --skip-hooks -x 'pwd > exec-marker; pwd'
+assert_exists "$EXEC_WT/exec-marker"
+assert_file_contains "$EXEC_WT/exec-marker" "$EXEC_WT"
+assert_eq "shell directory after wt -x" "$MAIN_REPO" "$(pwd)"
+
+# switch selects by exact branch name, so no picker is involved.
+wts feature/exec-smoke -x 'pwd > switch-exec-marker; pwd'
+assert_file_contains "$EXEC_WT/switch-exec-marker" "$EXEC_WT"
+assert_eq "shell directory after wts -x" "$MAIN_REPO" "$(pwd)"
+
+# An --exec run that names no command fails before it creates anything.
+if wt feature/exec-empty -x '' 2>/dev/null; then
+  fail "Expected an empty --exec to fail"
+fi
+assert_missing "$MAIN_REPO/.worktrees/feature-exec-empty"
+
+# Without shell integration there is no destination file, so the path falls
+# back to stdout. Scripts and pipes keep the original contract.
+EXEC_BARE_PATH="$(command treeman create feature/bare-stdout --skip-env --skip-database --skip-deps --skip-hooks)"
+assert_eq "bare treeman prints the path" "$MAIN_REPO/.worktrees/feature-bare-stdout" "$EXEC_BARE_PATH"
+assert_eq "shell directory after a bare run" "$MAIN_REPO" "$(pwd)"
+
+# A TreeMan started by --exec is a plain bare run: it never inherits the
+# destination file, so it prints its path to stdout and the outer shell is not
+# steered anywhere when the launched command exits.
+NESTED_WT="$MAIN_REPO/.worktrees/feature-exec-nested"
+wt feature/exec-outer --skip-env --skip-database --skip-deps --skip-hooks \
+  -x 'treeman create feature/exec-nested --skip-env --skip-database --skip-deps --skip-hooks > nested-stdout'
+assert_file_contains "$MAIN_REPO/.worktrees/feature-exec-outer/nested-stdout" "$NESTED_WT"
+assert_eq "shell directory after a nested treeman" "$MAIN_REPO" "$(pwd)"
 
 # ---------------------------------------------------------------------------
 # unit tests (sanity check that they still pass in CI context)

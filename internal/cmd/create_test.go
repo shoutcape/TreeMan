@@ -95,7 +95,7 @@ func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {
 	cmd := commandWithOutput(stdout, stderr)
 	require.NoError(t, runCreate(cmd, "captured-output", creationSetupOptions{
 		skipEnv: true, skipDatabase: true, skipHooks: true,
-	}))
+	}, ""))
 
 	assert.Equal(t, repo+"/.worktrees/captured-output\n", stdout.String())
 	assert.NotContains(t, stdout.String(), "\x1b")
@@ -143,7 +143,7 @@ func TestRunCreateSeparatesCollidingBranchSlugs(t *testing.T) {
 			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 			require.NoError(t, runCreate(commandWithOutput(stdout, stderr), tt.branch, creationSetupOptions{
 				skipEnv: true, skipDatabase: true, skipHooks: true,
-			}))
+			}, ""))
 
 			want := filepath.Join(repo, tt.want)
 			assert.Equal(t, want+"\n", stdout.String())
@@ -155,7 +155,7 @@ func TestRunCreateSeparatesCollidingBranchSlugs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run("switch "+tt.branch, func(t *testing.T) {
 			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-			require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), tt.branch))
+			require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), tt.branch, ""))
 			assert.Equal(t, filepath.Join(repo, tt.want)+"\n", stdout.String())
 		})
 	}
@@ -170,7 +170,7 @@ func TestRunCreateReportsAnOccupiedDirectory(t *testing.T) {
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	err := runCreate(commandWithOutput(stdout, stderr), "topic/login", creationSetupOptions{
 		skipEnv: true, skipDatabase: true, skipHooks: true,
-	})
+	}, "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
