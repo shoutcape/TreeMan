@@ -83,10 +83,11 @@ func TestCleanCandidateDiscoveryExcludesStaleWorktree(t *testing.T) {
 
 	entries, err := git.WorktreeList()
 	require.NoError(t, err)
-	cleanEntries, err := cleanLinkedWorktreeEntries(repo, entries)
+	cleanEntries, diagnostics, err := cleanLinkedWorktreeEntries(repo, entries)
 
 	require.NoError(t, err)
 	assert.Empty(t, cleanEntries)
+	assert.Empty(t, diagnostics)
 }
 
 func TestCleanRevalidationKeepsOnlyStillEligiblePreviewPairs(t *testing.T) {

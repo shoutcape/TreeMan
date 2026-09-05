@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	gitpkg "github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -118,6 +119,29 @@ func TestCleanReportsDatabaseCleanupOutcome(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCleanReportsPendingFileCleanup(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	changeToDir(t, repo)
+	previousRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
+		result, err := previousRemove(mainRoot, path, branch, expectedSHA, force)
+		result.CleanupJob = t.TempDir()
+		result.CleanupError = assert.AnError
+		return result, err
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+	require.NoError(t, runClean(command, false, true))
+
+	output := ui.StripANSI(stderr.String())
+	assert.Contains(t, output, "pending file cleanup needs retry:")
+	assert.Contains(t, output, "File cleanup continues in the background.")
+	assert.NoDirExists(t, worktree)
 }
 
 func TestCleanRendersResultsByTreebranch(t *testing.T) {
@@ -877,4 +901,82 @@ func originBranchSHA(t *testing.T, repo, branch string) string {
 	output, err := command.Output()
 	require.NoError(t, err)
 	return gitRevParse(t, strings.TrimSpace(string(output)), "refs/heads/"+branch)
+}
+
+func TestCleanSkipsLockedWorktreeWithoutClassifying(t *testing.T) {
+	repo, worktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "worktree", "lock", "--reason", "release freeze", worktree)
+	changeToDir(t, repo)
+
+	classifier := merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+		t.Fatal("locked worktree must not be classified")
+		return merge.Result{}, nil
+	})
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+
+	require.NoError(t, runCleanWithClassifier(command, classifier, false, true))
+
+	output := ui.StripANSI(stderr.String())
+	assert.Contains(t, output, `skipping "feature": locked: release freeze`)
+	assert.Contains(t, output, "Removed 0 merged, clean worktree(s).")
+	assert.DirExists(t, worktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+}
+
+func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
+	repo, refusedWorktree := createMergedCleanWorktree(t)
+	runGitInDir(t, repo, "checkout", "-b", "second")
+	runGitInDir(t, repo, "push", "-u", "origin", "second")
+	runGitInDir(t, repo, "checkout", "main")
+	removableWorktree := filepath.Join(t.TempDir(), "second-worktree")
+	runGitInDir(t, repo, "worktree", "add", removableWorktree, "second")
+	changeToDir(t, repo)
+
+	previousRemove := removeWorktreeAndBranch
+	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
+		if branch == "feature" {
+			return gitpkg.RemoveWorktreeResult{}, assert.AnError
+		}
+		return previousRemove(mainRoot, path, branch, expectedSHA, force)
+	}
+	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
+
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+	classifier := merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
+		cleanable := make([]merge.Candidate, 0, len(branches))
+		for _, branch := range branches {
+			cleanable = append(cleanable, merge.Candidate{Branch: branch, SHA: gitRevParse(t, repo, "refs/heads/"+branch)})
+		}
+		return merge.Result{Cleanable: cleanable}, nil
+	})
+
+	err := runCleanWithClassifier(command, classifier, false, true)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 worktree(s) could not be removed: feature")
+	output := ui.StripANSI(stderr.String())
+	assert.Contains(t, output, `skipping "feature"`)
+	assert.Contains(t, output, "Removed 1 merged, clean worktree(s).")
+	// The refused candidate keeps both Git resources; the later one is removed.
+	assert.DirExists(t, refusedWorktree)
+	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
+	assert.NoDirExists(t, removableWorktree)
+	assert.Error(t, exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/second").Run())
+}
+
+func TestCleanPendingFileCleanupNoticeReflectsTheQueueWhenReported(t *testing.T) {
+	finished := filepath.Join(t.TempDir(), "already-unlinked")
+	stderr := &bytes.Buffer{}
+	command := &cobra.Command{}
+	command.SetErr(stderr)
+
+	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "done", cleanupJob: finished}})
+	assert.Empty(t, stderr.String(), "a job that finished unlinking is not still pending")
+
+	writeCleanPendingFileCleanupNotice(command, []cleanResult{{branch: "queued", cleanupJob: t.TempDir()}})
+	assert.Contains(t, ui.StripANSI(stderr.String()), "File cleanup continues in the background.")
 }
