@@ -164,13 +164,13 @@ func TestWorktreeCommands_AcceptExecFlag(t *testing.T) {
 // destination -- what --exec does -- leaves the shell where it was.
 func TestShellIntegration_ChangesDirectory(t *testing.T) {
 	for _, shell := range []struct {
-		name   string
-		script string
-		call   string
+		name        string
+		integration string
+		reportPWD   string
 	}{
-		{name: "bash", script: fmt.Sprintf(posixShellIntegration, "bash"), call: `treeman switch "$@"` + "\n" + `printf 'cwd=%s\n' "$PWD"`},
-		{name: "zsh", script: fmt.Sprintf(posixShellIntegration, "zsh"), call: `treeman switch "$@"` + "\n" + `printf 'cwd=%s\n' "$PWD"`},
-		{name: "fish", script: fishShellIntegration, call: "treeman switch $argv\nprintf 'cwd=%s\\n' $PWD"},
+		{name: "bash", integration: fmt.Sprintf(posixShellIntegration, "bash"), reportPWD: `printf 'cwd=%s\n' "$PWD"`},
+		{name: "zsh", integration: fmt.Sprintf(posixShellIntegration, "zsh"), reportPWD: `printf 'cwd=%s\n' "$PWD"`},
+		{name: "fish", integration: fishShellIntegration, reportPWD: `printf 'cwd=%s\n' $PWD`},
 	} {
 		t.Run(shell.name, func(t *testing.T) {
 			shellPath, err := exec.LookPath(shell.name)
@@ -180,13 +180,12 @@ func TestShellIntegration_ChangesDirectory(t *testing.T) {
 			destination := t.TempDir()
 			binDir := fakeTreeman(t, destination)
 
-			run := func(args ...string) string {
-				script := shell.script + "\n" + shell.call
-				argv := []string{"-c", script}
-				if shell.name != "fish" {
-					argv = append(argv, shell.name) // $0 for the -c script
-				}
-				command := exec.Command(shellPath, append(argv, args...)...)
+			// TreeMan's arguments belong in the script. Passing them as the
+			// shell's own arguments makes fish read a leading dash as one of
+			// its options, and makes the POSIX shells need a $0 first.
+			run := func(treemanArgs string) string {
+				script := shell.integration + "\ntreeman switch " + treemanArgs + "\n" + shell.reportPWD
+				command := exec.Command(shellPath, "-c", script)
 				command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
 				command.Dir = t.TempDir()
 				output, err := command.CombinedOutput()
@@ -194,11 +193,11 @@ func TestShellIntegration_ChangesDirectory(t *testing.T) {
 				return string(output)
 			}
 
-			assert.Contains(t, run(), "cwd="+destination,
+			assert.Contains(t, run(""), "cwd="+destination,
 				"a reported destination changes the shell directory")
-			assert.NotContains(t, run("--exec", "true"), "cwd="+destination,
+			assert.NotContains(t, run("--exec true"), "cwd="+destination,
 				"--exec reports no destination, so the shell stays put")
-			assert.Contains(t, run("--exec", "true"), "exec-ran",
+			assert.Contains(t, run("--exec true"), "exec-ran",
 				"the launched command still owns stdout")
 		})
 	}
@@ -216,7 +215,7 @@ func TestShellIntegration_WithoutMktemp(t *testing.T) {
 	binDir := fakeTreeman(t, destination)
 
 	script := fmt.Sprintf(posixShellIntegration, "bash") + "\ntreeman switch\nprintf 'cwd=%s\\n' \"$PWD\""
-	command := exec.Command(shellPath, "-c", script, "bash")
+	command := exec.Command(shellPath, "-c", script)
 	command.Env = append(os.Environ(), "PATH="+binDir) // no mktemp
 	command.Dir = t.TempDir()
 
