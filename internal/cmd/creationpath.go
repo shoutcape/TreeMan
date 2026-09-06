@@ -36,7 +36,9 @@ type creationPaths struct {
 type projectPaths struct {
 	// mainRoot is the main worktree root every relative path resolves from.
 	mainRoot string
-	// parentDir is the resolved absolute directory new worktrees are made in.
+	// parentDir is the effective absolute directory new worktrees are made in.
+	// It normally comes from project configuration; creation callers may supply
+	// an explicit filesystem-boundary override.
 	parentDir string
 	// configPath is the absolute configuration file used for this snapshot.
 	configPath string
@@ -85,7 +87,7 @@ func loadProjectPaths(mainRoot string) (projectPaths, error) {
 func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, error) {
 	project, err := loadProjectPaths(mainRoot)
 	if err != nil {
-		return creationPaths{}, fmt.Errorf("cannot create a worktree: %w", err)
+		return creationPaths{}, err
 	}
 	if parentDir != "" {
 		project.parentDir = parentDir
