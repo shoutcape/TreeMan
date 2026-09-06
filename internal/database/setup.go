@@ -38,25 +38,6 @@ func Setup(opts SetupOptions) (SetupResult, error) {
 	return setupDatabase(defaultBackend(), opts)
 }
 
-// SetupBranchDB provisions the branch database for a newly created worktree.
-func SetupBranchDB(worktreePath, branch, envKey, configuredContainer string) (SetupResult, error) {
-	return Setup(SetupOptions{
-		WorktreePath:        worktreePath,
-		Branch:              branch,
-		EnvKey:              envKey,
-		ConfiguredContainer: configuredContainer,
-	})
-}
-
-func setupBranchDB(backend Backend, worktreePath, branch, envKey, configuredContainer string) (SetupResult, error) {
-	return setupDatabase(backend, SetupOptions{
-		WorktreePath:        worktreePath,
-		Branch:              branch,
-		EnvKey:              envKey,
-		ConfiguredContainer: configuredContainer,
-	})
-}
-
 func setupDatabase(backend Backend, opts SetupOptions) (SetupResult, error) {
 	targetInput, err := loadSetupTarget(opts.WorktreePath, opts.EnvKey)
 	if err != nil {
@@ -84,23 +65,66 @@ func setupDatabase(backend Backend, opts SetupOptions) (SetupResult, error) {
 	if err != nil {
 		return SetupResult{}, fmt.Errorf("listing PostgreSQL containers: %w", err)
 	}
-	// An active record returns here, before the provisioning block below.
-	// That placement is the guarantee: the rollback drop further down cannot
-	// reach a database that already holds the user's work.
-	if record != nil && record.Status == databaseStatusActive {
+	switch {
+	case record == nil:
+		record, err = beginBranchDatabase(store, resolver, worktreeID, parsed, opts)
+		if err != nil {
+			return SetupResult{}, err
+		}
+	case record.Status == databaseStatusActive:
 		return reuseActiveDatabase(backend, resolver, record, opts.WorktreePath, parsed)
 	}
-	if record == nil {
-		target, err := resolveTarget(resolver, parsed, opts.ConfiguredContainer)
-		if err != nil {
-			return SetupResult{}, err
-		}
-		candidate := &DatabaseRecord{WorktreeID: worktreeID, WorktreePath: opts.WorktreePath, Branch: opts.Branch, Database: BranchDBNameForRepository(parsed.Database, opts.Branch, store.repoID), Container: opts.ConfiguredContainer, ContainerID: target.ID, Host: parsed.Host, Port: parsed.Port, User: parsed.User, Status: databaseStatusSetupPending}
-		record, err = store.beginSetup(candidate)
-		if err != nil {
-			return SetupResult{}, err
-		}
+	return provisionDatabase(backend, resolver, store, record, uri, opts)
+}
+
+// setupOwnership reads the ownership record and decides whether setup may
+// proceed against it. Creation accepts only a pending retry. A rerun also
+// accepts an active record, which the caller then verifies and reuses.
+func setupOwnership(store *databaseStore, worktreeID string, opts SetupOptions) (*DatabaseRecord, error) {
+	record, err := store.ownership(worktreeID)
+	if err != nil || record == nil {
+		return record, err
 	}
+	if record.Branch != opts.Branch {
+		return nil, fmt.Errorf("database ownership record for worktree %q names branch %q, not %q", record.WorktreePath, record.Branch, opts.Branch)
+	}
+	switch record.Status {
+	case databaseStatusSetupPending:
+		return record, nil
+	case databaseStatusActive:
+		if !opts.Rerun {
+			return nil, fmt.Errorf("database ownership record already exists for worktree %q", record.WorktreePath)
+		}
+		return record, nil
+	case databaseStatusPendingCleanup:
+		return nil, fmt.Errorf("database %q is staged for cleanup; run treeman clean before setting it up again", record.Database)
+	default:
+		return nil, fmt.Errorf("database ownership record for worktree %q has unexpected status %q", record.WorktreePath, record.Status)
+	}
+}
+
+func beginBranchDatabase(store *databaseStore, resolver ContainerResolver, worktreeID string, parsed ParsedURI, opts SetupOptions) (*DatabaseRecord, error) {
+	target, err := resolveTarget(resolver, parsed, opts.ConfiguredContainer)
+	if err != nil {
+		return nil, err
+	}
+	candidate := &DatabaseRecord{
+		WorktreeID:   worktreeID,
+		WorktreePath: opts.WorktreePath,
+		Branch:       opts.Branch,
+		Database:     BranchDBNameForRepository(parsed.Database, opts.Branch, store.repoID),
+		Container:    opts.ConfiguredContainer,
+		ContainerID:  target.ID,
+		Host:         parsed.Host,
+		Port:         parsed.Port,
+		User:         parsed.User,
+		Status:       databaseStatusSetupPending,
+	}
+	return store.beginSetup(candidate)
+}
+
+// provisionDatabase is only reachable for a non-active ownership record.
+func provisionDatabase(backend Backend, resolver ContainerResolver, store *databaseStore, record *DatabaseRecord, uri string, opts SetupOptions) (SetupResult, error) {
 	target, err := resolver.ResolveID(record.ContainerID)
 	if err != nil {
 		return SetupResult{}, fmt.Errorf("finding recorded postgres container: %w", err)
@@ -118,36 +142,10 @@ func setupDatabase(backend Backend, opts SetupOptions) (SetupResult, error) {
 		}
 		return SetupResult{}, fmt.Errorf("rewriting .env: %w", err)
 	}
-	if err := store.activateSetup(worktreeID, *record); err != nil {
+	if err := store.activateSetup(record.WorktreeID, *record); err != nil {
 		return SetupResult{}, err
 	}
 	return SetupResult{DBName: record.Database}, nil
-}
-
-// setupOwnership reads the ownership record and decides whether setup may
-// proceed against it. Creation accepts only a pending retry. A rerun also
-// accepts an active record, which the caller then verifies and reuses.
-func setupOwnership(store *databaseStore, worktreeID string, opts SetupOptions) (*DatabaseRecord, error) {
-	if !opts.Rerun {
-		return store.setupRecord(worktreeID, opts.Branch)
-	}
-	record, err := store.ownership(worktreeID)
-	if err != nil || record == nil {
-		return record, err
-	}
-	if record.Branch != opts.Branch {
-		return nil, fmt.Errorf("database ownership record for worktree %q names branch %q, not %q", record.WorktreePath, record.Branch, opts.Branch)
-	}
-	switch record.Status {
-	case databaseStatusSetupPending, databaseStatusActive:
-		return record, nil
-	case databaseStatusPendingCleanup:
-		// Never beginSetup from here: the record still owns its resource, and
-		// the cleanup it is staged for has to finish first.
-		return nil, fmt.Errorf("database %q is staged for cleanup; run treeman clean before setting it up again", record.Database)
-	default:
-		return nil, fmt.Errorf("database ownership record for worktree %q has unexpected status %q", record.WorktreePath, record.Status)
-	}
 }
 
 // matchesRecordedTarget rejects a URI that no longer names the recorded

@@ -304,24 +304,6 @@ func (s *databaseStore) ownership(worktreeID string) (*DatabaseRecord, error) {
 	return result, err
 }
 
-// setupRecord returns the only retryable setup record for a worktree.
-func (s *databaseStore) setupRecord(worktreeID, branch string) (*DatabaseRecord, error) {
-	var result *DatabaseRecord
-	err := s.withLock(func() error {
-		record, err := s.load(worktreeID)
-		if err != nil || record == nil {
-			result = record
-			return err
-		}
-		if record.Branch != branch || record.Status != databaseStatusSetupPending {
-			return fmt.Errorf("database ownership record already exists for worktree %q", record.WorktreePath)
-		}
-		result = record
-		return nil
-	})
-	return result, err
-}
-
 // beginSetup records a newly chosen database target. A physical database is
 // owned by at most one record, even when callers race under different worktree
 // IDs. Repeating the same pending setup returns its existing record.
