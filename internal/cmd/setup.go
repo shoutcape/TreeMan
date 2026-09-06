@@ -199,16 +199,11 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 	environmentStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipEnv {
 		result, err := envfile.Copy(setup.mainRoot, setup.worktreePath)
-		environmentStatus = skippedStatus("skipped (no environment files found)")
 		if err != nil {
 			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
 			environmentStatus = failedStatus(fmt.Sprintf("failed: %v", err))
-		} else if len(result.Copied) > 0 {
-			for _, f := range result.Copied {
-				fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
-			}
-			fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
-			environmentStatus = completedStatus(fmt.Sprintf("completed: copied %d file(s)", len(result.Copied)))
+		} else {
+			environmentStatus = reportEnvironmentCopy(w, render, result)
 		}
 	}
 
@@ -234,6 +229,44 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 		dependencies:     dependenciesStatus,
 		database:         databaseStatus,
 		hooks:            hooksStatus,
+	}
+}
+
+// reportEnvironmentCopy prints one line per file and reduces the copy to a
+// single status. Copying, preserving, and failing are independent outcomes, so
+// the status names each one that happened rather than reporting only the worst.
+func reportEnvironmentCopy(w io.Writer, render ui.Renderer, result envfile.CopyResult) setupStatus {
+	for _, name := range result.Copied {
+		fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Copied "+name))
+	}
+	for _, name := range result.Preserved {
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "Preserved existing "+name+"."))
+	}
+	for _, failure := range result.Failed {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy %s: %v", failure.Name, failure.Err)))
+	}
+
+	var counts []string
+	for _, count := range []struct {
+		label string
+		n     int
+	}{
+		{"copied", len(result.Copied)},
+		{"preserved", len(result.Preserved)},
+		{"failed", len(result.Failed)},
+	} {
+		if count.n > 0 {
+			counts = append(counts, fmt.Sprintf("%s %d", count.label, count.n))
+		}
+	}
+
+	switch {
+	case len(counts) == 0:
+		return skippedStatus("skipped (no environment files found)")
+	case len(result.Failed) > 0:
+		return failedStatus("completed: " + strings.Join(counts, ", "))
+	default:
+		return completedStatus("completed: " + strings.Join(counts, ", "))
 	}
 }
 
