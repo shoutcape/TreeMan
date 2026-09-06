@@ -181,7 +181,7 @@ func reuseActiveDatabase(backend Backend, resolver ContainerResolver, record *Da
 		return SetupResult{}, fmt.Errorf("owned database %q is missing from container %q; TreeMan does not recreate an owned database, so restore it or delete the worktree to release the record", record.Database, target.Name)
 	}
 	if parsed.Database != record.Database {
-		return SetupResult{}, fmt.Errorf("%s names database %q but TreeMan owns %q for this worktree; the environment file was left unchanged", envFileName, parsed.Database, record.Database)
+		return SetupResult{}, fmt.Errorf("%s names database %q but TreeMan owns %q for this worktree; the environment file was left unchanged", EnvFileName, parsed.Database, record.Database)
 	}
 	return SetupResult{DBName: record.Database, Reused: true}, nil
 }

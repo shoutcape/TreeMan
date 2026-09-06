@@ -3,9 +3,11 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/envrc"
@@ -116,6 +118,24 @@ type worktreeSetup struct {
 	projectConfig config.Config
 	hooks         hookApproval
 	options       creationSetupOptions
+	// rerun switches the environment and database steps from creation
+	// semantics to repair semantics: preserve what is already there, and
+	// verify owned state instead of provisioning it.
+	rerun bool
+	// refreshEnv replaces existing environment files during a rerun. It is
+	// meaningless without rerun, because creation always replaces.
+	refreshEnv bool
+	// hooksSkipped explains a skipped hooks step in the caller's own terms. A
+	// rerun skips hooks by default, which the user did not ask for, so saying
+	// "requested" there would be wrong.
+	hooksSkipped string
+}
+
+func (setup worktreeSetup) hooksSkippedText() string {
+	if setup.hooksSkipped != "" {
+		return setup.hooksSkipped
+	}
+	return "skipped (requested)"
 }
 
 type setupStatusKind int
@@ -198,18 +218,12 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 
 	environmentStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipEnv {
-		result, err := envfile.Copy(setup.mainRoot, setup.worktreePath)
-		if err != nil {
-			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
-			environmentStatus = failedStatus(fmt.Sprintf("failed: %v", err))
-		} else {
-			environmentStatus = reportEnvironmentCopy(w, render, result)
-		}
+		environmentStatus = setup.copyEnvironment(w, render)
 	}
 
 	databaseStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipDatabase {
-		databaseStatus = setupCreatedDatabase(w, render, setup.projectConfig, setup.worktreePath, setup.branch)
+		databaseStatus = setupWorktreeDatabase(w, render, setup)
 	}
 
 	dependenciesStatus := skippedStatus("skipped (requested)")
@@ -218,7 +232,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 	}
 	reportNestedModules(w, render, setup.worktreePath, setup.worktreeDir)
 
-	hooksStatus := skippedStatus("skipped (requested)")
+	hooksStatus := skippedStatus(setup.hooksSkippedText())
 	if !setup.options.skipHooks {
 		hooksStatus = setup.hooks.run(w, render, setup.worktreePath)
 	}
@@ -230,6 +244,66 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 		database:         databaseStatus,
 		hooks:            hooksStatus,
 	}
+}
+
+// copyEnvironment copies the main worktree's .env* files under this run's
+// policy. Creation replaces every destination. A rerun preserves them unless
+// it was asked to refresh, and a refresh proves database ownership before it
+// replaces the one file that names the branch database.
+func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setupStatus {
+	options := envfile.CopyOptions{Refresh: !setup.rerun || setup.refreshEnv}
+
+	guard, guardErr := setup.guardEnvironmentRefresh()
+	if guardErr != nil {
+		// One protected file, not the whole step: every other environment
+		// file still refreshes.
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("preserving %s: %v", database.EnvFileName, guardErr)))
+		options.Preserve = append(options.Preserve, database.EnvFileName)
+	}
+
+	result, err := envfile.CopyWith(setup.mainRoot, setup.worktreePath, options)
+	if err != nil {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
+		return failedStatus(fmt.Sprintf("failed: %v", err))
+	}
+	status := reportEnvironmentCopy(w, render, result)
+
+	if !guard.Required || !slices.Contains(result.Copied, database.EnvFileName) {
+		return status
+	}
+	// The copy brought in the main worktree's database name. Put the owned one
+	// back, or the branch would run against the shared database.
+	if err := restoreOwnedDatabase(setup.worktreePath, setup.projectConfig.DatabaseEnvKey(), guard.Database); err != nil {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not restore database %s in %s: %v", guard.Database, database.EnvFileName, err)))
+		return failedStatus(fmt.Sprintf("%s, database name not restored", status.text))
+	}
+	fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Kept database "+guard.Database+" in "+database.EnvFileName+"."))
+	return status
+}
+
+// guardEnvironmentRefresh reports whether the database-bearing environment
+// file may be replaced. It runs for every refresh, including one that skips
+// the database step: --skip-database skips provisioning work, not the
+// protection of a database TreeMan already owns.
+func (setup worktreeSetup) guardEnvironmentRefresh() (database.RefreshGuard, error) {
+	if !setup.rerun || !setup.refreshEnv {
+		return database.RefreshGuard{}, nil
+	}
+	return database.GuardRefresh(setup.worktreePath, setup.mainRoot, setup.branch,
+		setup.projectConfig.DatabaseEnvKey(), setup.projectConfig.DatabaseContainer())
+}
+
+// restoreOwnedDatabase rewrites the copied URI to name the owned database.
+func restoreOwnedDatabase(worktreePath, envKey, dbName string) error {
+	uri, err := database.ReadEnvValue(worktreePath, envKey)
+	if err != nil {
+		return err
+	}
+	restored, err := database.ReplaceDatabase(uri, dbName)
+	if err != nil {
+		return err
+	}
+	return database.RewriteEnvValue(worktreePath, envKey, restored)
 }
 
 // reportEnvironmentCopy prints one line per file and reduces the copy to a

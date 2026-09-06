@@ -11,13 +11,16 @@ import (
 	"github.com/shoutcape/treeman/internal/fsutil"
 )
 
-const envFileName = ".env"
+// EnvFileName is the environment file that carries the database URI. It is
+// the one file a refresh has to protect, because it names the branch database
+// TreeMan owns.
+const EnvFileName = ".env"
 
 // ReadEnvValue reads the .env file in dir and returns the value of the given key.
 // Returns "" with no error if the file doesn't exist or the variable is not found.
 // Handles double-quoted and single-quoted values by stripping the quotes.
 func ReadEnvValue(dir, key string) (string, error) {
-	envPath := filepath.Join(dir, envFileName)
+	envPath := filepath.Join(dir, EnvFileName)
 
 	f, err := os.Open(envPath)
 	if err != nil {
@@ -57,7 +60,7 @@ func ReadEnvValue(dir, key string) (string, error) {
 // comments, blank lines, and other variables) are preserved exactly.
 // Returns an error if the .env file doesn't exist or the key is not found.
 func RewriteEnvValue(dir, key, newValue string) error {
-	envPath := filepath.Join(dir, envFileName)
+	envPath := filepath.Join(dir, EnvFileName)
 
 	info, err := os.Lstat(envPath)
 	if err != nil {

@@ -62,13 +62,13 @@ func GuardRefresh(worktreePath, sourcePath, branch, envKey, configuredContainer 
 func guardedTarget(dir, envKey, role string, record *DatabaseRecord, configuredContainer string) error {
 	target, err := loadSetupTarget(dir, envKey)
 	if err != nil {
-		return fmt.Errorf("reading %s %s: %w", role, envFileName, err)
+		return fmt.Errorf("reading %s %s: %w", role, EnvFileName, err)
 	}
 	if target.skipped {
-		return fmt.Errorf("%s %s has no PostgreSQL %s, so restoring database %q would have nowhere to go", role, envFileName, envKey, record.Database)
+		return fmt.Errorf("%s %s has no PostgreSQL %s, so restoring database %q would have nowhere to go", role, EnvFileName, envKey, record.Database)
 	}
 	if err := matchesRecordedTarget(record, target.parsed, configuredContainer); err != nil {
-		return fmt.Errorf("%s %s: %w", role, envFileName, err)
+		return fmt.Errorf("%s %s: %w", role, EnvFileName, err)
 	}
 	return nil
 }

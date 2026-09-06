@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/fsutil"
@@ -25,6 +26,14 @@ type CopyOptions struct {
 	// Without it the destination keeps its contents, because a worktree .env
 	// holds edits the copy source cannot supply again.
 	Refresh bool
+	// Preserve names files that are never replaced, even under Refresh. One
+	// file whose replacement cannot be shown to be safe does not have to hold
+	// back the refresh of the others.
+	Preserve []string
+}
+
+func (opts CopyOptions) refreshes(name string) bool {
+	return opts.Refresh && !slices.Contains(opts.Preserve, name)
 }
 
 // CopyFailure names one file that could not be copied, and why.
@@ -68,7 +77,7 @@ func CopyWith(src, dest string, opts CopyOptions) (CopyResult, error) {
 
 	var result CopyResult
 	for _, name := range files {
-		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts)
+		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts.refreshes(name))
 		switch {
 		case err != nil:
 			result.Failed = append(result.Failed, CopyFailure{Name: name, Err: err})
@@ -106,7 +115,7 @@ const (
 
 // copyFile applies the policy to one file. It never removes a destination and
 // never writes to one that is not a regular file.
-func copyFile(src, dest string, opts CopyOptions) (copyOutcome, error) {
+func copyFile(src, dest string, refresh bool) (copyOutcome, error) {
 	// Lstat, not Stat: a symlink named .env must be rejected, not followed.
 	sourceInfo, err := os.Lstat(src)
 	if err != nil {
@@ -128,7 +137,7 @@ func copyFile(src, dest string, opts CopyOptions) (copyOutcome, error) {
 		return 0, err
 	case !destinationInfo.Mode().IsRegular():
 		return 0, ErrDestinationNotRegular
-	case !opts.Refresh:
+	case !refresh:
 		return outcomePreserved, nil
 	}
 

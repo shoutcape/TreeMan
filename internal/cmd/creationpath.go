@@ -19,23 +19,57 @@ import (
 // describes it -- so they read it from the same value rather than loading the
 // file twice and possibly disagreeing about it.
 type creationPaths struct {
-	// mainRoot is the main worktree root every relative path resolves from.
-	mainRoot string
-	// parentDir is the resolved absolute directory new worktrees are made in.
-	parentDir string
+	projectPaths
 	// path is the destination selected before the operation started. The
 	// worktree is created at whatever plan selects under the lock, which is
 	// this path unless another process took it in the meantime.
 	path string
-	// configPath is the absolute configuration file used for this snapshot.
-	configPath string
 	// hooks is the consent resolved for this creation's post-create hooks.
 	hooks   hookApproval
 	options creationSetupOptions
+}
+
+// projectPaths is what one project configuration says about a repository,
+// resolved once. Creating a worktree and repairing an existing one both read
+// it, and both read it from the main worktree: a branch may have edited its
+// own copy of the configuration, and setup must not follow that copy.
+type projectPaths struct {
+	// mainRoot is the main worktree root every relative path resolves from.
+	mainRoot string
+	// parentDir is the resolved absolute directory new worktrees are made in.
+	parentDir string
+	// configPath is the absolute configuration file used for this snapshot.
+	configPath string
 	// protected names the repository paths a worktree may not be placed on.
 	protected worktree.Protected
 	// config is the project configuration the whole flow works from.
 	config config.Config
+}
+
+// loadProjectPaths reads the project configuration and everything derived from
+// it. An unusable configuration file is an error rather than a warning: it may
+// place worktrees somewhere other than the default, and carrying on with the
+// default would quietly ignore what the project asked for.
+func loadProjectPaths(mainRoot string) (projectPaths, error) {
+	loaded := config.Load(mainRoot)
+	if loaded.Warning != "" {
+		return projectPaths{}, fmt.Errorf("cannot read project configuration: %s", loaded.Warning)
+	}
+	parentDir, err := worktree.ResolveDir(mainRoot, loaded.Config.WorktreeDirSetting())
+	if err != nil {
+		return projectPaths{}, err
+	}
+	commonDir, err := git.CommonDir("")
+	if err != nil {
+		return projectPaths{}, err
+	}
+	return projectPaths{
+		mainRoot:   mainRoot,
+		parentDir:  parentDir,
+		configPath: loaded.Path,
+		protected:  worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
+		config:     loaded.Config,
+	}, nil
 }
 
 // prepareCreationPathsIn resolves where a worktree for branch would go and
@@ -49,40 +83,20 @@ type creationPaths struct {
 // configuration that cannot be read, must not cost the user a network round
 // trip and must never leave a branch behind.
 func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, error) {
-	loaded := config.Load(mainRoot)
-	if loaded.Warning != "" {
-		// The file may place worktrees somewhere other than the default.
-		// Creating one in the default location instead would quietly ignore
-		// what the project asked for, so an unusable config stops the flow.
-		return creationPaths{}, fmt.Errorf("cannot create a worktree: %s", loaded.Warning)
-	}
-
-	configuredParent, err := worktree.ResolveDir(mainRoot, loaded.Config.WorktreeDirSetting())
+	project, err := loadProjectPaths(mainRoot)
 	if err != nil {
-		return creationPaths{}, err
+		return creationPaths{}, fmt.Errorf("cannot create a worktree: %w", err)
 	}
-	if parentDir == "" {
-		parentDir = configuredParent
+	if parentDir != "" {
+		project.parentDir = parentDir
 	}
-
-	commonDir, err := git.CommonDir("")
-	if err != nil {
-		return creationPaths{}, err
-	}
-
-	paths := creationPaths{
-		mainRoot:   mainRoot,
-		parentDir:  parentDir,
-		protected:  worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
-		config:     loaded.Config,
-		configPath: loaded.Path,
-	}
+	paths := creationPaths{projectPaths: project}
 
 	existing, err := git.WorktreeList()
 	if err != nil {
 		return creationPaths{}, err
 	}
-	paths.path, err = worktree.ResolvePathForBranch(parentDir, branch, existing)
+	paths.path, err = worktree.ResolvePathForBranch(paths.parentDir, branch, existing)
 	if err != nil {
 		return creationPaths{}, err
 	}

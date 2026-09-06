@@ -38,6 +38,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 
 	root.AddCommand(newVersionCmd(version, commit, date))
 	root.AddCommand(newCreateCmd())
+	root.AddCommand(newSetupCmd())
 	root.AddCommand(newBranchCmd())
 	root.AddCommand(newReviewCmd())
 	root.AddCommand(newSwitchCmd())
@@ -69,6 +70,7 @@ func printOverview(cmd *cobra.Command) {
 	render := outputRenderer(cmd)
 	commands := []commandSummary{
 		{use: "treeman create <branch>", short: "Create a runnable worktree"},
+		{use: "treeman setup [target]", short: "Rerun project setup in an existing worktree"},
 		{use: "treeman branch [query]", short: "Check out a remote branch"},
 		{use: "treeman review [number]", short: "Check out a PR or MR"},
 		{use: "treeman switch [query]", short: "Select a worktree"},
