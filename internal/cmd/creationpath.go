@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/hooks"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/worktree"
 )
 
@@ -27,7 +30,8 @@ type creationPaths struct {
 	// configPath is the absolute configuration file used for this snapshot.
 	configPath string
 	// hooks is the consent resolved for this creation's post-create hooks.
-	hooks hookApproval
+	hooks   hookApproval
+	options creationSetupOptions
 	// protected names the repository paths a worktree may not be placed on.
 	protected worktree.Protected
 	// config is the project configuration the whole flow works from.
@@ -102,9 +106,6 @@ func (p creationPaths) plan(branch string) git.WorktreePlan {
 		if err := worktree.ValidateDestination(p.protected, path); err != nil {
 			return "", err
 		}
-		if err := p.hooks.checkDestination(path); err != nil {
-			return "", err
-		}
 		if err := worktree.EnsureParentDir(path); err != nil {
 			return "", err
 		}
@@ -112,19 +113,23 @@ func (p creationPaths) plan(branch string) git.WorktreePlan {
 	}
 }
 
-// hookApproval is the resolved consent for this creation: the exact commands
-// authorized and the directory the user was shown when authorizing them. The
-// two travel together, because approval was given for that pair.
+// hookApproval holds the exact commands authorized for this creation.
 type hookApproval struct {
 	commands []string
-	dir      string
 }
 
-// checkDestination fails when the mutation lock replans away from the
-// directory shown at approval time. A zero approval permits any destination.
-func (a hookApproval) checkDestination(path string) error {
-	if a.dir == "" || path == a.dir {
-		return nil
+func (a hookApproval) run(w io.Writer, render ui.Renderer, worktreePath string) setupStatus {
+	if len(a.commands) == 0 {
+		return skippedStatus("skipped (no post-create hooks configured)")
 	}
-	return fmt.Errorf("worktree destination changed after hook approval: approved %q, selected %q", a.dir, path)
+	fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(a.commands))))
+	results := hooks.RunPostCreate(worktreePath, a.commands, w)
+	for _, r := range results {
+		if r.Err != nil {
+			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
+		} else {
+			fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
+		}
+	}
+	return summarizeHooks(results)
 }

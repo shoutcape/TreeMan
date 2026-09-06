@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
+	"strings"
 )
 
 // CanonicalPath makes path absolute, resolves symlinks through its deepest
@@ -14,6 +15,19 @@ func CanonicalPath(path string) (string, error) {
 		return "", err
 	}
 	return canonicalExistingPrefix(filepath.Clean(absolute))
+}
+
+// Contains reports whether child is strictly inside parent. Both paths must
+// already be canonical.
+func Contains(parent, child string) bool {
+	if parent == child {
+		return false
+	}
+	prefix := parent
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	return strings.HasPrefix(child, prefix)
 }
 
 func canonicalExistingPrefix(path string) (string, error) {

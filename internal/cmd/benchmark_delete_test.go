@@ -38,7 +38,7 @@ func TestDeleteBenchmarkShowsConsentBeforeReadingAndReusesApproval(t *testing.T)
 	assert.NotContains(t, stderr.String(), "Deleted worktree and branch:")
 	assert.NotContains(t, stderr.String(), "Running 1 post-create hook(s)")
 	assert.Len(t, fixture.preparedPaths(t), 3)
-	store, err := state.NewHookApprovalStore()
+	store, err := state.NewHookApprovalStore("")
 	require.NoError(t, err)
 	records, err := store.List()
 	require.NoError(t, err)
@@ -81,7 +81,7 @@ type benchmarkConsentReader struct {
 func (r *benchmarkConsentReader) Read(p []byte) (int, error) {
 	r.t.Helper()
 	r.reads++
-	for _, text := range []string{"Repository:", "Config:", "Phase:", "post_create", "Execution directory:", "PREPARATION_LOG", "Approve and save this exact scope for future use? [y/N]"} {
+	for _, text := range []string{"Repository:", "Config:", "Phase:", "post_create", "Hooks run in the new worktree under ", "PREPARATION_LOG", "Approve and save this exact scope for future use? [y/N]"} {
 		require.Contains(r.t, r.output.String(), text, "consent must be visible before reading input")
 	}
 	assert.False(r.t, git.BranchExists(deleteBenchmarkBranch), "approval must precede branch creation")

@@ -40,8 +40,8 @@ this order:
 6. A noninteractive command with no approval fails and shows `--trust-hooks`
    and `--skip-hooks` guidance.
 
-The prompt shows the repository identity, configuration path, phase, execution
-directory, and every command in order. Command text is not truncated. Terminal
+The prompt shows the repository identity, configuration path, phase, worktree
+parent directory, and every command in order. Command text is not truncated. Terminal
 control characters are escaped. The default answer is no.
 
 Interactive acceptance saves the exact approval. Refusal, end-of-file input,
@@ -83,11 +83,20 @@ The other setup flags remain independent:
 ```
 
 The hook decision is made after configuration and destination resolution, but
-before fetches that mutate references or worktree creation. If destination
-selection changes before creation, TreeMan refuses to run the approved hooks
-in a different directory.
+before fetches that mutate references or worktree creation. Hooks run in the
+newly created worktree, including when destination selection needs a suffix
+because the original path was taken in the meantime.
 
 ## Manage Approvals
+
+Approval state belongs in a trusted local state directory. During creation,
+TreeMan rejects storage inside the supplied repository's Git common directory
+or, when it is named `.git`, its parent tree. Management commands do not apply
+repository containment checks. Directory-path revalidation rejects detected
+symlink changes, but does not provide race-free protection against a process
+able to replace the state directory or its ancestors. It does not check inode
+identity: replacing a directory with another ordinary directory at the same
+canonical path is not detected.
 
 Approval management does not load or execute project hooks. It works outside a
 Git repository.

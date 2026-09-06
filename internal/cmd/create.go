@@ -95,7 +95,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 	worktreePath := created.Path
 
-	summary := setupCreatedWorktree(out, render, paths, created, setupOptions)
+	summary := setupCreatedWorktree(out, render, paths, created)
 
 	// Print result to stderr for the user.
 	fmt.Fprintln(out, "")

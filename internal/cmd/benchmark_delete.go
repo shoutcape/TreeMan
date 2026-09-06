@@ -71,7 +71,7 @@ func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox
 		}
 
 		var setupOutput bytes.Buffer
-		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), paths, created, setup)
+		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), paths, created)
 		if failures := summary.failures(); len(failures) > 0 {
 			setupErr := fmt.Errorf("benchmark worktree setup failed: %s (rerun with %s to measure deletion without that step)",
 				strings.Join(failures, "; "), strings.Join(failedSetupFlags(summary), " "))

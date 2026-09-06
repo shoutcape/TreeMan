@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -27,7 +26,7 @@ func testScope(t *testing.T, n string) hooks.ApprovalScope {
 func TestHookApprovalStoreLifecycleAndPermissions(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	scope := testScope(t, "one")
 
@@ -61,7 +60,7 @@ func TestHookApprovalStoreUsesCanonicalHomeFallback(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "")
 	t.Setenv("HOME", homeLink)
 
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(homeTarget, ".local", "state", "treeman"), store.dir)
 	assert.DirExists(t, store.dir)
@@ -75,20 +74,20 @@ func TestHookApprovalStoreCanonicalizesAllowedStateParentSymlink(t *testing.T) {
 	require.NoError(t, os.Symlink(target, parent))
 	t.Setenv("XDG_STATE_HOME", parent)
 
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(target, "treeman"), store.dir)
 }
 
 func TestHookApprovalStoreRejectsRepositoryStateThroughParentSymlinkWithoutSideEffects(t *testing.T) {
-	root := chdirToNewRepository(t)
+	root := filepath.Clean(t.TempDir())
 	stateParent := filepath.Join(t.TempDir(), "state-parent")
 	require.NoError(t, os.Symlink(root, stateParent))
 	before, err := os.Stat(root)
 	require.NoError(t, err)
 	t.Setenv("XDG_STATE_HOME", stateParent)
 
-	_, err = NewHookApprovalStore()
+	_, err = NewHookApprovalStore(filepath.Join(root, ".git"))
 	require.Error(t, err)
 	assert.NoDirExists(t, filepath.Join(root, "treeman"))
 	after, err := os.Stat(root)
@@ -100,11 +99,11 @@ func TestHookApprovalStoreRejectsRepositoryStateThroughParentSymlinkWithoutSideE
 // not be stored anywhere that repository reaches: not its Git directory, not
 // its tree, and not a worktree placed inside it.
 func TestHookApprovalStoreRejectsStateInsideTheRepository(t *testing.T) {
-	root := chdirToNewRepository(t)
+	root := filepath.Clean(t.TempDir())
 	for _, inside := range []string{"state", filepath.Join(".git", "state"), filepath.Join(".worktrees", "feature", "state")} {
 		t.Run(inside, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", filepath.Join(root, inside))
-			store, err := NewHookApprovalStore()
+			store, err := NewHookApprovalStore(filepath.Join(root, ".git"))
 			require.Error(t, err, "state inside the repository must be rejected")
 			assert.Nil(t, store)
 		})
@@ -115,10 +114,9 @@ func TestHookApprovalStoreRejectsStateInsideTheRepository(t *testing.T) {
 // outside every repository is simply used.
 func TestHookApprovalStoreAcceptsStateOutsideAnyRepository(t *testing.T) {
 	outside := t.TempDir()
-	chdirForTest(t, outside)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(outside, "state"))
 
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	list, err := store.List()
 	require.NoError(t, err)
@@ -127,33 +125,13 @@ func TestHookApprovalStoreAcceptsStateOutsideAnyRepository(t *testing.T) {
 
 func TestHookApprovalStoreRejectsRelativeStateHome(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "not-absolute")
-	_, err := NewHookApprovalStore()
+	_, err := NewHookApprovalStore("")
 	require.Error(t, err)
-}
-
-// chdirToNewRepository creates a repository and makes it the working
-// directory, so the store resolves the same repository a command would.
-func chdirToNewRepository(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-	output, err := exec.Command("git", "init", "--initial-branch=main", root).CombinedOutput()
-	require.NoErrorf(t, err, "git init: %s", output)
-	chdirForTest(t, root)
-	return root
-}
-
-func chdirForTest(t *testing.T, dir string) {
-	t.Helper()
-	previous, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
 }
 
 func TestHookApprovalStoreDoesNotBlockOnInterruptedTemporaryFile(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(store.dir, ".hook-approvals-stale"), []byte("partial"), 0o600))
 	require.NoError(t, store.Approve(testScope(t, "after-interruption")))
@@ -163,7 +141,7 @@ func TestHookApprovalStoreDoesNotBlockOnInterruptedTemporaryFile(t *testing.T) {
 func TestHookApprovalStoreRejectsInvalidState(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	path := filepath.Join(stateHome, "treeman", "hook-approvals.json")
 
@@ -182,7 +160,7 @@ func TestHookApprovalStoreRejectsInvalidState(t *testing.T) {
 
 func TestHookApprovalStoreConcurrentApprovals(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	var scopes []hooks.ApprovalScope
 	for i := 0; i < 12; i++ {
@@ -212,7 +190,7 @@ func TestHookApprovalStoreConcurrentApprovals(t *testing.T) {
 
 func TestHookApprovalStoreConcurrentApprovalsAndRevocations(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	var initial, additions []hooks.ApprovalScope
 	for i := 0; i < 8; i++ {
@@ -267,7 +245,7 @@ func TestHookApprovalStoreRejectsStateSymlink(t *testing.T) {
 	target := filepath.Join(stateHome, "real.json")
 	require.NoError(t, os.WriteFile(target, []byte(`{"version":1,"approvals":[]}`), 0o600))
 	require.NoError(t, os.Symlink(target, filepath.Join(stateHome, "treeman", "hook-approvals.json")))
-	_, err := NewHookApprovalStore()
+	_, err := NewHookApprovalStore("")
 	assert.Error(t, err)
 }
 
@@ -296,7 +274,7 @@ func TestHookApprovalStoreRejectsInvalidEntriesBeforeChmod(t *testing.T) {
 				before, err := os.Lstat(path)
 				require.NoError(t, err)
 				t.Setenv("XDG_STATE_HOME", stateHome)
-				_, err = NewHookApprovalStore()
+				_, err = NewHookApprovalStore("")
 				require.Error(t, err)
 				after, err := os.Lstat(path)
 				require.NoError(t, err)
@@ -318,7 +296,7 @@ func TestHookApprovalStoreRejectsDirectorySymlinkBeforeChmod(t *testing.T) {
 	require.NoError(t, err)
 	t.Setenv("XDG_STATE_HOME", stateHome)
 
-	_, err = NewHookApprovalStore()
+	_, err = NewHookApprovalStore("")
 	require.Error(t, err)
 	after, err := os.Stat(target)
 	require.NoError(t, err)
@@ -333,7 +311,7 @@ func TestHookApprovalStoreOperationsRejectInvalidEntriesBeforeBlocking(t *testin
 		for _, entry := range []string{"hook-approvals.json", "hook-approvals.lock"} {
 			t.Run(kind+"/"+entry, func(t *testing.T) {
 				t.Setenv("XDG_STATE_HOME", t.TempDir())
-				store, err := NewHookApprovalStore()
+				store, err := NewHookApprovalStore("")
 				require.NoError(t, err)
 				path := store.path
 				if entry == "hook-approvals.lock" {
@@ -363,12 +341,62 @@ func TestHookApprovalStoreOperationsRejectInvalidEntriesBeforeBlocking(t *testin
 	}
 }
 
+func TestHookApprovalStoreOperationsRejectCanonicalDirectorySymlink(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*HookApprovalStore, hooks.ApprovalScope) error
+	}{
+		{name: "Lookup", run: func(store *HookApprovalStore, scope hooks.ApprovalScope) error {
+			_, err := store.Lookup(scope)
+			return err
+		}},
+		{name: "List", run: func(store *HookApprovalStore, _ hooks.ApprovalScope) error {
+			_, err := store.List()
+			return err
+		}},
+		{name: "Approve", run: (*HookApprovalStore).Approve},
+		{name: "Revoke", run: func(store *HookApprovalStore, scope hooks.ApprovalScope) error {
+			return store.Revoke(scope.ID())
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			commonDir := filepath.Join(root, ".git")
+			require.NoError(t, os.Mkdir(commonDir, 0o700))
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			store, err := NewHookApprovalStore(commonDir)
+			require.NoError(t, err)
+			scope, err := hooks.NewApprovalScope(commonDir, filepath.Join(root, ".treeman.toml"), hooks.PostCreatePhase, []string{"echo test"})
+			require.NoError(t, err)
+			require.NoError(t, store.Approve(scope))
+			original, err := os.ReadFile(store.path)
+			require.NoError(t, err)
+
+			target := filepath.Join(root, "state")
+			require.NoError(t, os.Mkdir(target, 0o700))
+			document := filepath.Join(target, filepath.Base(store.path))
+			require.NoError(t, os.WriteFile(document, original, 0o600))
+			require.NoError(t, os.Rename(store.dir, store.dir+"-backup"))
+			require.NoError(t, os.Symlink(target, store.dir))
+
+			assert.ErrorContains(t, test.run(store, scope), "approval state directory changed or is a symlink")
+			after, err := os.ReadFile(document)
+			require.NoError(t, err)
+			assert.Equal(t, original, after)
+			entries, err := os.ReadDir(target)
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "rejected operation must not create lock or temporary files")
+			assert.Equal(t, filepath.Base(document), entries[0].Name())
+		})
+	}
+}
+
 func TestHookApprovalStoreKeepsCanonicalPathAfterParentRetarget(t *testing.T) {
 	first, second := t.TempDir(), t.TempDir()
 	parent := filepath.Join(t.TempDir(), "state-parent")
 	require.NoError(t, os.Symlink(first, parent))
 	t.Setenv("XDG_STATE_HOME", parent)
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(parent))
 	require.NoError(t, os.Symlink(second, parent))
@@ -386,7 +414,7 @@ func fileMode(t *testing.T, path string) os.FileMode {
 
 func TestHookApprovalJSONIsInspectable(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	store, err := NewHookApprovalStore()
+	store, err := NewHookApprovalStore("")
 	require.NoError(t, err)
 	require.NoError(t, store.Approve(testScope(t, "json")))
 	data, err := os.ReadFile(store.path)

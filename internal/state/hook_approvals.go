@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/shoutcape/treeman/internal/fsutil"
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
 )
 
@@ -32,7 +31,7 @@ type hookApprovalDocument struct {
 	Approvals []HookApproval `json:"approvals"`
 }
 
-// HookApprovalStore stores approvals outside any repository.
+// HookApprovalStore stores approvals in a private local state directory.
 type HookApprovalStore struct {
 	dir, path, lockPath string
 }
@@ -41,16 +40,16 @@ type HookApprovalStore struct {
 //
 // Approvals outlive the repository they were given in and decide whether that
 // repository's own configuration may run commands, so state inside it is
-// rejected. That is a property of the store rather than a caller's option: a
-// caller that forgot to ask for the check would get consent state a repository
-// can rewrite. Outside a repository there is nothing to be inside of, which is
-// what listing and revoking approvals from anywhere relies on.
-func NewHookApprovalStore() (*HookApprovalStore, error) {
+// rejected against the supplied Git common directory. An empty commonDir skips
+// repository containment checks, allowing listing and revoking from anywhere.
+// Directory and file validation, permissions, and locking apply in both cases.
+// The constructor neither discovers a repository nor runs Git.
+func NewHookApprovalStore(commonDir string) (*HookApprovalStore, error) {
 	dir, err := stateDir()
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectStateInsideRepository(dir); err != nil {
+	if err := rejectStateInsideRepository(dir, commonDir); err != nil {
 		return nil, err
 	}
 	if err := checkApprovalDirectory(dir); err != nil {
@@ -78,11 +77,10 @@ func NewHookApprovalStore() (*HookApprovalStore, error) {
 	return store, nil
 }
 
-// rejectStateInsideRepository fails when dir is inside the repository this
-// command is running in. Outside a repository it does nothing.
-func rejectStateInsideRepository(dir string) error {
-	commonDir, err := git.CommonDir("")
-	if err != nil {
+// rejectStateInsideRepository fails when dir is inside the supplied repository.
+// An empty commonDir skips repository containment checks.
+func rejectStateInsideRepository(dir, commonDir string) error {
+	if commonDir == "" {
 		return nil
 	}
 	protected := []string{commonDir}
@@ -97,7 +95,7 @@ func rejectStateInsideRepository(dir string) error {
 		if err != nil {
 			return fmt.Errorf("canonicalize repository path %q: %w", path, err)
 		}
-		if dir == canonical || isDescendant(canonical, dir) {
+		if dir == canonical || fsutil.Contains(canonical, dir) {
 			return fmt.Errorf("approval state directory %q is inside repository path %q", dir, path)
 		}
 	}
@@ -162,13 +160,14 @@ func (s *HookApprovalStore) Revoke(id string) error {
 	})
 }
 
-// openGuarded opens a state file after confirming that neither it nor the
-// state directory has become a symlink or a non-regular file.
+// openGuarded revalidates the canonical directory path before each open as a
+// best-effort check for observable symlink changes. This does not prevent races
+// with replacement of the directory or its ancestors, or detect replacement
+// with another ordinary directory at the same canonical path.
 //
-// The guarantee comes from the open itself rather than from a check next to
-// it: O_NOFOLLOW refuses a symlink at the final component, O_NONBLOCK keeps a
-// FIFO from blocking the call, and the fstat that follows is of the file that
-// was opened, so nothing can be substituted in between.
+// O_NOFOLLOW protects the final file component, O_NONBLOCK keeps a FIFO from
+// blocking, and regular-file validation uses the opened descriptor rather than
+// a separate pathname check.
 func (s *HookApprovalStore) openGuarded(path string, flag int) (*os.File, error) {
 	if err := checkApprovalDirectory(s.dir); err != nil {
 		return nil, err
@@ -258,15 +257,6 @@ func (s *HookApprovalStore) write(doc hookApprovalDocument) error {
 	if err != nil {
 		return fmt.Errorf("encode approvals: %w", err)
 	}
-	// The replacement is a rename onto the path, which would happily bury
-	// whatever the path names. Nothing to replace needs no check; anything
-	// else has to still be a state file of ours.
-	existing, err := s.openGuarded(s.path, os.O_RDONLY)
-	if err == nil {
-		existing.Close()
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
 	if err := fsutil.AtomicWriteFile(s.path, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("durably write approvals: %w", err)
 	}
@@ -300,9 +290,4 @@ func checkApprovalFile(path string) error {
 		return fmt.Errorf("inspect approval state path %q: %w", path, err)
 	}
 	return nil
-}
-
-func isDescendant(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }

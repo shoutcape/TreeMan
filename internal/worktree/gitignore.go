@@ -45,7 +45,7 @@ func IgnoreEntry(mainRoot, worktreeDir string) (entry string, inside bool, err e
 	if err != nil {
 		return "", false, fmt.Errorf("cannot resolve the worktree directory %q: %w", worktreeDir, err)
 	}
-	if !pathContains(canonicalRoot, canonicalDir) {
+	if !fsutil.Contains(canonicalRoot, canonicalDir) {
 		return "", false, nil
 	}
 

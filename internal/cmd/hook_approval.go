@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/shoutcape/treeman/internal/hooks"
@@ -11,9 +12,8 @@ import (
 )
 
 // prepareApprovedCreationPaths resolves the destination and the hook consent
-// that goes with it, in that order: approval names the exact commands and the
-// directory they would run in, so it can only be asked for once both are
-// known, and it has to be settled before any ref-mutating fetch.
+// that goes with it, in that order. Approval names the exact commands and
+// shows the worktree parent directory, before any ref-mutating fetch.
 //
 // Every creation flow enters here rather than pairing the two calls itself. A
 // creationPaths whose consent was never resolved would run no hooks at all and
@@ -27,49 +27,56 @@ func prepareApprovedCreationPaths(cmd *cobra.Command, mainRoot, branch, parentDi
 }
 
 func approveCreationHooks(cmd *cobra.Command, paths creationPaths, opts creationSetupOptions) (creationPaths, error) {
-	paths.hooks = hookApproval{}
-	commands := append([]string(nil), paths.config.PostCreateHooks()...)
+	paths.options = opts
+	commands := paths.config.PostCreateHooks()
 	if opts.skipHooks || len(commands) == 0 {
 		return paths, nil
 	}
 	if !opts.trustHooks {
-		scope, err := hooks.NewApprovalScope(paths.protected.CommonDir, paths.configPath, hooks.PostCreatePhase, commands)
-		if err != nil {
+		if err := requireHookApproval(cmd, paths, commands); err != nil {
 			return paths, err
 		}
-		store, err := state.NewHookApprovalStore()
-		if err != nil {
-			return paths, fmt.Errorf("hook approval state: %w", err)
-		}
-		approved, err := store.Lookup(scope)
-		if err != nil {
-			return paths, fmt.Errorf("hook approval state: %w", err)
-		}
-		if !approved {
-			// The scope is the question. A session that cannot be asked must
-			// not have it printed as though it had been.
-			unavailable := fmt.Errorf("hook approval required; rerun with --trust-hooks to authorize this invocation or --skip-hooks to skip hooks")
-			if !canInteract(cmd) {
-				return paths, unavailable
-			}
-			out := cmd.ErrOrStderr()
-			writeHookScope(out, scope)
-			fmt.Fprintf(out, "Execution directory: %q\n", paths.path)
-			fmt.Fprintln(out, "Approval permits these command strings, not just their current script contents. Hooks are not sandboxed.")
-			granted, err := confirmYN(cmd, "Approve and save this exact scope for future use? [y/N] ", unavailable)
-			if err != nil {
-				return paths, err
-			}
-			if !granted {
-				return paths, fmt.Errorf("hook approval refused")
-			}
-			if err := store.Approve(scope); err != nil {
-				return paths, fmt.Errorf("save hook approval: %w", err)
-			}
-		}
 	}
-	paths.hooks = hookApproval{commands: commands, dir: paths.path}
+	paths.hooks = hookApproval{commands: slices.Clone(commands)}
 	return paths, nil
+}
+
+func requireHookApproval(cmd *cobra.Command, paths creationPaths, commands []string) error {
+	scope, err := hooks.NewApprovalScope(paths.protected.CommonDir, paths.configPath, hooks.PostCreatePhase, commands)
+	if err != nil {
+		return err
+	}
+	store, err := state.NewHookApprovalStore(paths.protected.CommonDir)
+	if err != nil {
+		return fmt.Errorf("hook approval state: %w", err)
+	}
+	approved, err := store.Lookup(scope)
+	if err != nil {
+		return fmt.Errorf("hook approval state: %w", err)
+	}
+	if approved {
+		return nil
+	}
+	// Do not print a question when the session cannot answer it.
+	unavailable := fmt.Errorf("hook approval required; rerun with --trust-hooks to authorize this invocation or --skip-hooks to skip hooks")
+	if !canInteract(cmd) {
+		return unavailable
+	}
+	out := cmd.ErrOrStderr()
+	writeHookScope(out, scope)
+	fmt.Fprintf(out, "Hooks run in the new worktree under %q\n", paths.parentDir)
+	fmt.Fprintln(out, "Approval permits these command strings, not just their current script contents. Hooks are not sandboxed.")
+	granted, err := confirmYN(cmd, "Approve and save this exact scope for future use? [y/N] ", unavailable)
+	if err != nil {
+		return err
+	}
+	if !granted {
+		return fmt.Errorf("hook approval refused")
+	}
+	if err := store.Approve(scope); err != nil {
+		return fmt.Errorf("save hook approval: %w", err)
+	}
+	return nil
 }
 
 func writeHookScope(out io.Writer, scope hooks.ApprovalScope) {
@@ -86,7 +93,7 @@ func newHooksCmd() *cobra.Command {
 	approvals.AddCommand(&cobra.Command{
 		Use: "list", Short: "List saved hook approvals", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := state.NewHookApprovalStore()
+			store, err := state.NewHookApprovalStore("")
 			if err != nil {
 				return err
 			}
@@ -108,7 +115,7 @@ func newHooksCmd() *cobra.Command {
 	approvals.AddCommand(&cobra.Command{
 		Use: "revoke <id>", Short: "Revoke one exact approval ID", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := state.NewHookApprovalStore()
+			store, err := state.NewHookApprovalStore("")
 			if err != nil {
 				return err
 			}

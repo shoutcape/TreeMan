@@ -61,7 +61,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.paths, created.worktree, setupOptions)
+	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))

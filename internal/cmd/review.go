@@ -53,7 +53,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.paths, created.worktree, setupOptions)
+	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Review worktree ready:"))

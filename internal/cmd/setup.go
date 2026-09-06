@@ -29,7 +29,7 @@ type creationSetupOptions struct {
 // It works from the paths the flow already resolved, so the configuration that
 // chose the worktree's location is the same one that decides what to ignore
 // and which hooks to run.
-func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, created git.CreatedWorktree, options creationSetupOptions) setupSummary {
+func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, created git.CreatedWorktree) setupSummary {
 	if paths.config.ShouldUpdateGitignore() {
 		if err := worktree.EnsureIgnored(paths.mainRoot, paths.parentDir); err != nil {
 			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
@@ -41,8 +41,8 @@ func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, 
 		branch:        created.Branch,
 		worktreeDir:   paths.parentDir,
 		projectConfig: paths.config,
-		approvedHooks: paths.hooks.commands,
-		options:       options,
+		hooks:         paths.hooks,
+		options:       paths.options,
 	})
 }
 
@@ -114,7 +114,7 @@ type worktreeSetup struct {
 	// reported as modules of the tree that contains them.
 	worktreeDir   string
 	projectConfig config.Config
-	approvedHooks []string
+	hooks         hookApproval
 	options       creationSetupOptions
 }
 
@@ -225,20 +225,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 
 	hooksStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipHooks {
-		if postCreateCmds := setup.approvedHooks; len(postCreateCmds) > 0 {
-			fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
-			hookResults := hooks.RunPostCreate(setup.worktreePath, postCreateCmds, w)
-			for _, r := range hookResults {
-				if r.Err != nil {
-					fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
-				} else {
-					fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
-				}
-			}
-			hooksStatus = summarizeHooks(hookResults)
-		} else {
-			hooksStatus = skippedStatus("skipped (no post-create hooks configured)")
-		}
+		hooksStatus = setup.hooks.run(w, render, setup.worktreePath)
 	}
 
 	return setupSummary{

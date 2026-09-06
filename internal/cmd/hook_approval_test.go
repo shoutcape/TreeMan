@@ -65,6 +65,19 @@ func TestApproveCreationHooksNonInteractiveDoesNotReadOrSave(t *testing.T) {
 	assert.NotContains(t, cmd.ErrOrStderr().(*bytes.Buffer).String(), "Approve and save")
 }
 
+func TestApproveCreationHooksRejectsStateInsideRepositoryBeforePrompt(t *testing.T) {
+	paths := approvalTestPaths(t, []string{"echo test"})
+	stateHome := filepath.Join(paths.mainRoot, "state")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	stderr := &bytes.Buffer{}
+	cmd := interactiveApprovalInput("y\n", stderr)
+
+	_, err := approveCreationHooks(cmd, paths, creationSetupOptions{})
+	require.ErrorContains(t, err, "inside repository path")
+	assert.Empty(t, stderr.String(), "containment must be rejected before prompting")
+	assert.NoDirExists(t, filepath.Join(stateHome, "treeman"))
+}
+
 func TestApproveCreationHooksTrustAndSkipBypassState(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -116,7 +129,7 @@ func TestApproveCreationHooksRejectsMalformedAndRelativeState(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			stateHome := t.TempDir()
 			t.Setenv("XDG_STATE_HOME", stateHome)
-			_, err := state.NewHookApprovalStore()
+			_, err := state.NewHookApprovalStore("")
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(filepath.Join(stateHome, "treeman", "hook-approvals.json"), []byte(test.data), 0o600))
 			_, err = approveCreationHooks(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), approvalTestPaths(t, []string{"echo test"}), creationSetupOptions{trustHooks: false})
@@ -137,6 +150,9 @@ func TestApproveCreationHooksSnapshotsCommandsAndEscapesToStderr(t *testing.T) {
 	commands[0] = "changed"
 	assert.Equal(t, "printf '\033[31mred'", approved.hooks.commands[0])
 	assert.Contains(t, stderr.String(), `\x1b[31mred`)
+	assert.Contains(t, stderr.String(), "Hooks run in the new worktree under ")
+	assert.Contains(t, stderr.String(), paths.parentDir)
+	assert.NotContains(t, stderr.String(), "Execution directory:")
 	assert.Empty(t, stdout.String())
 }
 
@@ -158,12 +174,12 @@ func TestApprovedHooksUseSnapshotDuringSetup(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	commands := []string{"printf original > hook-output"}
 	paths := approvalTestPaths(t, commands)
-	approved, err := approveCreationHooks(interactiveApprovalInput("y\n", &bytes.Buffer{}), paths, creationSetupOptions{})
+	approved, err := approveCreationHooks(interactiveApprovalInput("y\n", &bytes.Buffer{}), paths, creationSetupOptions{skipEnv: true, skipDeps: true, skipDatabase: true})
 	require.NoError(t, err)
 	paths.config.Hooks.PostCreate[0] = "printf changed > hook-output"
 	worktree := t.TempDir()
 	var output bytes.Buffer
-	summary := setupCreatedWorktree(&output, ui.NewRenderer(&output, terminal.Capabilities{}), approved, git.CreatedWorktree{Path: worktree, Branch: "snapshot"}, creationSetupOptions{skipEnv: true, skipDeps: true, skipDatabase: true})
+	summary := setupCreatedWorktree(&output, ui.NewRenderer(&output, terminal.Capabilities{}), approved, git.CreatedWorktree{Path: worktree, Branch: "snapshot"})
 	require.Equal(t, completedStatus("completed: 1 succeeded"), summary.hooks)
 	data, err := os.ReadFile(filepath.Join(worktree, "hook-output"))
 	require.NoError(t, err)
@@ -176,7 +192,7 @@ func TestHooksApprovalCLIListAndRevoke(t *testing.T) {
 	paths := approvalTestPaths(t, []string{"echo test"})
 	scope, err := hooks.NewApprovalScope(paths.protected.CommonDir, paths.configPath, hooks.PostCreatePhase, paths.config.PostCreateHooks())
 	require.NoError(t, err)
-	store, err := state.NewHookApprovalStore()
+	store, err := state.NewHookApprovalStore("")
 	require.NoError(t, err)
 	require.NoError(t, store.Approve(scope))
 
@@ -203,12 +219,22 @@ func TestHooksApprovalCLIListAndRevoke(t *testing.T) {
 	assert.EqualError(t, unknown.Execute(), `approval "unknown-id" not found`)
 }
 
-func TestCreationPlanRejectsDestinationRaceAfterApproval(t *testing.T) {
-	paths := approvalTestPaths(t, []string{"echo test"})
-	paths.parentDir = filepath.Dir(paths.path)
-	paths.hooks.dir = paths.path
-	_, err := paths.plan("feature/test")([]git.WorktreeEntry{{Path: paths.path, Branch: "feature/other"}})
-	assert.ErrorContains(t, err, "worktree destination changed after hook approval")
+func TestCreationPlanAllowsDestinationRaceAfterApproval(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	paths := approvalTestPaths(t, []string{"printf approved > hook-output"})
+	paths.path = filepath.Join(paths.parentDir, "feature-test")
+	approved, err := approveCreationHooks(interactiveApprovalInput("y\n", &bytes.Buffer{}), paths, creationSetupOptions{skipEnv: true, skipDeps: true, skipDatabase: true})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(paths.path, 0o700))
+	selected, err := approved.plan("feature/test")([]git.WorktreeEntry{{Path: paths.path, Branch: "feature/other"}})
+	require.NoError(t, err)
+	assert.NotEqual(t, paths.path, selected)
+	require.NoError(t, os.MkdirAll(selected, 0o700))
+	var output bytes.Buffer
+	summary := setupCreatedWorktree(&output, ui.NewRenderer(&output, terminal.Capabilities{}), approved, git.CreatedWorktree{Path: selected, Branch: "feature/test"})
+	assert.Equal(t, completedStatus("completed: 1 succeeded"), summary.hooks)
+	assert.FileExists(t, filepath.Join(selected, "hook-output"))
+	assert.NoFileExists(t, filepath.Join(paths.path, "hook-output"))
 }
 
 func approvalTestPaths(t *testing.T, commands []string) creationPaths {
@@ -218,6 +244,7 @@ func approvalTestPaths(t *testing.T, commands []string) creationPaths {
 	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
 	return creationPaths{
 		mainRoot: root, path: filepath.Join(root, ".worktrees", "test"), configPath: configPath,
+		parentDir: filepath.Join(root, ".worktrees"),
 		protected: structProtected(root), config: config.Config{Hooks: &config.HooksConfig{PostCreate: commands}},
 	}
 }
