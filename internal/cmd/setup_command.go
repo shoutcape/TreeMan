@@ -160,17 +160,8 @@ func approveSetupHooks(cmd *cobra.Command, project projectPaths, options rerunSe
 	if !options.rerunHooks || options.skipHooks || len(commands) == 0 {
 		return hookApproval{}, nil
 	}
-	if !options.trustHooks {
-		if err := requireHookApprovalFor(cmd, hookApprovalRequest{
-			commonDir:  project.protected.CommonDir,
-			configPath: project.configPath,
-			commands:   commands,
-			location:   "Hooks run again in an existing worktree, which may already contain your work",
-		}); err != nil {
-			return hookApproval{}, err
-		}
-	}
-	return hookApproval{commands: append([]string(nil), commands...)}, nil
+	return approveHooks(cmd, project, commands, options.trustHooks,
+		"Hooks run again in an existing worktree, which may already contain your work")
 }
 
 // resolveSetupTarget selects the existing linked worktree to repair.
@@ -184,35 +175,35 @@ func resolveSetupTarget(query string) (git.WorktreeEntry, error) {
 		return git.WorktreeEntry{}, err
 	}
 
-	var matches []git.WorktreeEntry
-	if query == "" {
+	pathOnly := query == ""
+	if pathOnly {
 		root, err := git.CurrentWorktreeRoot()
 		if err != nil {
 			return git.WorktreeEntry{}, err
 		}
 		// --show-toplevel already answers from a subdirectory, so running
 		// setup from anywhere inside a worktree selects that worktree.
-		for _, entry := range entries {
-			if samePath(entry.Path, root) {
-				matches = append(matches, entry)
-			}
+		query = root
+	}
+
+	var matches []git.WorktreeEntry
+	for _, entry := range entries {
+		match := samePath(entry.Path, query)
+		if !pathOnly {
+			match = match || entry.Branch == query
 		}
-		if len(matches) == 0 {
-			return git.WorktreeEntry{}, fmt.Errorf("%q is not a registered worktree", root)
+		if match {
+			matches = append(matches, entry)
 		}
-	} else {
-		for _, entry := range entries {
-			if entry.Branch == query || samePath(entry.Path, query) {
-				matches = append(matches, entry)
-			}
+	}
+	if len(matches) == 0 {
+		if pathOnly {
+			return git.WorktreeEntry{}, fmt.Errorf("%q is not a registered worktree", query)
 		}
-		switch len(matches) {
-		case 0:
-			return git.WorktreeEntry{}, fmt.Errorf("no worktree matches %q by exact branch name or path", query)
-		case 1:
-		default:
-			return git.WorktreeEntry{}, fmt.Errorf("%q matches more than one worktree (%s and %s); name one by its path", query, matches[0].Path, matches[1].Path)
-		}
+		return git.WorktreeEntry{}, fmt.Errorf("no worktree matches %q by exact branch name or path", query)
+	}
+	if !pathOnly && len(matches) > 1 {
+		return git.WorktreeEntry{}, fmt.Errorf("%q matches more than one worktree (%s and %s); name one by its path", query, matches[0].Path, matches[1].Path)
 	}
 
 	return matches[0], validateSetupTarget(matches[0])

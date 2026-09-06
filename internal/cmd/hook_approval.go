@@ -32,22 +32,27 @@ func approveCreationHooks(cmd *cobra.Command, paths creationPaths, opts creation
 	if opts.skipHooks || len(commands) == 0 {
 		return paths, nil
 	}
-	if !opts.trustHooks {
-		if err := requireHookApproval(cmd, paths, commands); err != nil {
-			return paths, err
-		}
+	approved, err := approveHooks(cmd, paths.projectPaths, commands, opts.trustHooks,
+		fmt.Sprintf("Hooks run in the new worktree under %q", paths.parentDir))
+	if err != nil {
+		return paths, err
 	}
-	paths.hooks = hookApproval{commands: slices.Clone(commands)}
+	paths.hooks = approved
 	return paths, nil
 }
 
-func requireHookApproval(cmd *cobra.Command, paths creationPaths, commands []string) error {
-	return requireHookApprovalFor(cmd, hookApprovalRequest{
-		commonDir:  paths.protected.CommonDir,
-		configPath: paths.configPath,
-		commands:   commands,
-		location:   fmt.Sprintf("Hooks run in the new worktree under %q", paths.parentDir),
-	})
+func approveHooks(cmd *cobra.Command, project projectPaths, commands []string, trust bool, location string) (hookApproval, error) {
+	if !trust {
+		if err := requireHookApprovalFor(cmd, hookApprovalRequest{
+			commonDir:  project.protected.CommonDir,
+			configPath: project.configPath,
+			commands:   commands,
+			location:   location,
+		}); err != nil {
+			return hookApproval{}, err
+		}
+	}
+	return hookApproval{commands: slices.Clone(commands)}, nil
 }
 
 // hookApprovalRequest is one request for consent to run hook commands.
