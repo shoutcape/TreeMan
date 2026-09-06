@@ -14,7 +14,7 @@ If the default branch has a different name, this command records it. As an alter
 
 ## TreeMan Cannot Select an Item
 
-Install `fzf` for interactive branch, review, switch, and delete commands. An exact `wtb <branch>` command does not need `fzf`.
+Install `fzf` for interactive branch, review, switch, and delete commands. An exact `tmb <branch>` command does not need `fzf`.
 
 ## Forge Commands Fail
 

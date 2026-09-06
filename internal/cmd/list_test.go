@@ -115,9 +115,10 @@ func TestRunListReportsStaleWorktree(t *testing.T) {
 	assert.False(t, entries[1].Dirty)
 }
 
-func TestListCmd_HasWTLAlias(t *testing.T) {
+func TestListCmd_HasShorthandAliases(t *testing.T) {
 	cmd := newListCmd()
 
+	assert.Contains(t, cmd.Aliases, "tml")
 	assert.Contains(t, cmd.Aliases, "wtl")
 }
 

@@ -33,7 +33,7 @@ and open MRs/PRs.
 Shell integration changes directory to the new worktree; without it, the
 path is printed to stdout. With --exec, TreeMan runs the given command in
 the new worktree instead.`,
-		Aliases: []string{"wtb"},
+		Aliases: commandAliases("branch"),
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var query string
@@ -273,7 +273,7 @@ func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repo
 	return data, nil
 }
 
-// branchPickerResults streams the whole wtb picker payload without starting
+// branchPickerResults streams the whole tmb picker payload without starting
 // fzf, returning the number of available branches and how long the first row
 // took.
 func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {

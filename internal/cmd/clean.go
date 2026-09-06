@@ -26,9 +26,10 @@ func newCleanCmd() *cobra.Command {
 	var dryRun bool
 	var skipConfirm bool
 	cmd := &cobra.Command{
-		Use:   "clean",
-		Short: "Remove clean worktrees with branches merged into the default branch",
-		Args:  cobra.NoArgs,
+		Use:     "clean",
+		Aliases: commandAliases("clean"),
+		Short:   "Remove clean worktrees with branches merged into the default branch",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runClean(cmd, dryRun, skipConfirm)
 		},

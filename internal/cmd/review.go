@@ -30,7 +30,7 @@ instances.
 Shell integration changes directory to the new worktree; without it, the
 path is printed to stdout. With --exec, TreeMan runs the given command in
 the new worktree instead.`,
-		Aliases: []string{"wtpr", "wtmr"},
+		Aliases: commandAliases("review"),
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var prArg string
@@ -208,7 +208,7 @@ func streamReviewRows(render ui.Renderer, forgeInfo reviewForge, prs *[]forge.PR
 	}
 }
 
-// reviewPickerResults streams the whole wtmr picker payload without starting
+// reviewPickerResults streams the whole tmmr picker payload without starting
 // fzf, returning the number of open reviews and how long the first row took.
 func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {

@@ -10,14 +10,14 @@ Shell integration uses that destination to change the current interactive shell 
 
 | Native command | Shell wrapper | Purpose |
 | --- | --- | --- |
-| `treeman create <branch>` | `wt` | Create a branch and worktree |
-| `treeman branch [query]` | `wtb` | Add a remote branch worktree |
-| `treeman review [number]` | `wtpr`, `wtmr` | Add a PR or MR worktree |
-| `treeman switch [query]` | `wts` | Select a worktree path |
-| `treeman list [--json]` | `wtl` | List worktrees and their status |
+| `treeman create <branch>` | `tm` | Create a branch and worktree |
+| `treeman branch [query]` | `tmb` | Add a remote branch worktree |
+| `treeman review [number]` | `tmpr`, `tmmr` | Add a PR or MR worktree |
+| `treeman switch [query]` | `tms` | Select a worktree path |
+| `treeman list [--json]` | `tml` | List worktrees and their status |
 | `treeman benchmark [command]` | None | Measure command execution time |
-| `treeman clean [--dry-run] [--yes]` | `wtc` | Remove clean worktrees merged into the default branch |
-| `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
+| `treeman clean [--dry-run] [--yes]` | `tmc` | Remove clean worktrees merged into the default branch |
+| `treeman delete [query]` | `tmd` | Delete a linked worktree and branch |
 | `treeman shell` | None | Install and manage shell integration |
 | `treeman doctor [--json]` | None | Check repository readiness and configuration |
 | `treeman preflight [--json]` | None | Report setup compatibility before creation |
@@ -92,7 +92,7 @@ Without `--json`, the report is written only to stderr. With `--json`, see the [
 treeman branch [query] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks] [--trust-hooks]
 ```
 
-`branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
+`branch` has alias `tmb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
 
 TreeMan stops a branch or review list at 5000 items or at 50 pages. Read [known limitations](../known-limitations.md).
 
@@ -108,7 +108,7 @@ Use `-x <command>` to run a command in the new worktree instead of printing its 
 treeman review [pr-number] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks] [--trust-hooks]
 ```
 
-`review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
+`review` has aliases `tmpr` and `tmmr`. TreeMan detects GitHub or GitLab from `origin`.
 
 Give a positive numeric PR or MR number. Without a number, TreeMan uses `fzf` to select an open PR or MR. TreeMan opens `fzf` immediately and streams GitHub batches or GitLab NDJSON records as they arrive. You can filter and select before all results arrive. Closing the picker stops the requests that were still fetching the rest.
 
@@ -122,7 +122,7 @@ Use `-x <command>` to run a command in the review worktree instead of printing i
 treeman switch [query] [-x <command>]
 ```
 
-`switch` has alias `wts`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
+`switch` has alias `tms`. An exact branch name or worktree path selects the matching worktree without `fzf`. Other input requires `fzf`.
 
 A path query resolves its symlinks before the comparison. Therefore a symlinked path selects the same worktree as its real path.
 
@@ -137,7 +137,7 @@ treeman delete [query]
 treeman delete --path <path> --branch <branch> [--yes] [--force]
 ```
 
-`delete` has alias `wtd`. Interactive deletion requires `fzf`. It excludes the main worktree.
+`delete` has alias `tmd`. Interactive deletion requires `fzf`. It excludes the main worktree.
 
 `--path` and `--branch` use direct mode. Direct mode requires both flags. `--yes` and `-y` skip confirmation.
 
@@ -175,7 +175,7 @@ treeman list [--json]
 
 List repository worktrees with branch, path, main, current, dirty, stale, and merged state. TreeMan checks the current default-branch tip on the remote. It fetches the branch only when local tracking data is missing or different. `YES` in `MERGED` means the tip is an ancestor of the refreshed default branch. It can also mean the exact tip was the head of a merged PR or MR. For GitHub, it can mean the tip is reachable from a merged PR head, or that it descends from one. A tip that descends from a merged head is informational only, because it carries commits the merge never saw. `clean` removes a deleted branch after a squash or rebase merge only when forge evidence accounts for every commit on the tip. If TreeMan cannot establish fresh default-branch state, merged state is blank. If forge verification is unavailable, only forge-confirmed results are blank. Normal Git ancestry results still show `YES`. TreeMan shows a warning when it detects a forge but cannot query it. A stale worktree has a missing or non-directory path and must be pruned with `git worktree prune`. `--json` writes objects for scripts and agents. Each object contains `path`, `branch`, `main`, `current`, `dirty`, `detached`, `merged`, and `stale` fields.
 
-`wtl` is a shell shortcut for `treeman list`.
+`tml` is a shell shortcut for `treeman list`.
 
 ## `benchmark`
 
@@ -189,7 +189,7 @@ Measure execution time for a supported command. The default command is `list`. `
 
 The `--skip-env`, `--skip-database`, and `--skip-deps` flags turn individual setup actions off for `delete`, the same actions `treeman create` skips with the same flag names. Use them where a step cannot run on this machine, such as a dependency install that needs credentials or a database whose container is not running. List and picker-result targets reject all setup and hook-policy flags. `--trust-hooks` is invocation-only and applies only to delete preparation; it does not save approval state. `delete` reports the composition of each prepared worktree as `prepared: environment ..., dependencies ..., database ..., hooks ...`, and repeats it whenever it changes, because what a deletion costs is decided by what setup put in the worktree. The same line reports untracked setup output the project does not ignore: clearing it is what keeps the timed deletion the same non-forced deletion a user runs, and it leaves that deletion less to remove than the project itself would.
 
-`branch-results` and `review-results` measure the complete data payload used by interactive `wtb` and `wtmr`, respectively. The payload includes streamed forge batches or records, filtering and association where applicable, and picker-row rendering. They stop before launching `fzf`, make no repository changes, report the number of available results, and flag changes during timed runs. Both also report producer row-ready latency: the time from forge detection until the producer hands its first rendered row to the picker writer. This is not `fzf` paint latency. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
+`branch-results` and `review-results` measure the complete data payload used by interactive `tmb` and `tmmr`, respectively. The payload includes streamed forge batches or records, filtering and association where applicable, and picker-row rendering. They stop before launching `fzf`, make no repository changes, report the number of available results, and flag changes during timed runs. Both also report producer row-ready latency: the time from forge detection until the producer hands its first rendered row to the picker writer. This is not `fzf` paint latency. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
 
 ## `hooks approvals`
 
@@ -230,7 +230,9 @@ treeman shell init <bash|zsh|fish>
 
 Run `treeman shell install` once after TreeMan is on `PATH`. It detects the current Bash, Zsh, or Fish configuration file and writes a marked, idempotent integration block. Use `--shell` or `--config` to choose a different target. `--path` also adds a binary directory to the managed block and is used by the release installer.
 
-The integration defines a `treeman` adapter and the `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, and `wtd` shortcuts. Both command styles change the shell directory after commands that return a worktree path. Other native commands pass through unchanged.
+The integration defines a `treeman` adapter and the `tm`, `tmb`, `tmpr`, `tmmr`, `tms`, `tml`, `tmc`, and `tmd` shortcuts. Both command styles change the shell directory after commands that return a worktree path. Other native commands pass through unchanged.
+
+The integration also defines the earlier `wt`, `wtb`, `wtpr`, `wtmr`, `wts`, `wtl`, `wtc`, and `wtd` names. Each name runs the same command as its `tm` equivalent.
 
 `treeman shell init` prints the sourceable integration without modifying files. `treeman init <shell>` remains available for existing startup files.
 

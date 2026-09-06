@@ -11,7 +11,7 @@ Use TreeMan to make and manage Git worktrees.
 
 - Confirm `treeman` is available on `PATH` before use.
 - Run commands from a Git repository with an `origin` remote.
-- Use native `treeman` commands. Do not use shell shortcuts such as `wt` because an agent cannot change its parent shell directory.
+- Use native `treeman` commands. Do not use shell shortcuts such as `tm` because an agent cannot change its parent shell directory.
 - Do not use `git checkout -b`, `git switch -c`, or `git worktree` as substitutes.
 - Do not use `--exec` or `-x`. That flag replaces TreeMan with an interactive command and prints no path for the agent to capture.
 

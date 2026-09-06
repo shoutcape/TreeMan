@@ -15,25 +15,25 @@ Start a new shell. Run these commands from a Git repository with `origin` config
 Create a branch and worktree.
 
 ```bash
-wt feature/login
+tm feature/login
 ```
 
 TreeMan fetches the default branch. It makes `feature/login`. By default, it puts the worktree at `.worktrees/feature-login` in the main worktree. Set [`worktree_dir`](reference/configuration.md#worktree_dir) to use another location.
 
-Both `wt` and `treeman create` change your current directory when TreeMan prints a path.
+Both `tm` and `treeman create` change your current directory when TreeMan prints a path.
 
 ## Use an Existing Remote Branch
 
 Select a remote branch.
 
 ```bash
-wtb
+tmb
 ```
 
 Use an exact branch name to skip the picker.
 
 ```bash
-wtb feature/login
+tmb feature/login
 ```
 
 TreeMan gets branches from GitHub or GitLab. It excludes the default branch and existing local branches.
@@ -43,17 +43,17 @@ TreeMan gets branches from GitHub or GitLab. It excludes the default branch and 
 Create a worktree for a pull request or merge request.
 
 ```bash
-wtpr 42
+tmpr 42
 ```
 
-Use `wtmr 42` for the same command. TreeMan detects GitHub or GitLab from `origin`.
+Use `tmmr 42` for the same command. TreeMan detects GitHub or GitLab from `origin`.
 
 ## Switch Worktrees
 
 Use the worktree picker.
 
 ```bash
-wts
+tms
 ```
 
 Shell integration changes the current shell directory.
@@ -63,10 +63,10 @@ Shell integration changes the current shell directory.
 Select a linked worktree.
 
 ```bash
-wtd
+tmd
 ```
 
-TreeMan asks for confirmation and completes deletion before it returns. When you delete the current worktree, the `wtd` wrapper changes back to the main worktree.
+TreeMan asks for confirmation and completes deletion before it returns. When you delete the current worktree, the `tmd` wrapper changes back to the main worktree.
 
 > [!warning]
 > TreeMan refuses to delete a dirty worktree, or a branch whose commits are on no remote and not on the default branch. Use `--force` only when you intend to lose those changes or commits.

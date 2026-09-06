@@ -21,7 +21,7 @@ gh auth login
 
 TreeMan uses `gh api` for branch lists, pull request lists, pull request data, and pull request fetches.
 
-Use `wtb` to add a remote branch. Use `wtpr <number>` to add a pull request worktree.
+Use `tmb` to add a remote branch. Use `tmpr <number>` to add a pull request worktree.
 
 ## GitLab
 
@@ -33,7 +33,7 @@ glab auth login
 
 TreeMan uses `glab api` for branch lists, merge request lists, merge request data, and merge request fetches.
 
-Use `wtb` to add a remote branch. Use `wtmr <number>` to add a merge request worktree.
+Use `tmb` to add a remote branch. Use `tmmr <number>` to add a merge request worktree.
 
 TreeMan passes the remote host to `glab`. This supports GitLab hosts with `gitlab` in their host name.
 

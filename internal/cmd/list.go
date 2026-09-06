@@ -26,7 +26,7 @@ func newListCmd() *cobra.Command {
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:     "list",
-		Aliases: []string{"wtl"},
+		Aliases: commandAliases("list"),
 		Short:   "List worktrees and their status",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

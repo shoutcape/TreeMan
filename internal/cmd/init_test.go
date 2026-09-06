@@ -9,6 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// renderShellInit renders the integration the way "treeman shell init" does.
+// Tests use it instead of formatting the raw template, so they exercise the
+// real rendering path and cannot drift from it.
+func renderShellInit(shell string) string {
+	out := &bytes.Buffer{}
+	if err := writeShellInit(out, shell); err != nil {
+		panic("render shell init: " + err.Error())
+	}
+	return out.String()
+}
+
 func TestInitCmd_Bash(t *testing.T) {
 	root := New("test", "abc123", "2026-01-01")
 	buf := &bytes.Buffer{}
@@ -23,22 +34,70 @@ func TestInitCmd_Bash(t *testing.T) {
 	assert.Contains(t, out, "treeman shell init bash")
 	assert.Contains(t, out, "treeman()")
 	assert.Contains(t, out, "command treeman \"$@\"")
+	// One assertion per shape rather than one per shortcut: the full set is
+	// generated from the shortcuts table, which TestShortcutTable covers.
+	assert.Contains(t, out, "tm() { treeman create \"$@\"; }")
+	assert.Contains(t, out, "tmb() { treeman branch \"$@\"; }")
+	// Each family calls treeman directly. A wt* that delegated to tm* would
+	// resolve tm at call time and follow any other binding of that name.
 	assert.Contains(t, out, "wt() { treeman create \"$@\"; }")
-	assert.Contains(t, out, "wtpr() { treeman review \"$@\"; }")
-	assert.Contains(t, out, "wtmr() { treeman review \"$@\"; }")
-	assert.Contains(t, out, "wts() { treeman switch \"$@\"; }")
-	assert.Contains(t, out, "wtl() { treeman list \"$@\"; }")
-	assert.Contains(t, out, "wtc() { treeman clean \"$@\"; }")
-	assert.Contains(t, out, "wtd() { treeman delete \"$@\"; }")
+	assert.Contains(t, out, "wtb() { treeman branch \"$@\"; }")
+	assert.NotContains(t, out, "{ tm \"$@\"; }")
 	assert.NotContains(t, out, "lg()")
 	assert.NotContains(t, out, "wto()")
-	assert.Contains(t, out, "create|branch|review|switch|clean|delete|wtb|wtpr|wtmr|wts|wtc|wtd)")
+	assert.NotContains(t, out, "tmo()")
+	assert.Contains(t, out, "create|branch|review|switch|clean|delete|tmb|tmpr|tmmr|tms|tmc|tmd|wtb|wtpr|wtmr|wts|wtc|wtd)")
 	// TreeMan reports where to cd through a file, so the wrapper never runs it
 	// inside command substitution and never has to read its flags.
 	assert.Contains(t, out, "TREEMAN_CD_FILE=\"$_tm_file\" command treeman \"$@\"")
 	assert.Contains(t, out, "cd -- \"$(cat \"$_tm_file\")\"")
 	assert.NotContains(t, out, "$(command treeman")
 	assert.NotContains(t, out, "_tm_arg", "the wrapper does not scan TreeMan's arguments")
+}
+
+// TestShortcutTable_CommandsExist is the guard that the hand-maintained lists
+// used to lack: a shortcut naming a command that is not registered produced a
+// dead alias that only showed up when a user ran it.
+func TestShortcutTable_CommandsExist(t *testing.T) {
+	root := New("test", "", "")
+
+	for _, s := range shortcuts {
+		command, _, err := root.Find([]string{s.command})
+		require.NoError(t, err, "shortcut %q names command %q", s.suffix, s.command)
+		assert.Equal(t, s.command, command.Name())
+	}
+}
+
+// TestShortcutTable_AdapterNamesResolve checks that every name the shell
+// adapter hands to treeman is one treeman actually accepts.
+func TestShortcutTable_AdapterNamesResolve(t *testing.T) {
+	root := New("test", "", "")
+
+	for _, name := range adapterNames() {
+		command, _, err := root.Find([]string{name})
+		require.NoError(t, err, "adapter name %q does not resolve", name)
+		assert.NotEqual(t, root, command, "adapter name %q fell through to root", name)
+	}
+}
+
+func TestShortcutTable_CommandAliases(t *testing.T) {
+	assert.Equal(t, []string{"tmb", "wtb"}, commandAliases("branch"))
+	assert.Equal(t, []string{"tmpr", "tmmr", "wtpr", "wtmr"}, commandAliases("review"))
+	assert.Equal(t, []string{"tmc", "wtc"}, commandAliases("clean"))
+	// A bare prefix runs create through a shell function and is not a
+	// subcommand, so create has no aliases.
+	assert.Empty(t, commandAliases("create"))
+}
+
+// TestShortcutTable_ListDoesNotFollowDirectory keeps "list" out of the
+// adapter's case list: it reports no destination, so the shell must not try to
+// follow one.
+func TestShortcutTable_ListDoesNotFollowDirectory(t *testing.T) {
+	names := adapterNames()
+
+	assert.NotContains(t, names, "list")
+	assert.NotContains(t, names, "tml")
+	assert.NotContains(t, names, "wtl")
 }
 
 func TestRootCmd_HasNoOpenCommand(t *testing.T) {
@@ -128,6 +187,7 @@ func TestInitCmd_Zsh(t *testing.T) {
 	out := buf.String()
 	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman shell init zsh")
+	assert.Contains(t, out, "tm() { treeman create \"$@\"; }")
 	assert.Contains(t, out, "wt() { treeman create \"$@\"; }")
 }
 
@@ -141,7 +201,7 @@ func TestInitCmd_Fish(t *testing.T) {
 	out := buf.String()
 	assert.NotContains(t, out, "\x1b")
 	assert.Contains(t, out, "treeman shell init fish")
-	assert.Contains(t, out, "function wt")
+	assert.Contains(t, out, "function tm; treeman create $argv; end")
 	assert.Contains(t, out, "function treeman")
 	assert.Contains(t, out, "set -lx TREEMAN_CD_FILE \"$_tm_file\"")
 	assert.Contains(t, out, "cd (cat \"$_tm_file\")")
@@ -149,7 +209,10 @@ func TestInitCmd_Fish(t *testing.T) {
 		"fish reports a missing command itself, so the wrapper asks before calling")
 	assert.NotContains(t, out, "(command treeman $argv)")
 	assert.NotContains(t, out, "_tm_arg", "the wrapper does not scan TreeMan's arguments")
+	assert.Contains(t, out, "function tmc; treeman clean $argv; end")
 	assert.Contains(t, out, "function wtc; treeman clean $argv; end")
+	assert.NotContains(t, out, "; tmc $argv; end")
+	assert.Contains(t, out, "case create branch review switch clean delete tmb tmpr tmmr tms tmc tmd wtb wtpr wtmr wts wtc wtd")
 	assert.NotContains(t, out, "function lg")
 }
 

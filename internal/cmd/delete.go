@@ -56,7 +56,7 @@ func newDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "delete [query]",
 		Short:   "Delete a worktree and its branch via fzf",
-		Aliases: []string{"wtd"},
+		Aliases: commandAliases("delete"),
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flagPath != "" || flagBranch != "" {

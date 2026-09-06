@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,21 +156,35 @@ case "$1" in
       printf '%s\n' "$TREEMAN_TEST_DEST" > "$TREEMAN_CD_FILE"
     fi
     ;;
-  wts) printf '%s\n' "$TREEMAN_TEST_DEST" > "$TREEMAN_CD_FILE" ;;
+  tms) printf '%s\n' "$TREEMAN_TEST_DEST" > "$TREEMAN_CD_FILE" ;;
   version) printf 'test version\n' ;;
 esac
 `), 0o755))
 	integrationPath := filepath.Join(t.TempDir(), "integration.sh")
-	integration := fmt.Sprintf(posixShellIntegration, "bash")
+	integration := renderShellInit("bash")
 	require.NoError(t, os.WriteFile(integrationPath, []byte(integration), 0o600))
 
-	command := exec.Command("bash", "-c", `source "$1"; wt feature/test; printf '%s' "$PWD"`, "bash", integrationPath)
+	command := exec.Command("bash", "-c", `source "$1"; tm feature/test; printf '%s' "$PWD"`, "bash", integrationPath)
 	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "TREEMAN_TEST_DEST="+target)
 	output, err := command.Output()
 	require.NoError(t, err)
 	assert.Equal(t, target, string(output))
 
-	command = exec.Command("bash", "-c", `source "$1"; treeman wts; printf '%s' "$PWD"`, "bash", integrationPath)
+	// A later user binding must not change what the compatibility shortcut runs.
+	command = exec.Command("bash", "-c", `source "$1"; tm() { printf 'hijacked'; }; wt feature/test; printf '%s' "$PWD"`, "bash", integrationPath)
+	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "TREEMAN_TEST_DEST="+target)
+	output, err = command.Output()
+	require.NoError(t, err)
+	assert.Equal(t, target, string(output))
+
+	// The wt* names predate tm* and reach the same destination through shims.
+	command = exec.Command("bash", "-c", `source "$1"; wt feature/test; printf '%s' "$PWD"`, "bash", integrationPath)
+	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "TREEMAN_TEST_DEST="+target)
+	output, err = command.Output()
+	require.NoError(t, err)
+	assert.Equal(t, target, string(output))
+
+	command = exec.Command("bash", "-c", `source "$1"; treeman tms; printf '%s' "$PWD"`, "bash", integrationPath)
 	command.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "TREEMAN_TEST_DEST="+target)
 	output, err = command.Output()
 	require.NoError(t, err)

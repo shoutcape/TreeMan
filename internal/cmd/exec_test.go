@@ -249,9 +249,9 @@ type shellIntegration struct {
 }
 
 var integratedShells = []shellIntegration{
-	{name: "bash", integration: fmt.Sprintf(posixShellIntegration, "bash"), report: `printf 'status=%s cwd=%s\n' "$?" "$PWD"`},
-	{name: "zsh", integration: fmt.Sprintf(posixShellIntegration, "zsh"), report: `printf 'status=%s cwd=%s\n' "$?" "$PWD"`},
-	{name: "fish", integration: fishShellIntegration, report: `printf 'status=%s cwd=%s\n' $status $PWD`},
+	{name: "bash", integration: renderShellInit("bash"), report: `printf 'status=%s cwd=%s\n' "$?" "$PWD"`},
+	{name: "zsh", integration: renderShellInit("zsh"), report: `printf 'status=%s cwd=%s\n' "$?" "$PWD"`},
+	{name: "fish", integration: renderShellInit("fish"), report: `printf 'status=%s cwd=%s\n' $status $PWD`},
 }
 
 // runWithIntegration runs one treeman call through the shell's own wrapper,
@@ -330,7 +330,7 @@ func TestShellIntegration_WithoutMktemp(t *testing.T) {
 	destination := t.TempDir()
 	binDir := fakeTreeman(t, destination)
 
-	script := fmt.Sprintf(posixShellIntegration, "bash") + "\ntreeman switch\nprintf 'cwd=%s\\n' \"$PWD\""
+	script := renderShellInit("bash") + "\ntreeman switch\nprintf 'cwd=%s\\n' \"$PWD\""
 	command := exec.Command(shellPath, "-c", script)
 	command.Env = append(os.Environ(), "PATH="+binDir) // no mktemp
 	command.Dir = t.TempDir()
