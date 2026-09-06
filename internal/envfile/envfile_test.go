@@ -259,6 +259,30 @@ func TestCopy_ReplacesForCreation(t *testing.T) {
 	assert.Equal(t, "KEY=main", string(got))
 }
 
+func TestCreateFile_ConcurrentDestinationIsNeverOverwritten(t *testing.T) {
+	for _, refresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refresh=%t", refresh), func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), ".env")
+			require.NoError(t, os.WriteFile(dest, []byte("KEY=concurrent"), 0o600))
+
+			// Simulate a destination arriving after copyFile's initial Lstat.
+			outcome, err := createFile(dest, []byte("KEY=main"), 0o644, refresh)
+			if refresh {
+				assert.ErrorIs(t, err, os.ErrExist)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, outcomePreserved, outcome)
+			}
+			data, err := os.ReadFile(dest)
+			require.NoError(t, err)
+			assert.Equal(t, "KEY=concurrent", string(data))
+			info, err := os.Stat(dest)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		})
+	}
+}
+
 func TestCopyWith_UnreadableSourceDirectoryIsAWholeRunError(t *testing.T) {
 	_, err := CopyWith(filepath.Join(t.TempDir(), "missing"), t.TempDir(), CopyOptions{})
 	assert.Error(t, err)

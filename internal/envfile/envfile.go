@@ -126,28 +126,29 @@ func copyFile(src, dest string, refresh bool) (copyOutcome, error) {
 	}
 
 	destinationInfo, err := os.Lstat(dest)
+	mode := sourceInfo.Mode().Perm()
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return 0, err
-		}
-		return createFile(dest, data, sourceInfo.Mode().Perm())
+		// Exclusive creation below protects against a concurrent writer.
 	case err != nil:
 		return 0, err
 	case !destinationInfo.Mode().IsRegular():
 		return 0, ErrDestinationNotRegular
 	case !refresh:
 		return outcomePreserved, nil
+	default:
+		// Preserve a destination's tightened permissions during replacement.
+		mode = destinationInfo.Mode().Perm()
 	}
 
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return 0, err
 	}
-	// The destination's mode, not the source's: a worktree .env tightened to
-	// 0600 stays that way after adopting the main worktree's contents.
-	if err := fsutil.AtomicWriteFile(dest, data, destinationInfo.Mode().Perm()); err != nil {
+	if destinationInfo == nil {
+		return createFile(dest, data, mode, refresh)
+	}
+	if err := fsutil.AtomicWriteFile(dest, data, mode); err != nil {
 		return 0, err
 	}
 	return outcomeCopied, nil
@@ -156,35 +157,28 @@ func copyFile(src, dest string, refresh bool) (copyOutcome, error) {
 // createFile writes a destination that did not exist. Exclusive creation is
 // what makes preservation a guarantee rather than a check: a file that arrives
 // between the stat above and this open is reported, not overwritten.
-func createFile(dest string, data []byte, mode os.FileMode) (copyOutcome, error) {
+func createFile(dest string, data []byte, mode os.FileMode, refresh bool) (copyOutcome, error) {
 	file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if errors.Is(err, os.ErrExist) {
+	if errors.Is(err, os.ErrExist) && !refresh {
 		return outcomePreserved, nil
 	}
 	if err != nil {
 		return 0, err
 	}
 
-	if err := writeNewFile(file, data, mode); err != nil {
-		file.Close()
+	// The open mode is masked by umask; state the source permissions exactly.
+	err = file.Chmod(mode)
+	if err == nil {
+		_, err = file.Write(data)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		// A half-written .env is worse than a missing one: remove it so the
 		// next run copies the file instead of preserving the fragment.
 		os.Remove(dest)
 		return 0, err
 	}
-	if err := file.Close(); err != nil {
-		os.Remove(dest)
-		return 0, err
-	}
 	return outcomeCopied, nil
-}
-
-func writeNewFile(file *os.File, data []byte, mode os.FileMode) error {
-	// The open mode is masked by the umask; chmod states it exactly, so a
-	// copied file carries the source's permissions on any machine.
-	if err := file.Chmod(mode); err != nil {
-		return err
-	}
-	_, err := file.Write(data)
-	return err
 }
