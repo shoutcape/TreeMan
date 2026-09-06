@@ -216,7 +216,10 @@ func TestDetachRemoveAllCompletesQueuedJob(t *testing.T) {
 		_, err := os.Stat(cleanupLockPath(trashRoot, job))
 		return os.IsNotExist(err)
 	}, 2*time.Second, 10*time.Millisecond)
-	assert.NoFileExists(t, cleanupErrorPath(trashRoot, job))
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(cleanupErrorPath(trashRoot, job))
+		return os.IsNotExist(err)
+	}, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestRemoveWorktreeAndBranchRestoresAFileAtTheRegisteredPath(t *testing.T) {

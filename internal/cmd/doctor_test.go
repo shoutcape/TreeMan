@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,21 +75,197 @@ func TestDoctorCommand_FailsAfterRenderingDiagnostics(t *testing.T) {
 	assert.Contains(t, out, "failed")
 }
 
+func TestDoctorCommand_JSONReportsSuccessWithoutHumanOutput(t *testing.T) {
+	repo, _ := createTestWorktree(t, "feature/doctor-json")
+	chdirForTest(t, repo)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/example/repo.git")
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("HOME", t.TempDir())
+	stubLookPath(t, func(string) error { return nil })
+	stubDockerDaemonReady(t, nil)
+	stubTerminalColor(t)
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	command := New("", "", "")
+	command.SetOut(stdout)
+	command.SetErr(stderr)
+	command.SetArgs([]string{"doctor", "--json"})
+
+	require.NoError(t, command.Execute())
+	assert.Empty(t, stderr.String())
+	assert.NotContains(t, stdout.String(), "\x1b")
+	assert.NotContains(t, stdout.String(), "DIAGNOSTICS")
+
+	report := decodeReport(t, stdout)
+	assert.True(t, report.OK)
+	assert.Equal(t, []string{
+		"repository", "forge_cli", "configuration", "database_setup",
+		"interactive_picker", "container_support", "shell_integration",
+	}, checkNames(report.Checks))
+	assert.Equal(t, "pass", report.Checks[0].Status)
+	assert.Equal(t, "info", report.Checks[2].Status)
+	assert.Equal(t, "", report.Checks[0].Hint)
+}
+
+func TestDoctorCommand_JSONReportsFailuresAfterOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T)
+		checkName string
+		message   string
+	}{
+		{
+			name: "missing Git",
+			setup: func(t *testing.T) {
+				chdirForTest(t, t.TempDir())
+				stubLookPath(t, func(tool string) error {
+					if tool == "git" {
+						return fmt.Errorf("not found")
+					}
+					return nil
+				})
+				stubDockerDaemonReady(t, nil)
+			},
+			checkName: "git",
+			message:   "Not installed",
+		},
+		{
+			name: "outside repository",
+			setup: func(t *testing.T) {
+				chdirForTest(t, t.TempDir())
+				stubLookPath(t, func(string) error { return nil })
+				stubDockerDaemonReady(t, nil)
+			},
+			checkName: "repository",
+			message:   "Not detected",
+		},
+		{
+			name: "unsupported forge",
+			setup: func(t *testing.T) {
+				repo, _ := createTestWorktree(t, "feature/doctor-json-forge")
+				chdirForTest(t, repo)
+				t.Setenv("_TREEMAN_REMOTE_URL", "https://example.com/org/repo.git")
+				stubLookPath(t, func(string) error { return nil })
+				stubDockerDaemonReady(t, nil)
+			},
+			checkName: "forge_cli",
+			message:   "Unsupported forge",
+		},
+		{
+			name: "invalid configuration",
+			setup: func(t *testing.T) {
+				repo, _ := createTestWorktree(t, "feature/doctor-json-config")
+				chdirForTest(t, repo)
+				t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/example/repo.git")
+				require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("[database\n"), 0o600))
+				stubLookPath(t, func(string) error { return nil })
+				stubDockerDaemonReady(t, nil)
+			},
+			checkName: "configuration",
+			message:   "Invalid .treeman.toml",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.setup(t)
+			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+			command := New("", "", "")
+			command.SetOut(stdout)
+			command.SetErr(stderr)
+			command.SetArgs([]string{"doctor", "--json"})
+
+			require.EqualError(t, command.Execute(), "doctor found failed diagnostics; resolve them and rerun")
+			assert.Empty(t, stderr.String())
+			report := decodeReport(t, stdout)
+			assert.False(t, report.OK)
+			assertDoctorCheck(t, report.Checks, test.checkName, "fail", test.message)
+		})
+	}
+}
+
+func TestDoctorCommand_JSONWarningsDoNotFail(t *testing.T) {
+	repo, _ := createTestWorktree(t, "feature/doctor-json-warnings")
+	chdirForTest(t, repo)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/example/repo.git")
+	stubLookPath(t, func(tool string) error {
+		if tool == "fzf" || tool == "docker" {
+			return fmt.Errorf("not found")
+		}
+		return nil
+	})
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	command := New("", "", "")
+	command.SetOut(stdout)
+	command.SetErr(stderr)
+	command.SetArgs([]string{"doctor", "--json"})
+
+	require.NoError(t, command.Execute())
+	assert.Empty(t, stderr.String())
+	report := decodeReport(t, stdout)
+	assert.True(t, report.OK)
+	assert.Contains(t, report.Checks, jsonCheck{Name: "interactive_picker", Status: "warn", Message: "fzf not installed", Hint: "Install fzf: https://github.com/junegunn/fzf"})
+	assert.Contains(t, report.Checks, jsonCheck{Name: "container_support", Status: "warn", Message: "Docker not installed", Hint: "Install and start Docker: https://docs.docker.com/get-docker/"})
+}
+
+func TestDoctorCommand_HelpIncludesJSONFlag(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	command := New("", "", "")
+	command.SetOut(stdout)
+	command.SetArgs([]string{"doctor", "--help"})
+
+	require.NoError(t, command.Execute())
+	assert.Contains(t, ui.StripANSI(stdout.String()), "--json")
+}
+
+func TestRunDoctor_PropagatesJSONWriteErrors(t *testing.T) {
+	chdirForTest(t, t.TempDir())
+	stubLookPath(t, func(string) error { return nil })
+	stubDockerDaemonReady(t, nil)
+
+	cmd := &cobra.Command{}
+	writeErr := errors.New("write failed")
+	cmd.SetOut(reportErrorWriter{err: writeErr})
+	require.ErrorIs(t, runDoctor(cmd, true), writeErr)
+}
+
+func assertDoctorCheck(t *testing.T, checks []jsonCheck, name, status, message string) {
+	t.Helper()
+	for _, check := range checks {
+		if check.Name == name {
+			assert.Equal(t, status, check.Status)
+			assert.Equal(t, message, check.Message)
+			return
+		}
+	}
+	t.Errorf("missing %q check", name)
+}
+
+func stubTerminalColor(t *testing.T) {
+	t.Helper()
+	previous := terminalCapabilities
+	terminalCapabilities = func(io.Reader, io.Writer) terminal.Capabilities {
+		return terminal.Capabilities{Color: true}
+	}
+	t.Cleanup(func() { terminalCapabilities = previous })
+}
+
 func TestCollectDockerDiagnostic_DistinguishesUnavailableDaemon(t *testing.T) {
 	stubLookPath(t, func(string) error { return nil })
 	stubDockerDaemonReady(t, fmt.Errorf("daemon unavailable"))
 
 	diagnostic := collectDockerDiagnostic()
 
-	assert.Equal(t, diagnosticWarn, diagnostic.status)
+	assert.Equal(t, CheckWarn, diagnostic.status)
 	assert.Equal(t, "Docker installed; daemon unavailable", diagnostic.message)
 	assert.Equal(t, "Start Docker, then rerun treeman doctor.", diagnostic.hint)
 }
 
 func TestDiagnosticSummaryToneUsesHighestSeverity(t *testing.T) {
-	assert.Equal(t, ui.ToneSuccess, diagnosticSummaryTone([4]int{2, 1, 0, 0}))
-	assert.Equal(t, ui.ToneWarning, diagnosticSummaryTone([4]int{2, 0, 1, 0}))
-	assert.Equal(t, ui.ToneFailure, diagnosticSummaryTone([4]int{2, 0, 1, 1}))
+	assert.Equal(t, ui.ToneSuccess, diagnosticSummaryTone(map[CheckStatus]int{CheckPass: 2, CheckInfo: 1}))
+	assert.Equal(t, ui.ToneWarning, diagnosticSummaryTone(map[CheckStatus]int{CheckPass: 2, CheckWarn: 1}))
+	assert.Equal(t, ui.ToneFailure, diagnosticSummaryTone(map[CheckStatus]int{CheckPass: 2, CheckWarn: 1, CheckFail: 1}))
 }
 
 func TestWriteDiagnostics_OmitsEmptySections(t *testing.T) {
@@ -99,16 +277,16 @@ func TestWriteDiagnostics_OmitsEmptySections(t *testing.T) {
 	}{
 		{
 			name:           "only ready diagnostics",
-			diagnostics:    []diagnostic{{status: diagnosticPass, name: "Repository", message: "Git repository detected"}},
+			diagnostics:    []diagnostic{{status: CheckPass, name: "Repository", message: "Git repository detected"}},
 			presentSection: "READY",
 			absentSection:  "UNAVAILABLE OR NOT CONFIGURED",
 		},
 		{
 			name: "only unavailable diagnostics",
 			diagnostics: []diagnostic{
-				{status: diagnosticInfo, name: "Database setup", message: "Not configured", hint: "Add [database] to enable"},
-				{status: diagnosticWarn, name: "Container support", message: "Docker not installed"},
-				{status: diagnosticFail, name: "Forge CLI", message: "Unsupported forge"},
+				{status: CheckInfo, name: "Database setup", message: "Not configured", hint: "Add [database] to enable"},
+				{status: CheckWarn, name: "Container support", message: "Docker not installed"},
+				{status: CheckFail, name: "Forge CLI", message: "Unsupported forge"},
 			},
 			presentSection: "UNAVAILABLE OR NOT CONFIGURED",
 			absentSection:  "READY",
@@ -141,7 +319,7 @@ func TestCollectShellDiagnostic_DetectsConfiguredShellIntegration(t *testing.T) 
 
 	diagnostic := collectShellDiagnostic()
 
-	assert.Equal(t, diagnosticPass, diagnostic.status)
+	assert.Equal(t, CheckPass, diagnostic.status)
 	assert.Equal(t, "Shell integration", diagnostic.name)
 	assert.Equal(t, "Configured in ~/.zshrc", diagnostic.message)
 }
@@ -182,7 +360,7 @@ func TestCollectShellDiagnostic_ReportsUnverifiableShells(t *testing.T) {
 
 			diagnostic := collectShellDiagnostic()
 
-			assert.Equal(t, diagnosticInfo, diagnostic.status)
+			assert.Equal(t, CheckInfo, diagnostic.status)
 			assert.Equal(t, test.message, diagnostic.message)
 			assert.Empty(t, diagnostic.hint)
 		})
@@ -226,7 +404,7 @@ func TestRunDoctor_ReportsInvalidConfigWithoutProvisioning(t *testing.T) {
 	stubDockerDaemonReady(t, nil)
 
 	buf := &bytes.Buffer{}
-	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), nil))
+	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), false))
 
 	out := ui.StripANSI(buf.String())
 	assert.Contains(t, out, "✗  Configuration        Invalid .treeman.toml")
@@ -242,7 +420,7 @@ func TestRunDoctor_ReportsInvalidWorktreeDirectory(t *testing.T) {
 	stubDockerDaemonReady(t, nil)
 
 	buf := &bytes.Buffer{}
-	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), nil))
+	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), false))
 
 	out := ui.StripANSI(buf.String())
 	assert.Contains(t, out, "✗  Configuration        Invalid .treeman.toml")
@@ -257,7 +435,7 @@ func TestRunDoctor_ReportsUnsupportedForge(t *testing.T) {
 	stubDockerDaemonReady(t, nil)
 
 	buf := &bytes.Buffer{}
-	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), nil))
+	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), false))
 
 	out := ui.StripANSI(buf.String())
 	assert.Contains(t, out, "✗  Forge CLI            Unsupported forge")
@@ -270,7 +448,7 @@ func TestRunDoctor_ReportsRepositoryFailure(t *testing.T) {
 	stubDockerDaemonReady(t, nil)
 
 	buf := &bytes.Buffer{}
-	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), nil))
+	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), false))
 
 	out := ui.StripANSI(buf.String())
 	assert.Contains(t, out, "✗  Repository           Not detected")
