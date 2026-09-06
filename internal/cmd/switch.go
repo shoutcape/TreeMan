@@ -24,7 +24,7 @@ An optional query pre-filters the list.
 Shell integration changes directory to the selection; without it, the path
 is printed to stdout. With --exec, TreeMan runs the given command in the
 selected worktree instead.`,
-		Aliases: []string{"wts"},
+		Aliases: commandAliases("switch"),
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := ""

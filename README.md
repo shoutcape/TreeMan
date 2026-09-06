@@ -44,7 +44,7 @@ TreeMan keeps Git worktrees as the foundation. It can run the project setup that
 ### Create Your First Worktree
 
 ```bash
-wt feature/login
+tm feature/login
 ```
 
 TreeMan fetches the default branch, creates `feature/login`, and creates its worktree at `.worktrees/feature-login` under the main worktree. Set `worktree_dir` in `.treeman.toml` to use another internal or external parent directory.
@@ -90,33 +90,33 @@ Run `treeman preflight` first to report environment, dependency, database, and h
 
 ### Use Remote Branches
 
-Use `treeman branch` or `wtb` to add a remote branch worktree. With no query, TreeMan uses an interactive `fzf` picker. Give an exact remote branch name to skip the picker.
+Use `treeman branch` or `tmb` to add a remote branch worktree. With no query, TreeMan uses an interactive `fzf` picker. Give an exact remote branch name to skip the picker.
 
 Use `treeman benchmark branch <remote-branch>` or `treeman benchmark review <pr-number>` for creation benchmarks. These benchmarks never run project setup, read hook approval state, or execute hooks. The `delete` benchmark is different: it prepares each disposable worktree with normal setup and accepts the setup and hook-policy flags.
 
 ### Review Pull Requests and Merge Requests
 
-Use `treeman review`, `wtpr`, or `wtmr` to add a review worktree. TreeMan detects GitHub or GitLab from `origin`. Give a review number, or select an open review with `fzf`.
+Use `treeman review`, `tmpr`, or `tmmr` to add a review worktree. TreeMan detects GitHub or GitLab from `origin`. Give a review number, or select an open review with `fzf`.
 
 ### Switch Worktrees
 
-Use `treeman switch` or `wts` to select a worktree. Shell integration changes the current shell directory to the selected worktree.
+Use `treeman switch` or `tms` to select a worktree. Shell integration changes the current shell directory to the selected worktree.
 
 ### Start Work in the New Worktree
 
 `create`, `branch`, `review`, and `switch` accept `-x <command>`. TreeMan runs the command in the ready worktree instead of printing its path.
 
 ```bash
-wt feature/login -x claude
-wtpr 42 -x nvim
-wts -x lazygit
+tm feature/login -x claude
+tmpr 42 -x nvim
+tms -x lazygit
 ```
 
 The command replaces TreeMan, so it owns the terminal, it can be interactive, and it reports its own exit status. Your shell directory does not change. Read the [Command Reference](docs/reference/cli.md#run-a-command-in-the-worktree).
 
 ### Clean Finished Worktrees
 
-Use `treeman clean` or `wtc` to remove clean worktrees whose branches are merged into the default branch. TreeMan can also recognize verified squash or rebase merges after the remote branch is deleted. It retains branches that it cannot verify.
+Use `treeman clean` or `tmc` to remove clean worktrees whose branches are merged into the default branch. TreeMan can also recognize verified squash or rebase merges after the remote branch is deleted. It retains branches that it cannot verify.
 
 > [!NOTE]
 > TreeMan never removes the main worktree, the default branch, or detached worktrees during cleanup. `treeman delete` also refuses dirty worktrees, and branches whose commits are on no remote and not on the default branch, unless you explicitly use `--force`.
@@ -133,13 +133,13 @@ Use `treeman list --json` for machine-readable worktree state and `treeman docto
 
 | Native command                      | Shell wrapper                    | Purpose                                      |
 | ----------------------------------- | -------------------------------- | -------------------------------------------- |
-| `treeman create <branch>`           | `wt <branch>`                    | Create a local branch and worktree           |
-| `treeman branch [query]`            | `wtb [query]`                    | Add a remote branch worktree                 |
-| `treeman review [number]`           | `wtpr [number]`, `wtmr [number]` | Add a pull request or merge request worktree |
-| `treeman switch [query]`            | `wts [query]`                    | Select a worktree path                       |
-| `treeman list [--json]`             | `wtl`                            | List worktrees and their state               |
-| `treeman clean [--dry-run] [--yes]` | `wtc`                            | Remove clean, merged worktrees               |
-| `treeman delete [query]`            | `wtd [query]`                    | Delete a linked worktree and branch          |
+| `treeman create <branch>`           | `tm <branch>`                    | Create a local branch and worktree           |
+| `treeman branch [query]`            | `tmb [query]`                    | Add a remote branch worktree                 |
+| `treeman review [number]`           | `tmpr [number]`, `tmmr [number]` | Add a pull request or merge request worktree |
+| `treeman switch [query]`            | `tms [query]`                    | Select a worktree path                       |
+| `treeman list [--json]`             | `tml`                            | List worktrees and their state               |
+| `treeman clean [--dry-run] [--yes]` | `tmc`                            | Remove clean, merged worktrees               |
+| `treeman delete [query]`            | `tmd [query]`                    | Delete a linked worktree and branch          |
 | `treeman shell`                     | None                             | Install and manage shell integration         |
 | `treeman doctor`                    | None                             | Check repository readiness and configuration |
 | `treeman preflight`                 | None                             | Report setup compatibility before creation   |

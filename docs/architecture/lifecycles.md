@@ -9,7 +9,7 @@ sequenceDiagram
     participant CLI as TreeMan
     participant Git
     participant Setup as Post-create setup
-    User->>Shell: wt feature/name
+    User->>Shell: tm feature/name
     Shell->>CLI: treeman create feature/name
     CLI->>Git: detect main worktree and default branch
     CLI->>Git: fetch origin default branch

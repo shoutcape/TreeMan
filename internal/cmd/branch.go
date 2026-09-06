@@ -33,7 +33,7 @@ and open MRs/PRs.
 Shell integration changes directory to the new worktree; without it, the
 path is printed to stdout. With --exec, TreeMan runs the given command in
 the new worktree instead.`,
-		Aliases: []string{"wtb"},
+		Aliases: commandAliases("branch"),
 		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var query string

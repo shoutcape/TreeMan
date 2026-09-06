@@ -185,7 +185,7 @@ if ! command -v fzf >/dev/null 2>&1; then
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
-  print_warn "gh is not installed. The 'wtb', 'wtpr', and 'wtmr' commands require it for GitHub repos."
+  print_warn "gh is not installed. The 'tmb', 'tmpr', and 'tmmr' commands require it for GitHub repos."
   echo "    Install it from: https://cli.github.com/"
 fi
 
@@ -198,10 +198,11 @@ printf '%sReload your shell to start using it:%s\n' "$MUTED" "$RESET"
 print_command "source $SHELL_RC"
 echo ""
 print_title "Usage"
-printf '  %swt%s  <branch-name>    Create a new worktree + branch\n' "$SUCCESS" "$RESET"
-printf '  %swtb%s [query]          Check out a remote branch into a worktree\n' "$SUCCESS" "$RESET"
-printf '  %swtpr%s [pr-number]     Create a review worktree from a GitHub PR\n' "$SUCCESS" "$RESET"
-printf '  %swtmr%s [pr-number]     Create a review worktree from a GitLab MR\n' "$SUCCESS" "$RESET"
-printf '  %swts%s                  Switch between worktrees (requires fzf)\n' "$SUCCESS" "$RESET"
-printf '  %swtl%s                  List worktrees and their state\n' "$SUCCESS" "$RESET"
-printf '  %swtd%s [query]          Delete a worktree and its branch (requires fzf)\n' "$SUCCESS" "$RESET"
+printf '  %stm%s  <branch-name>    Create a new worktree + branch\n' "$SUCCESS" "$RESET"
+printf '  %stmb%s [query]          Check out a remote branch into a worktree\n' "$SUCCESS" "$RESET"
+printf '  %stmpr%s [pr-number]     Create a review worktree from a GitHub PR\n' "$SUCCESS" "$RESET"
+printf '  %stmmr%s [pr-number]     Create a review worktree from a GitLab MR\n' "$SUCCESS" "$RESET"
+printf '  %stms%s                  Switch between worktrees (requires fzf)\n' "$SUCCESS" "$RESET"
+printf '  %stml%s                  List worktrees and their state\n' "$SUCCESS" "$RESET"
+printf '  %stmc%s                  Remove clean, merged worktrees\n' "$SUCCESS" "$RESET"
+printf '  %stmd%s [query]          Delete a worktree and its branch (requires fzf)\n' "$SUCCESS" "$RESET"

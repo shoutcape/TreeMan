@@ -202,12 +202,12 @@ if command -v fish >/dev/null 2>&1; then
     source "$argv[1]"
     set -gx PATH "$argv[3]" $PATH
     set -l origin (pwd)
-    wt fish-test "$argv[2]"
+    tm fish-test "$argv[2]"
     test (pwd) = "$argv[2]"; or exit 1
     cd "$origin"
     # --exec reports no destination, so the shell stays where it was. The
     # wrapper needs to know nothing about the flag to get this right.
-    wt fish-exec -x "echo $argv[2]"
+    tm fish-exec -x "echo $argv[2]"
     test (pwd) = "$origin"; or exit 1
     test -f "$argv[2]/fish-exec-ran"
   ' "$FISH_CONFIG" "$FISH_WRAPPER_TARGET" "$FISH_MOCK_BIN"
@@ -426,7 +426,7 @@ git -C "$PR_SOURCE_REPO" push -u origin feature/review-beta >/dev/null
 git -C "$PR_SOURCE_REPO" push origin HEAD:refs/pull/124/head >/dev/null
 
 # ---------------------------------------------------------------------------
-# worktree create — wt
+# worktree create — tm
 # ---------------------------------------------------------------------------
 
 echo "==> worktree create with setup skips"
@@ -447,7 +447,7 @@ git -C "$MAIN_REPO" commit -m "add setup fixtures" >/dev/null
 git -C "$MAIN_REPO" push origin main >/dev/null
 
 cd "$MAIN_REPO"
-wt feature/skip-setup --skip-env --skip-database --skip-deps --skip-hooks
+tm feature/skip-setup --skip-env --skip-database --skip-deps --skip-hooks
 assert_exists "$SKIP_WT"
 assert_exists "$SKIP_WT/.env"
 assert_missing "$SKIP_WT/.env.copy-test"
@@ -459,8 +459,8 @@ echo "==> worktree create"
 
 cd "$MAIN_REPO"
 # Unattended creation must not run repository hooks without explicit consent.
-if wt feature/unapproved </dev/null >"$TMP_DIR/unapproved-output" 2>&1; then
-  fail "wt should require hook approval"
+if tm feature/unapproved </dev/null >"$TMP_DIR/unapproved-output" 2>&1; then
+  fail "tm should require hook approval"
 fi
 assert_file_contains "$TMP_DIR/unapproved-output" "hook approval required"
 assert_missing "$MAIN_REPO/.worktrees/feature-unapproved"
@@ -468,38 +468,38 @@ if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/unapproved; 
   fail "Unapproved creation must not create a branch"
 fi
 
-wt feature/test --trust-hooks
+tm feature/test --trust-hooks
 assert_exists "$WORKTREE_REPO"
 assert_exists "$WORKTREE_REPO/hook-ran"
 assert_missing "$XDG_STATE_HOME/treeman/hook-approvals.json"
-[[ "$(pwd)" == "$WORKTREE_REPO" ]] || fail "Expected wt to cd into created worktree"
+[[ "$(pwd)" == "$WORKTREE_REPO" ]] || fail "Expected tm to cd into created worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/test \
   || fail "Expected feature/test branch to exist"
 
 # Guard: duplicate branch.
 cd "$MAIN_REPO"
-if wt feature/test >/dev/null 2>&1; then
-  fail "wt should reject duplicate branch names"
+if tm feature/test >/dev/null 2>&1; then
+  fail "tm should reject duplicate branch names"
 fi
 
 # Guard: invalid branch name.
-if wt "bad name" >/dev/null 2>&1; then
-  fail "wt should reject branch names with spaces"
+if tm "bad name" >/dev/null 2>&1; then
+  fail "tm should reject branch names with spaces"
 fi
 
 # ---------------------------------------------------------------------------
-# review worktree create — wtpr (GitHub, explicit number)
+# review worktree create — tmpr (GitHub, explicit number)
 # ---------------------------------------------------------------------------
 
-echo "==> review worktree create (GitHub wtpr)"
+echo "==> review worktree create (GitHub tmpr)"
 
 cd "$MAIN_REPO"
 export MOCK_GH_VIEW_123='{"number":123,"title":"Alpha review","head":{"ref":"feature/review-alpha","repo":{"owner":{"login":"shoutcape"}}}}'
-wtpr 123 --trust-hooks
+tmpr 123 --trust-hooks
 assert_exists "$REVIEW_WT_ALPHA"
 assert_exists "$REVIEW_WT_ALPHA/hook-ran"
 assert_exists "$REVIEW_WT_ALPHA/review-alpha.txt"
-[[ "$(pwd)" == "$REVIEW_WT_ALPHA" ]] || fail "Expected wtpr to cd into created review worktree"
+[[ "$(pwd)" == "$REVIEW_WT_ALPHA" ]] || fail "Expected tmpr to cd into created review worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/review-alpha \
   || fail "Expected feature/review-alpha branch"
 # Verify upstream is set correctly.
@@ -509,25 +509,25 @@ UPSTREAM=$(git -C "$REVIEW_WT_ALPHA" rev-parse --abbrev-ref --symbolic-full-name
 
 # Guard: non-numeric PR number.
 cd "$MAIN_REPO"
-if wtpr nope >/dev/null 2>&1; then
-  fail "wtpr should reject non-numeric input"
+if tmpr nope >/dev/null 2>&1; then
+  fail "tmpr should reject non-numeric input"
 fi
 
 # ---------------------------------------------------------------------------
-# review picker — wtmr (GitHub, fzf selection)
+# review picker — tmmr (GitHub, fzf selection)
 # ---------------------------------------------------------------------------
 
-echo "==> review picker (GitHub wtmr fzf)"
+echo "==> review picker (GitHub tmmr fzf)"
 
 cd "$MAIN_REPO"
 export MOCK_GH_VIEW_124='{"number":124,"title":"Beta review","head":{"ref":"feature/review-beta","repo":{"owner":{"login":"shoutcape"}}}}'
 export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":123,"title":"Alpha review","headRefName":"feature/review-alpha"},{"number":124,"title":"Beta review","headRefName":"feature/review-beta"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 # FZF_CHOICE=3 selects the second data row (row 1 = header, row 2 = #123, row 3 = #124).
 export FZF_CHOICE=3
-wtmr --trust-hooks
+tmmr --trust-hooks
 assert_exists "$REVIEW_WT_BETA"
 assert_exists "$REVIEW_WT_BETA/review-beta.txt"
-[[ "$(pwd)" == "$REVIEW_WT_BETA" ]] || fail "Expected wtmr to cd into created review worktree"
+[[ "$(pwd)" == "$REVIEW_WT_BETA" ]] || fail "Expected tmmr to cd into created review worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/review-beta \
   || fail "Expected feature/review-beta branch"
 unset FZF_CHOICE
@@ -606,7 +606,7 @@ if PATH="$NO_JQ_PATH" command -v jq >/dev/null 2>&1; then
   fail "Expected jq to be absent from GitLab test PATH"
 fi
 
-echo "==> review worktree create (GitLab wtmr)"
+echo "==> review worktree create (GitLab tmmr)"
 
 cd "$GITLAB_MAIN_REPO"
 export _TREEMAN_FORGE="gitlab"
@@ -614,27 +614,27 @@ unset _TREEMAN_GH_REPO
 export _TREEMAN_REMOTE_URL="git@gitlab.company.com:acme/frontend/gl-project.git"
 export MOCK_GLAB_VIEW_42='{"iid":42,"title":"Gamma MR","source_branch":"feature/mr-gamma"}'
 
-PATH="$NO_JQ_PATH" wtmr 42
+PATH="$NO_JQ_PATH" tmmr 42
 assert_exists "$GITLAB_REVIEW_WT"
 assert_exists "$GITLAB_REVIEW_WT/gamma.txt"
-[[ "$(pwd)" == "$GITLAB_REVIEW_WT" ]] || fail "Expected wtmr to cd into GitLab review worktree"
+[[ "$(pwd)" == "$GITLAB_REVIEW_WT" ]] || fail "Expected tmmr to cd into GitLab review worktree"
 git -C "$GITLAB_MAIN_REPO" show-ref --verify --quiet refs/heads/feature/mr-gamma \
   || fail "Expected feature/mr-gamma branch"
 
-echo "==> branch worktree create (GitLab wtb without jq)"
+echo "==> branch worktree create (GitLab tmb without jq)"
 
 cd "$GITLAB_MAIN_REPO"
 export MOCK_GLAB_BRANCHES='[{"name":"feature/gitlab-remote-only","commit":{"committed_date":"2026-01-01T00:00:00Z"}},{"name":"main","commit":{"committed_date":"2026-01-01T00:00:00Z"}}]'
 export MOCK_GLAB_LIST='[]'
-PATH="$NO_JQ_PATH" wtb feature/gitlab-remote-only
+PATH="$NO_JQ_PATH" tmb feature/gitlab-remote-only
 assert_exists "$GITLAB_BRANCH_WT"
 assert_exists "$GITLAB_BRANCH_WT/gitlab-remote-only.txt"
-[[ "$(pwd)" == "$GITLAB_BRANCH_WT" ]] || fail "Expected wtb to cd into GitLab branch worktree"
+[[ "$(pwd)" == "$GITLAB_BRANCH_WT" ]] || fail "Expected tmb to cd into GitLab branch worktree"
 
 # Guard: non-numeric MR number.
 cd "$GITLAB_MAIN_REPO"
-if wtmr nope >/dev/null 2>&1; then
-  fail "wtmr should reject non-numeric input for GitLab"
+if tmmr nope >/dev/null 2>&1; then
+  fail "tmmr should reject non-numeric input for GitLab"
 fi
 
 # Restore GitHub forge overrides for remaining tests.
@@ -645,7 +645,7 @@ unset _TREEMAN_REMOTE_URL
 cd "$MAIN_REPO"
 
 # ---------------------------------------------------------------------------
-# branch worktree — wtb (forge API, exact match)
+# branch worktree — tmb (forge API, exact match)
 # ---------------------------------------------------------------------------
 
 echo "==> branch worktree (exact match)"
@@ -664,11 +664,11 @@ export MOCK_GH_BRANCHES='[{"name":"feature/remote-only","protected":false,"commi
 export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 
 cd "$MAIN_REPO"
-wtb feature/remote-only --trust-hooks
+tmb feature/remote-only --trust-hooks
 assert_exists "$BRANCH_WT"
 assert_exists "$BRANCH_WT/hook-ran"
 assert_exists "$BRANCH_WT/remote-only.txt"
-[[ "$(pwd)" == "$BRANCH_WT" ]] || fail "Expected wtb to cd into created branch worktree"
+[[ "$(pwd)" == "$BRANCH_WT" ]] || fail "Expected tmb to cd into created branch worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/remote-only \
   || fail "Expected feature/remote-only branch to exist locally"
 # Verify upstream is set.
@@ -678,12 +678,12 @@ UPSTREAM=$(git -C "$BRANCH_WT" rev-parse --abbrev-ref --symbolic-full-name @{ups
 
 # Guard: branch already exists locally (re-running same command should fail).
 cd "$MAIN_REPO"
-if wtb feature/remote-only >/dev/null 2>&1; then
-  fail "wtb should reject branches that already exist locally"
+if tmb feature/remote-only >/dev/null 2>&1; then
+  fail "tmb should reject branches that already exist locally"
 fi
 
 # ---------------------------------------------------------------------------
-# branch worktree — wtb (fzf picker)
+# branch worktree — tmb (fzf picker)
 # ---------------------------------------------------------------------------
 
 echo "==> branch worktree (fzf picker)"
@@ -704,16 +704,16 @@ export MOCK_GH_BRANCH_PRS='feature/picker-test=99'
 cd "$MAIN_REPO"
 # FZF_CHOICE=2 picks the first data row (row 1 = header).
 export FZF_CHOICE=2
-wtb --trust-hooks
+tmb --trust-hooks
 assert_exists "$BRANCH_WT_PICKER"
-[[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected wtb picker to cd into created worktree"
+[[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected tmb picker to cd into created worktree"
 unset FZF_CHOICE
 unset MOCK_GH_BRANCHES
 unset MOCK_GH_BRANCH_PRS
 unset MOCK_GH_GRAPHQL
 
 # ---------------------------------------------------------------------------
-# branch worktree — wtb (selection while the branch list is still arriving)
+# branch worktree — tmb (selection while the branch list is still arriving)
 # ---------------------------------------------------------------------------
 
 echo "==> branch worktree (streaming picker, early selection)"
@@ -739,10 +739,10 @@ export FZF_CHOICE=2
 
 cd "$MAIN_REPO"
 picker_started=$SECONDS
-wtb --trust-hooks
+tmb --trust-hooks
 picker_elapsed=$((SECONDS - picker_started))
 assert_exists "$BRANCH_WT_EARLY"
-[[ "$(pwd)" == "$BRANCH_WT_EARLY" ]] || fail "Expected wtb to cd into the worktree picked from a streamed row"
+[[ "$(pwd)" == "$BRANCH_WT_EARLY" ]] || fail "Expected tmb to cd into the worktree picked from a streamed row"
 (( picker_elapsed < MOCK_GH_PAGE2_DELAY )) \
   || fail "Expected the selection to cancel the branch page still in flight (took ${picker_elapsed}s)"
 
@@ -806,7 +806,7 @@ if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/test; then
 fi
 
 # ---------------------------------------------------------------------------
-# switch — wts (fzf mock, selects first non-current entry)
+# switch — tms (fzf mock, selects first non-current entry)
 # ---------------------------------------------------------------------------
 
 echo "==> worktree switch"
@@ -815,24 +815,52 @@ cd "$MAIN_REPO"
 # FZF_CHOICE=2 picks the second display row, which is a non-main worktree.
 # (Row 1 = MAIN_REPO itself, row 2 = first linked worktree.)
 export FZF_CHOICE=2
-wts
+tms
 # After switching we should be in a different worktree.
-[[ "$(pwd)" != "$MAIN_REPO" ]] || fail "Expected wts to cd into a different worktree"
+[[ "$(pwd)" != "$MAIN_REPO" ]] || fail "Expected tms to cd into a different worktree"
 unset FZF_CHOICE
 
 # ---------------------------------------------------------------------------
-# delete current worktree -- wtd returns to the main worktree
+# delete current worktree -- tmd returns to the main worktree
 # ---------------------------------------------------------------------------
 
 echo "==> delete current worktree"
 
 CURRENT_WORKTREE=$(pwd)
 CURRENT_BRANCH=$(git branch --show-current)
-wtd --path "$CURRENT_WORKTREE" --branch "$CURRENT_BRANCH" --yes --force
-[[ "$(pwd)" == "$MAIN_REPO" ]] || fail "Expected wtd to return to the main worktree"
+tmd --path "$CURRENT_WORKTREE" --branch "$CURRENT_BRANCH" --yes --force
+[[ "$(pwd)" == "$MAIN_REPO" ]] || fail "Expected tmd to return to the main worktree"
 assert_missing "$CURRENT_WORKTREE"
 if git -C "$MAIN_REPO" show-ref --verify --quiet "refs/heads/$CURRENT_BRANCH"; then
   fail "Expected $CURRENT_BRANCH branch to be deleted"
+fi
+
+# ---------------------------------------------------------------------------
+# backward compatibility -- the wt* shortcuts still reach the tm* commands
+# ---------------------------------------------------------------------------
+
+echo "==> wt* compatibility shortcuts"
+
+cd "$MAIN_REPO"
+COMPAT_WT="$MAIN_REPO/.worktrees/feature-wt-compat"
+wt feature/wt-compat --skip-env --skip-database --skip-deps --skip-hooks
+assert_exists "$COMPAT_WT"
+[[ "$(pwd)" == "$COMPAT_WT" ]] || fail "Expected wt to cd into created worktree"
+
+cd "$MAIN_REPO"
+# FZF_CHOICE=2 picks the second display row, which is a non-main worktree.
+export FZF_CHOICE=2
+wts
+[[ "$(pwd)" != "$MAIN_REPO" ]] || fail "Expected wts to cd into a different worktree"
+unset FZF_CHOICE
+
+cd "$MAIN_REPO"
+wtl >/dev/null || fail "Expected wtl to list worktrees"
+
+wtd --path "$COMPAT_WT" --branch feature/wt-compat --yes --force
+assert_missing "$COMPAT_WT"
+if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/wt-compat; then
+  fail "Expected feature/wt-compat branch to be deleted"
 fi
 
 # ---------------------------------------------------------------------------
@@ -847,7 +875,7 @@ printf '{"packageManager":"yarn@4.9.2"}\n' > package.json
 git add package.json
 git commit -m "use Corepack-managed Yarn" >/dev/null
 git push origin main >/dev/null
-wt feature/yarn-smoke --skip-env --skip-database --skip-hooks
+tm feature/yarn-smoke --skip-env --skip-database --skip-hooks
 assert_exists "$YARN_WORKTREE_REPO"
 assert_file_contains "$COREPACK_CALLS" "yarn install"
 
@@ -859,18 +887,18 @@ echo "==> worktree exec (-x)"
 
 cd "$MAIN_REPO"
 EXEC_WT="$MAIN_REPO/.worktrees/feature-exec-smoke"
-wt feature/exec-smoke --skip-env --skip-database --skip-deps --skip-hooks -x 'pwd > exec-marker; pwd'
+tm feature/exec-smoke --skip-env --skip-database --skip-deps --skip-hooks -x 'pwd > exec-marker; pwd'
 assert_exists "$EXEC_WT/exec-marker"
 assert_file_contains "$EXEC_WT/exec-marker" "$EXEC_WT"
-assert_eq "shell directory after wt -x" "$MAIN_REPO" "$(pwd)"
+assert_eq "shell directory after tm -x" "$MAIN_REPO" "$(pwd)"
 
 # switch selects by exact branch name, so no picker is involved.
-wts feature/exec-smoke -x 'pwd > switch-exec-marker; pwd'
+tms feature/exec-smoke -x 'pwd > switch-exec-marker; pwd'
 assert_file_contains "$EXEC_WT/switch-exec-marker" "$EXEC_WT"
-assert_eq "shell directory after wts -x" "$MAIN_REPO" "$(pwd)"
+assert_eq "shell directory after tms -x" "$MAIN_REPO" "$(pwd)"
 
 # An --exec run that names no command fails before it creates anything.
-if wt feature/exec-empty -x '' 2>/dev/null; then
+if tm feature/exec-empty -x '' 2>/dev/null; then
   fail "Expected an empty --exec to fail"
 fi
 assert_missing "$MAIN_REPO/.worktrees/feature-exec-empty"
@@ -885,7 +913,7 @@ assert_eq "shell directory after a bare run" "$MAIN_REPO" "$(pwd)"
 # destination file, so it prints its path to stdout and the outer shell is not
 # steered anywhere when the launched command exits.
 NESTED_WT="$MAIN_REPO/.worktrees/feature-exec-nested"
-wt feature/exec-outer --skip-env --skip-database --skip-deps --skip-hooks \
+tm feature/exec-outer --skip-env --skip-database --skip-deps --skip-hooks \
   -x 'treeman create feature/exec-nested --skip-env --skip-database --skip-deps --skip-hooks > nested-stdout'
 assert_file_contains "$MAIN_REPO/.worktrees/feature-exec-outer/nested-stdout" "$NESTED_WT"
 assert_eq "shell directory after a nested treeman" "$MAIN_REPO" "$(pwd)"
@@ -919,7 +947,7 @@ LIST_JSON="$(command treeman list --json)"
 cat > "$MAIN_REPO/.treeman.toml" <<'EOF'
 worktree_dir = ".worktrees"
 EOF
-wts external/smoke
+tms external/smoke
 assert_eq "switch after worktree_dir change" "$EXTERNAL_WT" "$(pwd)"
 cd "$MAIN_REPO"
 command treeman delete --path "$EXTERNAL_WT" --branch external/smoke --yes
