@@ -32,21 +32,51 @@ func approveCreationHooks(cmd *cobra.Command, paths creationPaths, opts creation
 	if opts.skipHooks || len(commands) == 0 {
 		return paths, nil
 	}
-	if !opts.trustHooks {
-		if err := requireHookApproval(cmd, paths, commands); err != nil {
-			return paths, err
-		}
+	approved, err := approveHooks(cmd, paths.projectPaths, commands, opts.trustHooks,
+		fmt.Sprintf("Hooks run in the new worktree under %q", paths.parentDir))
+	if err != nil {
+		return paths, err
 	}
-	paths.hooks = hookApproval{commands: slices.Clone(commands)}
+	paths.hooks = approved
 	return paths, nil
 }
 
-func requireHookApproval(cmd *cobra.Command, paths creationPaths, commands []string) error {
-	scope, err := hooks.NewApprovalScope(paths.protected.CommonDir, paths.configPath, hooks.PostCreatePhase, commands)
+func approveHooks(cmd *cobra.Command, project projectPaths, commands []string, trust bool, location string) (hookApproval, error) {
+	if !trust {
+		if err := requireHookApprovalFor(cmd, hookApprovalRequest{
+			commonDir:  project.protected.CommonDir,
+			configPath: project.configPath,
+			commands:   commands,
+			location:   location,
+		}); err != nil {
+			return hookApproval{}, err
+		}
+	}
+	return hookApproval{commands: slices.Clone(commands)}, nil
+}
+
+// hookApprovalRequest is one request for consent to run hook commands.
+//
+// Only the sentence describing where the hooks will run differs between
+// creating a worktree and repairing one. The scope does not: the same commands
+// in the same repository under the same configuration are the same scope, so
+// an approval granted at creation is still the approval a rerun matches.
+type hookApprovalRequest struct {
+	commonDir  string
+	configPath string
+	commands   []string
+	// location tells the user where the commands will run, in their own
+	// terms. Consent to run something in a worktree that already holds work
+	// is not the same question as consent to run it in a new one.
+	location string
+}
+
+func requireHookApprovalFor(cmd *cobra.Command, req hookApprovalRequest) error {
+	scope, err := hooks.NewApprovalScope(req.commonDir, req.configPath, hooks.PostCreatePhase, req.commands)
 	if err != nil {
 		return err
 	}
-	store, err := state.NewHookApprovalStore(paths.protected.CommonDir)
+	store, err := state.NewHookApprovalStore(req.commonDir)
 	if err != nil {
 		return fmt.Errorf("hook approval state: %w", err)
 	}
@@ -64,7 +94,7 @@ func requireHookApproval(cmd *cobra.Command, paths creationPaths, commands []str
 	}
 	out := cmd.ErrOrStderr()
 	writeHookScope(out, scope)
-	fmt.Fprintf(out, "Hooks run in the new worktree under %q\n", paths.parentDir)
+	fmt.Fprintln(out, req.location)
 	fmt.Fprintln(out, "Approval permits these command strings, not just their current script contents. Hooks are not sandboxed.")
 	granted, err := confirmYN(cmd, "Approve and save this exact scope for future use? [y/N] ", unavailable)
 	if err != nil {

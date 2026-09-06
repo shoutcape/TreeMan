@@ -3,6 +3,7 @@
 package fsutil
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,4 +53,24 @@ func TestAtomicWriteFileRenameFailurePreservesTargetAndCleansTemporaryFile(t *te
 
 func TestSyncDirectory(t *testing.T) {
 	require.NoError(t, SyncDirectory(t.TempDir()))
+}
+
+func TestAtomicWriteFile_DirectorySyncFailureKeepsReplacementAndCleansTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	require.NoError(t, os.WriteFile(path, []byte("previous"), 0o600))
+	syncErr := fmt.Errorf("directory sync failed")
+
+	err := atomicWriteFile(path, []byte("prepared"), 0o640, func(string) error {
+		return syncErr
+	})
+
+	require.ErrorIs(t, err, syncErr)
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("prepared"), data)
+	entries, readErr := os.ReadDir(dir)
+	require.NoError(t, readErr)
+	assert.Len(t, entries, 1)
+	assert.Equal(t, "state", entries[0].Name())
 }

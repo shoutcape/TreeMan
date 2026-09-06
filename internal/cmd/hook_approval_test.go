@@ -243,9 +243,12 @@ func approvalTestPaths(t *testing.T, commands []string) creationPaths {
 	configPath := filepath.Join(root, ".treeman.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
 	return creationPaths{
-		mainRoot: root, path: filepath.Join(root, ".worktrees", "test"), configPath: configPath,
-		parentDir: filepath.Join(root, ".worktrees"),
-		protected: structProtected(root), config: config.Config{Hooks: &config.HooksConfig{PostCreate: commands}},
+		projectPaths: projectPaths{
+			mainRoot: root, configPath: configPath,
+			parentDir: filepath.Join(root, ".worktrees"),
+			protected: structProtected(root), config: config.Config{Hooks: &config.HooksConfig{PostCreate: commands}},
+		},
+		path: filepath.Join(root, ".worktrees", "test"),
 	}
 }
 

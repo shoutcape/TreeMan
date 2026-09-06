@@ -2,23 +2,79 @@
 package envfile
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/shoutcape/treeman/internal/fsutil"
 )
 
-// CopyResult holds the outcome of a Copy call.
-type CopyResult struct {
-	// Copied is the list of filenames (basename only) that were copied.
-	Copied []string
+// Copying refuses anything that is not a regular file. A symlink would send
+// the write somewhere the caller never named, and a copy cannot mean anything
+// for a directory, a socket, or a device.
+var (
+	ErrSourceNotRegular      = errors.New("source is not a regular file")
+	ErrDestinationNotRegular = errors.New("destination is not a regular file")
+)
+
+// CopyOptions selects which files to write and whether to replace existing files.
+type CopyOptions struct {
+	// Refresh replaces an existing regular destination file with the source.
+	// Without it the destination keeps its contents, because a worktree .env
+	// holds edits the copy source cannot supply again.
+	Refresh bool
+	// Skip names files that are never written, even if the destination is
+	// absent. A blocked file does not hold back copying the others.
+	Skip []string
+	// Prepare transforms source data before it is written to a destination.
+	// It is called once for each file that will be written.
+	Prepare func(name string, data []byte) ([]byte, error)
 }
 
-// Copy finds all .env* files in src and copies them to dest.
-// It silently skips if no .env* files exist.
-// Returns the filenames that were copied and any error encountered.
+// CopyFailure names one file that could not be copied, and why.
+type CopyFailure struct {
+	Name string
+	Err  error
+}
+
+func (failure CopyFailure) Error() string {
+	return fmt.Sprintf("%s: %v", failure.Name, failure.Err)
+}
+
+func (failure CopyFailure) Unwrap() error { return failure.Err }
+
+// CopyResult holds the outcome of a copy, one bucket per outcome, named by
+// basename. A single run can populate all four.
+type CopyResult struct {
+	Copied    []string
+	Preserved []string
+	Skipped   []string
+	Failed    []CopyFailure
+}
+
+// Copy finds all .env* files in src and copies them to dest, replacing
+// destination files that already exist. Worktree creation uses this: the
+// destination is new, so there is nothing there to preserve.
 func Copy(src, dest string) (CopyResult, error) {
+	return CopyWith(src, dest, CopyOptions{Refresh: true})
+}
+
+// CopyWith copies every .env* file in src to dest under opts.
+//
+// A returned error means no file was examined, because the source directory
+// could not be read. Anything that goes wrong with an individual file becomes
+// a CopyFailure in the result instead, so one unreadable file cannot hide the
+// files that copied.
+func CopyWith(src, dest string, opts CopyOptions) (CopyResult, error) {
+	return copyWith(src, dest, opts, fsutil.AtomicWriteFile)
+}
+
+type atomicWriter func(path string, data []byte, mode os.FileMode) error
+
+func copyWith(src, dest string, opts CopyOptions, writeAtomic atomicWriter) (CopyResult, error) {
 	files, err := Files(src)
 	if err != nil {
 		return CopyResult{}, err
@@ -26,13 +82,19 @@ func Copy(src, dest string) (CopyResult, error) {
 
 	var result CopyResult
 	for _, name := range files {
-		srcPath := filepath.Join(src, name)
-		destPath := filepath.Join(dest, name)
-
-		if err := copyFile(srcPath, destPath); err != nil {
-			return result, fmt.Errorf("envfile: copying %s: %w", name, err)
+		if slices.Contains(opts.Skip, name) {
+			result.Skipped = append(result.Skipped, name)
+			continue
 		}
-		result.Copied = append(result.Copied, name)
+		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts, writeAtomic)
+		switch {
+		case err != nil:
+			result.Failed = append(result.Failed, CopyFailure{Name: name, Err: err})
+		case outcome == outcomePreserved:
+			result.Preserved = append(result.Preserved, name)
+		default:
+			result.Copied = append(result.Copied, name)
+		}
 	}
 	return result, nil
 }
@@ -53,25 +115,85 @@ func Files(dir string) ([]string, error) {
 	return files, nil
 }
 
-// copyFile copies a single file from src to dst, preserving permissions.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
+type copyOutcome int
 
-	info, err := in.Stat()
+const (
+	outcomeCopied copyOutcome = iota
+	outcomePreserved
+)
+
+// copyFile applies the policy to one file. It never removes a destination and
+// never writes to one that is not a regular file.
+func copyFile(src, dest string, opts CopyOptions, writeAtomic atomicWriter) (copyOutcome, error) {
+	// Lstat, not Stat: a symlink named .env must be rejected, not followed.
+	sourceInfo, err := os.Lstat(src)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	if !sourceInfo.Mode().IsRegular() {
+		return 0, ErrSourceNotRegular
 	}
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
-	if err != nil {
-		return err
+	destinationInfo, err := os.Lstat(dest)
+	mode := sourceInfo.Mode().Perm()
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		// Exclusive creation below protects against a concurrent writer.
+	case err != nil:
+		return 0, err
+	case !destinationInfo.Mode().IsRegular():
+		return 0, ErrDestinationNotRegular
+	case !opts.Refresh:
+		return outcomePreserved, nil
+	default:
+		// Preserve a destination's tightened permissions during replacement.
+		mode = destinationInfo.Mode().Perm()
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, in)
-	return err
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return 0, err
+	}
+	if opts.Prepare != nil {
+		data, err = opts.Prepare(filepath.Base(src), data)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if destinationInfo == nil {
+		return createFile(dest, data, mode, opts.Refresh)
+	}
+	if err := writeAtomic(dest, data, mode); err != nil {
+		return 0, err
+	}
+	return outcomeCopied, nil
+}
+
+// createFile writes a destination that did not exist. Exclusive creation is
+// what makes preservation a guarantee rather than a check: a file that arrives
+// between the stat above and this open is reported, not overwritten.
+func createFile(dest string, data []byte, mode os.FileMode, refresh bool) (copyOutcome, error) {
+	file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if errors.Is(err, os.ErrExist) && !refresh {
+		return outcomePreserved, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	// The open mode is masked by umask; state the source permissions exactly.
+	err = file.Chmod(mode)
+	if err == nil {
+		_, err = file.Write(data)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		// A half-written .env is worse than a missing one: remove it so the
+		// next run copies the file instead of preserving the fragment.
+		os.Remove(dest)
+		return 0, err
+	}
+	return outcomeCopied, nil
 }

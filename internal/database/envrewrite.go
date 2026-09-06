@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,13 +12,16 @@ import (
 	"github.com/shoutcape/treeman/internal/fsutil"
 )
 
-const envFileName = ".env"
+// EnvFileName is the environment file that carries the database URI. It is
+// the one file a refresh has to protect, because it names the branch database
+// TreeMan owns.
+const EnvFileName = ".env"
 
 // ReadEnvValue reads the .env file in dir and returns the value of the given key.
 // Returns "" with no error if the file doesn't exist or the variable is not found.
 // Handles double-quoted and single-quoted values by stripping the quotes.
 func ReadEnvValue(dir, key string) (string, error) {
-	envPath := filepath.Join(dir, envFileName)
+	envPath := filepath.Join(dir, EnvFileName)
 
 	f, err := os.Open(envPath)
 	if err != nil {
@@ -28,7 +32,15 @@ func ReadEnvValue(dir, key string) (string, error) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	value, err := readEnvValue(f, key)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", envPath, err)
+	}
+	return value, nil
+}
+
+func readEnvValue(reader io.Reader, key string) (string, error) {
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -46,7 +58,7 @@ func ReadEnvValue(dir, key string) (string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("reading %s: %w", envPath, err)
+		return "", err
 	}
 
 	return "", nil
@@ -57,7 +69,7 @@ func ReadEnvValue(dir, key string) (string, error) {
 // comments, blank lines, and other variables) are preserved exactly.
 // Returns an error if the .env file doesn't exist or the key is not found.
 func RewriteEnvValue(dir, key, newValue string) error {
-	envPath := filepath.Join(dir, envFileName)
+	envPath := filepath.Join(dir, EnvFileName)
 
 	info, err := os.Lstat(envPath)
 	if err != nil {
@@ -71,6 +83,17 @@ func RewriteEnvValue(dir, key, newValue string) error {
 		return fmt.Errorf("reading %s: %w", envPath, err)
 	}
 
+	output, err := rewriteEnvValue(data, key, newValue)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.AtomicWriteFile(envPath, output, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("writing %s: %w", envPath, err)
+	}
+	return nil
+}
+
+func rewriteEnvValue(data []byte, key, newValue string) ([]byte, error) {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 
@@ -98,15 +121,10 @@ func RewriteEnvValue(dir, key, newValue string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("%s not found in %s", key, envPath)
+		return nil, fmt.Errorf("%s not found in %s", key, EnvFileName)
 	}
 
-	output := strings.Join(lines, "\n")
-	if err := fsutil.AtomicWriteFile(envPath, []byte(output), info.Mode().Perm()); err != nil {
-		return fmt.Errorf("writing %s: %w", envPath, err)
-	}
-
-	return nil
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 type envAssignment struct {

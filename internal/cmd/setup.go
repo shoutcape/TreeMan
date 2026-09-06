@@ -3,9 +3,11 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/config"
+	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
 	"github.com/shoutcape/treeman/internal/envrc"
@@ -43,6 +45,8 @@ func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, 
 		projectConfig: paths.config,
 		hooks:         paths.hooks,
 		options:       paths.options,
+		environment:   envReplace,
+		hooksSkipped:  "skipped (requested)",
 	})
 }
 
@@ -105,6 +109,14 @@ func creationSetupFlagsChanged(cmd *cobra.Command) bool {
 	return false
 }
 
+type envPolicy int
+
+const (
+	envReplace  envPolicy = iota // Creation replaces destination files.
+	envPreserve                  // Reruns preserve branch-local edits.
+	envRefresh                   // Explicit refresh guards owned database targets.
+)
+
 type worktreeSetup struct {
 	mainRoot     string
 	worktreePath string
@@ -116,6 +128,11 @@ type worktreeSetup struct {
 	projectConfig config.Config
 	hooks         hookApproval
 	options       creationSetupOptions
+	environment   envPolicy
+	// hooksSkipped explains a skipped hooks step in the caller's own terms. A
+	// rerun skips hooks by default, which the user did not ask for, so saying
+	// "requested" there would be wrong.
+	hooksSkipped string
 }
 
 type setupStatusKind int
@@ -187,7 +204,7 @@ func (summary setupSummary) failures() []string {
 }
 
 // runWorktreeSetup performs the common best-effort setup actions for every
-// newly created worktree and captures their results for a consistent summary.
+// created or existing worktree and captures their results for a consistent summary.
 func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setupSummary {
 	// Probe the source before copying so --skip-env and copy failures do not
 	// hide an .envrc that would otherwise be supplied to the worktree.
@@ -198,23 +215,12 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 
 	environmentStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipEnv {
-		result, err := envfile.Copy(setup.mainRoot, setup.worktreePath)
-		environmentStatus = skippedStatus("skipped (no environment files found)")
-		if err != nil {
-			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
-			environmentStatus = failedStatus(fmt.Sprintf("failed: %v", err))
-		} else if len(result.Copied) > 0 {
-			for _, f := range result.Copied {
-				fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Copied "+f))
-			}
-			fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", fmt.Sprintf("Copied %d env file(s) from main worktree.", len(result.Copied))))
-			environmentStatus = completedStatus(fmt.Sprintf("completed: copied %d file(s)", len(result.Copied)))
-		}
+		environmentStatus = setup.copyEnvironment(w, render)
 	}
 
 	databaseStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipDatabase {
-		databaseStatus = setupCreatedDatabase(w, render, setup.projectConfig, setup.worktreePath, setup.branch)
+		databaseStatus = setupWorktreeDatabase(w, render, setup)
 	}
 
 	dependenciesStatus := skippedStatus("skipped (requested)")
@@ -223,7 +229,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 	}
 	reportNestedModules(w, render, setup.worktreePath, setup.worktreeDir)
 
-	hooksStatus := skippedStatus("skipped (requested)")
+	hooksStatus := skippedStatus(setup.hooksSkipped)
 	if !setup.options.skipHooks {
 		hooksStatus = setup.hooks.run(w, render, setup.worktreePath)
 	}
@@ -234,6 +240,82 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 		dependencies:     dependenciesStatus,
 		database:         databaseStatus,
 		hooks:            hooksStatus,
+	}
+}
+
+// copyEnvironment copies the main worktree's .env* files under this run's
+// policy. Creation replaces every destination. A rerun preserves them unless
+// it was asked to refresh, and a refresh proves database ownership before it
+// replaces the one file that names the branch database.
+func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setupStatus {
+	options := envfile.CopyOptions{Refresh: setup.environment == envReplace || setup.environment == envRefresh}
+
+	var ownedDatabase string
+	if setup.environment == envRefresh {
+		// --skip-database skips provisioning, not protection of owned data.
+		options.Prepare = func(name string, source []byte) ([]byte, error) {
+			if name != database.EnvFileName {
+				return source, nil
+			}
+			prepared, owned, err := database.PrepareRefresh(setup.worktreePath, setup.branch,
+				setup.projectConfig.DatabaseEnvKey(), setup.projectConfig.DatabaseContainer(), source)
+			ownedDatabase = owned
+			return prepared, err
+		}
+	}
+
+	result, err := envfile.CopyWith(setup.mainRoot, setup.worktreePath, options)
+	if err != nil {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy env files: %v", err)))
+		return failedStatus(fmt.Sprintf("failed: %v", err))
+	}
+	status := reportEnvironmentCopy(w, render, result)
+
+	if ownedDatabase != "" && slices.Contains(result.Copied, database.EnvFileName) {
+		fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Kept database "+ownedDatabase+" in "+database.EnvFileName+"."))
+	}
+	return status
+}
+
+// reportEnvironmentCopy prints one line per file and reduces the copy to a
+// single status. Copying, preserving, skipping, and failing are independent outcomes, so
+// the status names each one that happened rather than reporting only the worst.
+func reportEnvironmentCopy(w io.Writer, render ui.Renderer, result envfile.CopyResult) setupStatus {
+	for _, name := range result.Copied {
+		fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Copied "+name))
+	}
+	for _, name := range result.Preserved {
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "Preserved existing "+name+"."))
+	}
+	for _, name := range result.Skipped {
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "Skipped "+name+"."))
+	}
+	for _, failure := range result.Failed {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy %s: %v", failure.Name, failure.Err)))
+	}
+
+	var counts []string
+	for _, count := range []struct {
+		label string
+		n     int
+	}{
+		{"copied", len(result.Copied)},
+		{"preserved", len(result.Preserved)},
+		{"skipped", len(result.Skipped)},
+		{"failed", len(result.Failed)},
+	} {
+		if count.n > 0 {
+			counts = append(counts, fmt.Sprintf("%s %d", count.label, count.n))
+		}
+	}
+
+	switch {
+	case len(counts) == 0:
+		return skippedStatus("skipped (no environment files found)")
+	case len(result.Failed) > 0:
+		return failedStatus("completed: " + strings.Join(counts, ", "))
+	default:
+		return completedStatus("completed: " + strings.Join(counts, ", "))
 	}
 }
 

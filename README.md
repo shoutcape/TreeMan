@@ -134,6 +134,7 @@ Use `treeman list --json` for machine-readable worktree state and `treeman docto
 | Native command                      | Shell wrapper                    | Purpose                                      |
 | ----------------------------------- | -------------------------------- | -------------------------------------------- |
 | `treeman create <branch>`           | `tm <branch>`                    | Create a local branch and worktree           |
+| `treeman setup [target]`            | None                             | Rerun project setup in an existing worktree  |
 | `treeman branch [query]`            | `tmb [query]`                    | Add a remote branch worktree                 |
 | `treeman review [number]`           | `tmpr [number]`, `tmmr [number]` | Add a pull request or merge request worktree |
 | `treeman switch [query]`            | `tms [query]`                    | Select a worktree path                       |

@@ -153,6 +153,18 @@ func CreateDatabase(container, user, dbName string) error {
 	return nil
 }
 
+// DatabaseExists reports whether a database is present. The question goes to
+// the maintenance database rather than to the database itself, so a database
+// that exists but refuses connections is still reported as present.
+func DatabaseExists(container, user, dbName string) (bool, error) {
+	args := buildExistsArgs(container, user, dbName)
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("checking database %q failed: %s", dbName, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)) == "1", nil
+}
+
 // DropDatabases terminates active connections and drops a set of owned
 // databases. Each -c is a separate request: PostgreSQL cannot run DROP
 // DATABASE inside the transaction used for a multi-statement request.
@@ -175,6 +187,18 @@ func buildPsqlArgs(container, user, dbName string) []string {
 		"psql", "-U", user, "-d", "postgres",
 		"-v", "ON_ERROR_STOP=1",
 		"-c", fmt.Sprintf("CREATE DATABASE %s", quoteIdentifier(dbName)),
+	}
+}
+
+// buildExistsArgs constructs a docker exec request that prints exactly "1"
+// when the database exists and nothing when it does not. -tA strips the
+// headers and alignment psql would otherwise add.
+func buildExistsArgs(container, user, dbName string) []string {
+	return []string{
+		"exec", container,
+		"psql", "-U", user, "-d", "postgres",
+		"-v", "ON_ERROR_STOP=1",
+		"-tAc", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname = %s", quoteLiteral(dbName)),
 	}
 }
 

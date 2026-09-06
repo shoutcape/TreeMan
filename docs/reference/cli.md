@@ -11,6 +11,7 @@ Shell integration uses that destination to change the current interactive shell 
 | Native command | Shell wrapper | Purpose |
 | --- | --- | --- |
 | `treeman create <branch>` | `tm` | Create a branch and worktree |
+| `treeman setup [target]` | None | Rerun project setup in an existing worktree |
 | `treeman branch [query]` | `tmb` | Add a remote branch worktree |
 | `treeman review [number]` | `tmpr`, `tmmr` | Add a PR or MR worktree |
 | `treeman switch [query]` | `tms` | Select a worktree path |
@@ -75,6 +76,105 @@ When `.treeman.toml` contains post-create hooks, TreeMan requests approval
 before fetch or worktree creation. `--trust-hooks` authorizes hooks only for
 this invocation. `--skip-hooks` skips hooks and approval state. `--yes` does
 not authorize hooks. Read [Hook Approval](hooks.md).
+
+## `setup`
+
+```text
+treeman setup [<branch-or-path>] [--refresh-env] [--rerun-hooks] [--trust-hooks] \
+  [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+```
+
+Run project setup again in a worktree that exists. Use `setup` to repair an
+incomplete setup or to install dependencies again.
+
+`setup` is not a reset. It never creates, removes, or recreates a worktree or a
+branch. It never changes the checked-out branch. It never drops or recreates a
+database.
+
+### Select the Target
+
+Target selection is exact. TreeMan does not offer a picker and does not match
+by prefix.
+
+- With no argument, TreeMan selects the worktree that contains the current
+  directory. A subdirectory of that worktree also works.
+- With an argument, TreeMan matches an exact branch name or a worktree path.
+- TreeMan resolves a relative path against the current directory. It compares
+  canonical paths, therefore a symlinked path also matches.
+
+TreeMan refuses these targets:
+
+- The main worktree.
+- A worktree with a detached `HEAD`.
+- A path that is not a registered linked worktree.
+- A registered worktree whose directory is missing.
+- An argument that matches more than one worktree.
+
+TreeMan reads `.treeman.toml` from the main worktree. It does not read a copy
+of that file in the selected branch.
+
+### Flags
+
+| Flag | Effect |
+| --- | --- |
+| `--refresh-env` | Replace existing `.env*` files with the main worktree versions |
+| `--rerun-hooks` | Request `post_create` hooks. This flag does not authorize them |
+| `--trust-hooks` | Authorize hooks for this invocation only. Requires `--rerun-hooks` |
+| `--skip-env` | Skip the `.env*` copy |
+| `--skip-database` | Skip branch database setup |
+| `--skip-deps` | Skip dependency installation |
+| `--skip-hooks` | Skip hooks |
+
+TreeMan rejects these combinations before setup starts:
+
+- `--refresh-env --skip-env`
+- `--rerun-hooks --skip-hooks`
+- `--trust-hooks --skip-hooks`
+- `--trust-hooks` without `--rerun-hooks`
+
+### Environment Files
+
+A normal rerun copies each missing `.env*` file and keeps each file that
+exists. Use `--refresh-env` to replace them.
+
+A refresh keeps the database name that TreeMan owns. If TreeMan cannot prove
+that the replacement is safe, it skips that file entirely and prints a warning:
+an existing file stays unchanged, and an absent file is not created. The other
+environment files still refresh. Read
+[Environment Files](environment-and-state.md#environment-files).
+
+### Databases
+
+TreeMan verifies a database that it owns and uses it again. It does not create
+the database, drop it, or write the environment file.
+
+- A missing owned database is an error. TreeMan does not create it again.
+- An environment file that names a different database is an error. TreeMan
+  keeps that file.
+- An incomplete setup retries its recorded target. TreeMan never selects a
+  replacement database, container, or port.
+
+Read [Branch Databases](../integrations/postgresql.md).
+
+### Hooks
+
+`setup` skips hooks by default, even when a saved approval exists.
+`--rerun-hooks` requests them. Read [Hook Approval](hooks.md).
+
+### Output
+
+`setup` writes progress, warnings, and the summary to stderr. It writes nothing
+to stdout. It reports no destination directory, therefore it never changes the
+shell directory.
+
+A failed environment, database, dependency, or hook step is a warning. The
+other steps still run, and the summary reports each result. An invalid
+argument, an invalid target, an unreadable configuration file, a refused hook
+approval, or a busy setup lock is an error before setup starts.
+
+TreeMan runs one `setup` for each worktree at a time. A second run for the same
+worktree fails immediately. A run in a different worktree is not blocked. Read
+[Known Limitations](../known-limitations.md).
 
 ## `preflight`
 

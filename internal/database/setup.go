@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/fsutil"
 	"github.com/shoutcape/treeman/internal/git"
 )
 
@@ -12,51 +13,137 @@ func isPostgresURI(uri string) bool {
 	return strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://")
 }
 
+// SetupOptions describes one database setup run.
+type SetupOptions struct {
+	WorktreePath        string
+	Branch              string
+	EnvKey              string
+	ConfiguredContainer string
+	// Rerun permits verifying and reusing an active record instead of
+	// refusing it. Creation leaves it unset: a new worktree has nothing to
+	// reuse, so an existing record there means something is wrong.
+	Rerun bool
+}
+
 type SetupResult struct {
 	DBName  string
 	Skipped bool
+	// Reused reports that an active database was verified and left alone.
+	// Nothing was created, dropped, or rewritten.
+	Reused bool
 }
 
-func SetupBranchDB(worktreePath, branch, envKey, configuredContainer string) (SetupResult, error) {
-	return setupBranchDB(defaultBackend(), worktreePath, branch, envKey, configuredContainer)
+// Setup provisions or verifies the branch database for one worktree.
+func Setup(opts SetupOptions) (SetupResult, error) {
+	return setupDatabase(defaultBackend(), opts)
 }
 
-func setupBranchDB(backend Backend, worktreePath, branch, envKey, configuredContainer string) (SetupResult, error) {
-	targetInput, err := loadSetupTarget(worktreePath, envKey)
+func setupDatabase(backend Backend, opts SetupOptions) (SetupResult, error) {
+	store, worktreeID, record, err := readOnlyDatabaseOwnership(opts.WorktreePath)
+	if err != nil {
+		return SetupResult{}, err
+	}
+	if record != nil {
+		record, err = applySetupOwnership(record, opts)
+		if err != nil {
+			return SetupResult{}, err
+		}
+	}
+	targetInput, err := loadSetupTarget(opts.WorktreePath, opts.EnvKey)
 	if err != nil {
 		return SetupResult{}, err
 	}
 	if targetInput.skipped {
-		return SetupResult{Skipped: true}, nil
+		if record == nil {
+			return SetupResult{Skipped: true}, nil
+		}
+		return SetupResult{}, fmt.Errorf("owned database %q requires a PostgreSQL %s in %s", record.Database, opts.EnvKey, EnvFileName)
+	}
+	if record == nil {
+		store, worktreeID, err = databaseStoreForWorktree(opts.WorktreePath)
+		if err != nil {
+			return SetupResult{}, err
+		}
+		record, err = setupOwnership(store, worktreeID, opts)
+		if err != nil {
+			return SetupResult{}, err
+		}
 	}
 	uri := targetInput.uri
 	parsed := targetInput.parsed
-	store, worktreeID, err := databaseStoreForWorktree(worktreePath)
-	if err != nil {
-		return SetupResult{}, err
-	}
-	record, err := store.setupRecord(worktreeID, branch)
-	if err != nil {
-		return SetupResult{}, err
-	}
-	if record != nil && (parsed.Host != record.Host || parsed.Port != record.Port || parsed.User != record.User || configuredContainer != record.Container) {
-		return SetupResult{}, fmt.Errorf("database setup target changed since the pending setup; restore host, port, user, and container configuration before retrying")
+	if record != nil {
+		if err := matchesRecordedTarget(record, parsed, opts.ConfiguredContainer); err != nil {
+			return SetupResult{}, err
+		}
 	}
 	resolver, err := backend.Snapshot()
 	if err != nil {
 		return SetupResult{}, fmt.Errorf("listing PostgreSQL containers: %w", err)
 	}
-	if record == nil {
-		target, err := resolveTarget(resolver, parsed, configuredContainer)
+	switch {
+	case record == nil:
+		record, err = beginBranchDatabase(store, resolver, worktreeID, parsed, opts)
 		if err != nil {
 			return SetupResult{}, err
 		}
-		candidate := &DatabaseRecord{WorktreeID: worktreeID, WorktreePath: worktreePath, Branch: branch, Database: BranchDBNameForRepository(parsed.Database, branch, store.repoID), Container: configuredContainer, ContainerID: target.ID, Host: parsed.Host, Port: parsed.Port, User: parsed.User, Status: databaseStatusSetupPending}
-		record, err = store.beginSetup(candidate)
-		if err != nil {
-			return SetupResult{}, err
-		}
+	case record.Status == databaseStatusActive:
+		return reuseActiveDatabase(backend, resolver, record, opts.WorktreePath, parsed)
 	}
+	return provisionDatabase(backend, resolver, store, record, uri, opts)
+}
+
+// setupOwnership reads the ownership record and decides whether setup may
+// proceed against it. Creation accepts only a pending retry. A rerun also
+// accepts an active record, which the caller then verifies and reuses.
+func setupOwnership(store *databaseStore, worktreeID string, opts SetupOptions) (*DatabaseRecord, error) {
+	record, err := store.ownership(worktreeID)
+	if err != nil || record == nil {
+		return record, err
+	}
+	return applySetupOwnership(record, opts)
+}
+
+func applySetupOwnership(record *DatabaseRecord, opts SetupOptions) (*DatabaseRecord, error) {
+	if record.Branch != opts.Branch {
+		return nil, fmt.Errorf("database ownership record for worktree %q names branch %q, not %q", record.WorktreePath, record.Branch, opts.Branch)
+	}
+	switch record.Status {
+	case databaseStatusSetupPending:
+		return record, nil
+	case databaseStatusActive:
+		if !opts.Rerun {
+			return nil, fmt.Errorf("database ownership record already exists for worktree %q", record.WorktreePath)
+		}
+		return record, nil
+	case databaseStatusPendingCleanup:
+		return nil, fmt.Errorf("database %q is staged for cleanup; run treeman clean before setting it up again", record.Database)
+	default:
+		return nil, fmt.Errorf("database ownership record for worktree %q has unexpected status %q", record.WorktreePath, record.Status)
+	}
+}
+
+func beginBranchDatabase(store *databaseStore, resolver ContainerResolver, worktreeID string, parsed ParsedURI, opts SetupOptions) (*DatabaseRecord, error) {
+	target, err := resolveTarget(resolver, parsed, opts.ConfiguredContainer)
+	if err != nil {
+		return nil, err
+	}
+	candidate := &DatabaseRecord{
+		WorktreeID:   worktreeID,
+		WorktreePath: opts.WorktreePath,
+		Branch:       opts.Branch,
+		Database:     BranchDBNameForRepository(parsed.Database, opts.Branch, store.repoID),
+		Container:    opts.ConfiguredContainer,
+		ContainerID:  target.ID,
+		Host:         parsed.Host,
+		Port:         parsed.Port,
+		User:         parsed.User,
+		Status:       databaseStatusSetupPending,
+	}
+	return store.beginSetup(candidate)
+}
+
+// provisionDatabase is only reachable for a non-active ownership record.
+func provisionDatabase(backend Backend, resolver ContainerResolver, store *databaseStore, record *DatabaseRecord, uri string, opts SetupOptions) (SetupResult, error) {
 	target, err := resolver.ResolveID(record.ContainerID)
 	if err != nil {
 		return SetupResult{}, fmt.Errorf("finding recorded postgres container: %w", err)
@@ -68,16 +155,69 @@ func setupBranchDB(backend Backend, worktreePath, branch, envKey, configuredCont
 	if err != nil {
 		return SetupResult{}, fmt.Errorf("building new URI: %w", err)
 	}
-	if err := RewriteEnvValue(worktreePath, envKey, newURI); err != nil {
+	if err := RewriteEnvValue(opts.WorktreePath, opts.EnvKey, newURI); err != nil {
 		if dropErr := backend.Drop(target.ID, record.User, []string{record.Database}); dropErr != nil {
 			return SetupResult{}, fmt.Errorf("rewriting .env: %w; rolling back database %q: %v", err, record.Database, dropErr)
 		}
 		return SetupResult{}, fmt.Errorf("rewriting .env: %w", err)
 	}
-	if err := store.activateSetup(worktreeID, *record); err != nil {
+	if err := store.activateSetup(record.WorktreeID, *record); err != nil {
 		return SetupResult{}, err
 	}
 	return SetupResult{DBName: record.Database}, nil
+}
+
+// matchesRecordedTarget rejects a URI that no longer names the recorded
+// connection. TreeMan owns one database, on one container, as one user; if any
+// of those changed, the record no longer describes what the URI reaches.
+func matchesRecordedTarget(record *DatabaseRecord, parsed ParsedURI, configuredContainer string) error {
+	if parsed.Host == record.Host && parsed.Port == record.Port && parsed.User == record.User && configuredContainer == record.Container {
+		return nil
+	}
+	return fmt.Errorf("database setup target changed since the recorded setup; restore host, port, user, and container configuration before retrying")
+}
+
+// reuseActiveDatabase verifies a record that is already active and returns
+// without changing anything. Repair must not recreate a database the user has
+// data in, and must not rewrite the line that reaches it.
+func reuseActiveDatabase(backend Backend, resolver ContainerResolver, record *DatabaseRecord, worktreePath string, parsed ParsedURI) (SetupResult, error) {
+	if err := matchesRecordedWorktree(record, worktreePath); err != nil {
+		return SetupResult{}, err
+	}
+	// The recorded ID, never a lookup by name or port: a container that later
+	// took the name is a different container with different data.
+	target, err := resolver.ResolveID(record.ContainerID)
+	if err != nil {
+		return SetupResult{}, fmt.Errorf("finding recorded postgres container: %w", err)
+	}
+	exists, err := backend.Exists(target.ID, record.User, record.Database)
+	if err != nil {
+		return SetupResult{}, fmt.Errorf("verifying database %q: %w", record.Database, err)
+	}
+	if !exists {
+		return SetupResult{}, fmt.Errorf("owned database %q is missing from container %q; TreeMan does not recreate an owned database, so restore it or delete the worktree to release the record", record.Database, target.Name)
+	}
+	if parsed.Database != record.Database {
+		return SetupResult{}, fmt.Errorf("%s names database %q but TreeMan owns %q for this worktree; the environment file was left unchanged", EnvFileName, parsed.Database, record.Database)
+	}
+	return SetupResult{DBName: record.Database, Reused: true}, nil
+}
+
+// matchesRecordedWorktree confirms the record describes the directory being
+// set up. Both sides are canonicalized, so a symlinked path is not drift.
+func matchesRecordedWorktree(record *DatabaseRecord, worktreePath string) error {
+	recorded, err := fsutil.CanonicalPath(record.WorktreePath)
+	if err != nil {
+		return fmt.Errorf("resolving recorded worktree path: %w", err)
+	}
+	current, err := fsutil.CanonicalPath(worktreePath)
+	if err != nil {
+		return fmt.Errorf("resolving worktree path: %w", err)
+	}
+	if recorded != current {
+		return fmt.Errorf("database ownership record names worktree %q, not %q", record.WorktreePath, worktreePath)
+	}
+	return nil
 }
 
 func databaseStoreForWorktree(worktreePath string) (*databaseStore, string, error) {

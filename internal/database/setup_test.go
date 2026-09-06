@@ -3,6 +3,7 @@ package database
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +73,7 @@ type stubBackend struct {
 	resolver ContainerResolver
 	create   func(string, string, string) error
 	drop     func(string, string, []string) error
+	exists   func(string, string, string) (bool, error)
 }
 
 func (b stubBackend) Snapshot() (ContainerResolver, error) { return b.resolver, nil }
@@ -80,6 +82,15 @@ func (b stubBackend) Create(container, user, database string) error {
 }
 func (b stubBackend) Drop(container, user string, databases []string) error {
 	return b.drop(container, user, databases)
+}
+
+// Exists fails when a test did not supply it, so a flow that reaches the
+// verification query unexpectedly is reported rather than answered.
+func (b stubBackend) Exists(container, user, database string) (bool, error) {
+	if b.exists == nil {
+		return false, fmt.Errorf("unexpected existence check for database %q", database)
+	}
+	return b.exists(container, user, database)
 }
 
 func installDatabaseStubs(t *testing.T, resolver ContainerResolver, create func(string, string, string) error, drop func(string, string, []string) error) Backend {

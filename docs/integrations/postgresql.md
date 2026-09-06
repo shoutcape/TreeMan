@@ -38,6 +38,32 @@ TreeMan runs `psql` through `docker exec` against the `postgres` maintenance dat
 
 If a setup must be retried, its original host, effective port, user, and configured container must remain unchanged. Changing only the source database name is allowed: TreeMan replaces it with the owned branch database.
 
+## Verify a Branch Database
+
+`treeman setup` reads the ownership record and acts on its state:
+
+| Ownership state | Action |
+| --- | --- |
+| No record | TreeMan creates the branch database |
+| Setup pending | TreeMan retries the exact recorded target |
+| Active | TreeMan verifies the database and uses it again |
+| Pending cleanup | TreeMan refuses and keeps the cleanup state |
+
+For an active record, TreeMan checks the branch, the worktree path, the host,
+the port, the user, and the configured container. It resolves the exact
+recorded container ID. It never selects a replacement container by name or by
+port. It then asks the container whether the database exists.
+
+TreeMan does not create the database again, drop it, rewrite the environment
+file, or change the ownership state.
+
+- A missing owned database is an error. Restore the database, or delete the
+  worktree to release the record.
+- An environment file that names a different database is an error. TreeMan
+  keeps the file.
+
+`treeman setup` is not a database reset.
+
 ## Delete a Branch Database
 
 TreeMan records a database ownership record in Git's common directory before setup completes. The record pins the exact Docker container ID selected during setup. It reads that record before removing the worktree, marks it pending only after both worktree and branch deletion succeed, then drops the recorded database. If that exact container is no longer running, cleanup fails safely rather than selecting a replacement by name or port.

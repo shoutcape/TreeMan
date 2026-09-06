@@ -72,27 +72,7 @@ func newDatabaseStore(dir string) (*databaseStore, error) {
 // LookupDatabaseName returns the recorded database for a linked worktree
 // without creating or modifying ownership state.
 func LookupDatabaseName(worktreePath string) (string, bool, error) {
-	commonDir, err := git.CommonDir(worktreePath)
-	if err != nil {
-		return "", false, fmt.Errorf("opening database ownership state: %w", err)
-	}
-	worktreeID, err := git.WorktreeID(worktreePath)
-	if err != nil {
-		return "", false, fmt.Errorf("identifying linked worktree: %w", err)
-	}
-	store := &databaseStore{commonDir: commonDir}
-	if _, err := os.Lstat(store.recordPath(worktreeID)); os.IsNotExist(err) {
-		return "", false, nil
-	} else if err != nil {
-		return "", false, fmt.Errorf("reading database ownership record: %w", err)
-	}
-
-	repositoryID, err := readRepositoryID(store.stateDir())
-	if err != nil {
-		return "", false, err
-	}
-	store.repoID = repositoryID
-	record, err := store.load(worktreeID)
+	_, _, record, err := readOnlyDatabaseOwnership(worktreePath)
 	if err != nil {
 		return "", false, err
 	}
@@ -100,6 +80,36 @@ func LookupDatabaseName(worktreePath string) (string, bool, error) {
 		return "", false, nil
 	}
 	return record.Database, true, nil
+}
+
+// readOnlyDatabaseOwnership discovers an existing record without creating the
+// state directory or repository ID. An absent record is not ownership.
+func readOnlyDatabaseOwnership(worktreePath string) (*databaseStore, string, *DatabaseRecord, error) {
+	commonDir, err := git.CommonDir(worktreePath)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("opening database ownership state: %w", err)
+	}
+	worktreeID, err := git.WorktreeID(worktreePath)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("identifying linked worktree: %w", err)
+	}
+	store := &databaseStore{commonDir: commonDir}
+	if _, err := os.Lstat(store.recordPath(worktreeID)); os.IsNotExist(err) {
+		return store, worktreeID, nil, nil
+	} else if err != nil {
+		return nil, "", nil, fmt.Errorf("reading database ownership record: %w", err)
+	}
+
+	repositoryID, err := readRepositoryID(store.stateDir())
+	if err != nil {
+		return nil, "", nil, err
+	}
+	store.repoID = repositoryID
+	record, err := store.load(worktreeID)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	return store, worktreeID, record, nil
 }
 
 func (s *databaseStore) stateDir() string {
@@ -292,20 +302,14 @@ func (s *databaseStore) records() ([]DatabaseRecord, error) {
 	return records, err
 }
 
-// setupRecord returns the only retryable setup record for a worktree.
-func (s *databaseStore) setupRecord(worktreeID, branch string) (*DatabaseRecord, error) {
+// ownership returns the record on disk without judging its status. Setup
+// decides what each state permits; the store only reads.
+func (s *databaseStore) ownership(worktreeID string) (*DatabaseRecord, error) {
 	var result *DatabaseRecord
 	err := s.withLock(func() error {
 		record, err := s.load(worktreeID)
-		if err != nil || record == nil {
-			result = record
-			return err
-		}
-		if record.Branch != branch || record.Status != databaseStatusSetupPending {
-			return fmt.Errorf("database ownership record already exists for worktree %q", record.WorktreePath)
-		}
 		result = record
-		return nil
+		return err
 	})
 	return result, err
 }
