@@ -292,6 +292,18 @@ func (s *databaseStore) records() ([]DatabaseRecord, error) {
 	return records, err
 }
 
+// ownership returns the record on disk without judging its status. Setup
+// decides what each state permits; the store only reads.
+func (s *databaseStore) ownership(worktreeID string) (*DatabaseRecord, error) {
+	var result *DatabaseRecord
+	err := s.withLock(func() error {
+		record, err := s.load(worktreeID)
+		result = record
+		return err
+	})
+	return result, err
+}
+
 // setupRecord returns the only retryable setup record for a worktree.
 func (s *databaseStore) setupRecord(worktreeID, branch string) (*DatabaseRecord, error) {
 	var result *DatabaseRecord
