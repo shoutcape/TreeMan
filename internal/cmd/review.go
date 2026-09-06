@@ -208,7 +208,7 @@ func streamReviewRows(render ui.Renderer, forgeInfo reviewForge, prs *[]forge.PR
 	}
 }
 
-// reviewPickerResults streams the whole wtmr picker payload without starting
+// reviewPickerResults streams the whole tmmr picker payload without starting
 // fzf, returning the number of open reviews and how long the first row took.
 func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
 	if !git.IsInsideRepo() {

@@ -273,7 +273,7 @@ func loadBranchPickerDataForForge(cmd *cobra.Command, forgeType forge.Type, repo
 	return data, nil
 }
 
-// branchPickerResults streams the whole wtb picker payload without starting
+// branchPickerResults streams the whole tmb picker payload without starting
 // fzf, returning the number of available branches and how long the first row
 // took.
 func branchPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
