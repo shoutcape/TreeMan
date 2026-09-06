@@ -253,12 +253,12 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setupStatus {
 	options := envfile.CopyOptions{Refresh: !setup.rerun || setup.refreshEnv}
 
-	guard, guardErr := setup.guardEnvironmentRefresh()
+	restore, guardErr := setup.guardEnvironmentRefresh()
 	if guardErr != nil {
 		// One protected file, not the whole step: every other environment
 		// file still refreshes.
-		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("preserving %s: %v", database.EnvFileName, guardErr)))
-		options.Preserve = append(options.Preserve, database.EnvFileName)
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("skipping %s: %v", database.EnvFileName, guardErr)))
+		options.Skip = append(options.Skip, database.EnvFileName)
 	}
 
 	result, err := envfile.CopyWith(setup.mainRoot, setup.worktreePath, options)
@@ -268,16 +268,16 @@ func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setu
 	}
 	status := reportEnvironmentCopy(w, render, result)
 
-	if !guard.Required || !slices.Contains(result.Copied, database.EnvFileName) {
+	if guardErr != nil || restore == "" || !slices.Contains(result.Copied, database.EnvFileName) {
 		return status
 	}
 	// The copy brought in the main worktree's database name. Put the owned one
 	// back, or the branch would run against the shared database.
-	if err := restoreOwnedDatabase(setup.worktreePath, setup.projectConfig.DatabaseEnvKey(), guard.Database); err != nil {
-		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not restore database %s in %s: %v", guard.Database, database.EnvFileName, err)))
+	if err := restoreOwnedDatabase(setup.worktreePath, setup.projectConfig.DatabaseEnvKey(), restore); err != nil {
+		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not restore database %s in %s: %v", restore, database.EnvFileName, err)))
 		return failedStatus(fmt.Sprintf("%s, database name not restored", status.text))
 	}
-	fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Kept database "+guard.Database+" in "+database.EnvFileName+"."))
+	fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Kept database "+restore+" in "+database.EnvFileName+"."))
 	return status
 }
 
@@ -285,9 +285,9 @@ func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setu
 // file may be replaced. It runs for every refresh, including one that skips
 // the database step: --skip-database skips provisioning work, not the
 // protection of a database TreeMan already owns.
-func (setup worktreeSetup) guardEnvironmentRefresh() (database.RefreshGuard, error) {
+func (setup worktreeSetup) guardEnvironmentRefresh() (string, error) {
 	if !setup.rerun || !setup.refreshEnv {
-		return database.RefreshGuard{}, nil
+		return "", nil
 	}
 	return database.GuardRefresh(setup.worktreePath, setup.mainRoot, setup.branch,
 		setup.projectConfig.DatabaseEnvKey(), setup.projectConfig.DatabaseContainer())
@@ -316,6 +316,9 @@ func reportEnvironmentCopy(w io.Writer, render ui.Renderer, result envfile.CopyR
 	for _, name := range result.Preserved {
 		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "Preserved existing "+name+"."))
 	}
+	for _, name := range result.Skipped {
+		fmt.Fprintln(w, render.Status(ui.ToneMuted, "○", "Skipped "+name+"."))
+	}
 	for _, failure := range result.Failed {
 		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not copy %s: %v", failure.Name, failure.Err)))
 	}
@@ -327,6 +330,7 @@ func reportEnvironmentCopy(w io.Writer, render ui.Renderer, result envfile.CopyR
 	}{
 		{"copied", len(result.Copied)},
 		{"preserved", len(result.Preserved)},
+		{"skipped", len(result.Skipped)},
 		{"failed", len(result.Failed)},
 	} {
 		if count.n > 0 {

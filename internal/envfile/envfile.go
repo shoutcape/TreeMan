@@ -20,20 +20,15 @@ var (
 	ErrDestinationNotRegular = errors.New("destination is not a regular file")
 )
 
-// CopyOptions selects what happens to a destination file that already exists.
+// CopyOptions selects which files to write and whether to replace existing files.
 type CopyOptions struct {
 	// Refresh replaces an existing regular destination file with the source.
 	// Without it the destination keeps its contents, because a worktree .env
 	// holds edits the copy source cannot supply again.
 	Refresh bool
-	// Preserve names files that are never replaced, even under Refresh. One
-	// file whose replacement cannot be shown to be safe does not have to hold
-	// back the refresh of the others.
-	Preserve []string
-}
-
-func (opts CopyOptions) refreshes(name string) bool {
-	return opts.Refresh && !slices.Contains(opts.Preserve, name)
+	// Skip names files that are never written, even if the destination is
+	// absent. A blocked file does not hold back copying the others.
+	Skip []string
 }
 
 // CopyFailure names one file that could not be copied, and why.
@@ -49,10 +44,11 @@ func (failure CopyFailure) Error() string {
 func (failure CopyFailure) Unwrap() error { return failure.Err }
 
 // CopyResult holds the outcome of a copy, one bucket per outcome, named by
-// basename. A single run can populate all three.
+// basename. A single run can populate all four.
 type CopyResult struct {
 	Copied    []string
 	Preserved []string
+	Skipped   []string
 	Failed    []CopyFailure
 }
 
@@ -77,7 +73,11 @@ func CopyWith(src, dest string, opts CopyOptions) (CopyResult, error) {
 
 	var result CopyResult
 	for _, name := range files {
-		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts.refreshes(name))
+		if slices.Contains(opts.Skip, name) {
+			result.Skipped = append(result.Skipped, name)
+			continue
+		}
+		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts.Refresh)
 		switch {
 		case err != nil:
 			result.Failed = append(result.Failed, CopyFailure{Name: name, Err: err})

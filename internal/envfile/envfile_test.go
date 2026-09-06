@@ -76,6 +76,36 @@ func TestCopyWith_PreservesExistingDestination(t *testing.T) {
 	assert.Equal(t, "KEY=branch", string(got))
 }
 
+func TestCopyWith_SkipNeverWritesDestination(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		for _, refresh := range []bool{false, true} {
+			t.Run(fmt.Sprintf("present=%t/refresh=%t", present, refresh), func(t *testing.T) {
+				src, dest := t.TempDir(), t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(src, ".env"), []byte("KEY=main"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(src, ".env.local"), []byte("LOCAL=main"), 0o600))
+				if present {
+					require.NoError(t, os.WriteFile(filepath.Join(dest, ".env"), []byte("KEY=branch"), 0o600))
+				}
+
+				result, err := CopyWith(src, dest, CopyOptions{Refresh: refresh, Skip: []string{".env"}})
+				require.NoError(t, err)
+
+				assert.Equal(t, []string{".env"}, result.Skipped)
+				assert.Equal(t, []string{".env.local"}, result.Copied)
+				assert.Empty(t, result.Preserved)
+				assert.Empty(t, result.Failed)
+				if present {
+					data, err := os.ReadFile(filepath.Join(dest, ".env"))
+					require.NoError(t, err)
+					assert.Equal(t, "KEY=branch", string(data))
+				} else {
+					assert.NoFileExists(t, filepath.Join(dest, ".env"))
+				}
+			})
+		}
+	}
+}
+
 func TestCopyWith_CopiesMissingFileAlongsidePreservedOne(t *testing.T) {
 	src, dest := t.TempDir(), t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(src, ".env"), []byte("KEY=main"), 0600))

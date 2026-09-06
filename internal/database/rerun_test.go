@@ -301,8 +301,7 @@ func TestGuardRefreshReturnsTheRecordedDatabase(t *testing.T) {
 	guard, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 
-	assert.True(t, guard.Required)
-	assert.Equal(t, dbName, guard.Database)
+	assert.Equal(t, dbName, guard)
 }
 
 func TestGuardRefreshWithoutOwnershipIsNotRequired(t *testing.T) {
@@ -314,8 +313,7 @@ func TestGuardRefreshWithoutOwnershipIsNotRequired(t *testing.T) {
 	guard, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
 	require.NoError(t, err)
 
-	assert.False(t, guard.Required)
-	assert.Empty(t, guard.Database)
+	assert.Empty(t, guard)
 }
 
 func TestGuardRefreshRejectsDrift(t *testing.T) {
@@ -329,7 +327,7 @@ func TestGuardRefreshRejectsDrift(t *testing.T) {
 		guard, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
 
 		assert.ErrorContains(t, err, "database setup target changed")
-		assert.True(t, guard.Required)
+		assert.Empty(t, guard)
 	})
 
 	t.Run("replacement file", func(t *testing.T) {

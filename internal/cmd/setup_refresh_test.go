@@ -86,8 +86,8 @@ func TestSetupRefreshPreservesTheProtectedFileWhenOwnershipCannotBeProven(t *tes
 	assert.Equal(t, branchEnv, readTestFile(t, filepath.Join(worktree, ".env")))
 	assert.Equal(t, "LOCAL=main\n", readTestFile(t, filepath.Join(worktree, ".env.local")),
 		"one protected file must not hold back the others")
-	assert.Contains(t, stderr, "preserving .env")
-	assert.Contains(t, stderr, "Preserved existing .env")
+	assert.Contains(t, stderr, "skipping .env")
+	assert.Contains(t, stderr, "Skipped .env.")
 }
 
 func TestSetupNormalRerunNeverOverwritesAnEditedDatabaseTarget(t *testing.T) {
@@ -103,4 +103,59 @@ func TestSetupNormalRerunNeverOverwritesAnEditedDatabaseTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, edited, readTestFile(t, filepath.Join(worktree, ".env")))
+}
+
+func TestSetupRefreshNeverCreatesAnUnprovenDatabaseEnvironment(t *testing.T) {
+	for _, port := range []string{"5432", "5544"} {
+		t.Run(port, func(t *testing.T) {
+			repo, worktree := setupTestRepo(t, "feature/refresh-absent")
+			seedDatabaseOwnership(t, repo, worktree, "feature/refresh-absent")
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".env"),
+				[]byte("DATABASE_URL=postgres://app@127.0.0.1:"+port+"/myapp\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".env.local"), []byte("LOCAL=main\n"), 0o600))
+			chdirForTest(t, worktree)
+
+			_, stderr, err := runSetupIn(t, "", refreshOnly())
+			require.NoError(t, err)
+
+			assert.NoFileExists(t, filepath.Join(worktree, ".env"))
+			assert.Equal(t, "LOCAL=main\n", readTestFile(t, filepath.Join(worktree, ".env.local")))
+			assert.Contains(t, stderr, "current .env has no PostgreSQL")
+			assert.NotContains(t, stderr, "Kept database")
+			assert.NotContains(t, stderr, "Preserved existing .env.")
+		})
+	}
+}
+
+func TestSetupRefreshSkipsEnvironmentWhenOwnershipStateIsInvalid(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(map[bool]string{false: "absent", true: "existing"}[present], func(t *testing.T) {
+			repo, worktree := setupTestRepo(t, "feature/refresh-invalid")
+			seedDatabaseOwnership(t, repo, worktree, "feature/refresh-invalid")
+			commonDir, err := git.CommonDir(worktree)
+			require.NoError(t, err)
+			worktreeID, err := git.WorktreeID(worktree)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(commonDir, "treeman", "databases", worktreeID+".json"), []byte("invalid"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".env"), []byte("DATABASE_URL=postgres://app@127.0.0.1:5432/myapp\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, ".env.local"), []byte("LOCAL=main\n"), 0o600))
+			if present {
+				require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte("LOCAL=branch\n"), 0o600))
+			}
+			chdirForTest(t, worktree)
+
+			_, stderr, err := runSetupIn(t, "", refreshOnly())
+			require.NoError(t, err)
+
+			if present {
+				assert.Equal(t, "LOCAL=branch\n", readTestFile(t, filepath.Join(worktree, ".env")))
+			} else {
+				assert.NoFileExists(t, filepath.Join(worktree, ".env"))
+			}
+			assert.Equal(t, "LOCAL=main\n", readTestFile(t, filepath.Join(worktree, ".env.local")))
+			assert.Contains(t, stderr, "skipping .env")
+			assert.NotContains(t, stderr, "Kept database")
+			assert.NotContains(t, stderr, "Preserved existing .env.")
+		})
+	}
 }
