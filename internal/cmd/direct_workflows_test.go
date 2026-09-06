@@ -25,7 +25,7 @@ func TestRunBranchDirectDoesNotRequireForgeCLI(t *testing.T) {
 
 	buf, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	command := commandWithOutput(buf, stderr)
-	require.NoError(t, runBranch(command, "feature/direct"))
+	require.NoError(t, runBranch(command, "feature/direct", creationSetupOptions{}))
 
 	worktree := filepath.Join(repo, ".worktrees", "feature-direct")
 	assert.Equal(t, worktree+"\n", buf.String())
@@ -127,7 +127,7 @@ func TestBranchAndReviewUseConfiguredExternalDirectory(t *testing.T) {
 		pathWithOnlyGit(t)
 
 		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-		require.NoError(t, runBranch(commandWithOutput(stdout, stderr), "feature/external-branch"))
+		require.NoError(t, runBranch(commandWithOutput(stdout, stderr), "feature/external-branch", creationSetupOptions{}))
 
 		want := filepath.Join(external, "feature-external-branch")
 		assert.Equal(t, want+"\n", stdout.String())

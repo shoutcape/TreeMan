@@ -51,7 +51,7 @@ func newBenchmarkCmd() *cobra.Command {
 }
 
 func runBenchmark(cmd *cobra.Command, request benchmarkRequest, warmup, runs int) (err error) {
-	resolved, err := newBenchmarkTarget(request)
+	resolved, err := newBenchmarkTarget(cmd, request)
 	// Registered before the error check so a sandbox always gets removed, even
 	// if a future target starts returning one alongside an error.
 	defer func() { err = errors.Join(err, resolved.sandbox.close()) }()
@@ -94,15 +94,15 @@ type benchmarkSpec struct {
 	// runsSetup marks a target whose preparation runs project setup. Only
 	// those targets accept the setup flags.
 	runsSetup bool
-	build     func(request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error)
+	build     func(cmd *cobra.Command, request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error)
 }
 
 var benchmarkSpecs = []benchmarkSpec{
 	{name: "list", build: inCurrentRepository(listBenchmarkRunner)},
 	{name: "branch", argument: "an exact remote branch name", build: forArgument(newBranchBenchmarkRunner)},
 	{name: "review", argument: "a PR or MR number", build: forArgument(newReviewBenchmarkRunner)},
-	{name: "delete", runsSetup: true, build: func(request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
-		return newDeleteBenchmarkRunner(request.setup)
+	{name: "delete", runsSetup: true, build: func(cmd *cobra.Command, request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
+		return newDeleteBenchmarkRunner(request.setup, cmd)
 	}},
 	{name: "branch-results", build: inCurrentRepository(resultCountRunner(branchPickerResults))},
 	{name: "review-results", build: inCurrentRepository(resultCountRunner(reviewPickerResults))},
@@ -111,15 +111,15 @@ var benchmarkSpecs = []benchmarkSpec{
 // inCurrentRepository builds a target that measures the repository in place.
 // It takes no argument and needs no sandbox, so closing its zero sandbox is a
 // no-op.
-func inCurrentRepository(runner benchmarkRunner) func(benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
-	return func(benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
+func inCurrentRepository(runner benchmarkRunner) func(*cobra.Command, benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
+	return func(*cobra.Command, benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
 		return runner, benchmarkSandbox{}, nil
 	}
 }
 
 // forArgument adapts a target that is built from its argument alone.
-func forArgument(build func(argument string) (benchmarkRunner, benchmarkSandbox, error)) func(benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
-	return func(request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
+func forArgument(build func(argument string) (benchmarkRunner, benchmarkSandbox, error)) func(*cobra.Command, benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
+	return func(_ *cobra.Command, request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
 		return build(request.argument)
 	}
 }
@@ -135,7 +135,7 @@ func benchmarkTargetNames() []string {
 // newBenchmarkTarget validates a target and its argument and builds the
 // benchmark for it. On failure nothing is left open: the sandbox constructors
 // close their own sandbox before returning an error.
-func newBenchmarkTarget(request benchmarkRequest) (benchmarkTarget, error) {
+func newBenchmarkTarget(cmd *cobra.Command, request benchmarkRequest) (benchmarkTarget, error) {
 	for _, spec := range benchmarkSpecs {
 		if spec.name != request.target {
 			continue
@@ -150,7 +150,7 @@ func newBenchmarkTarget(request benchmarkRequest) (benchmarkTarget, error) {
 			return benchmarkTarget{}, fmt.Errorf("benchmark target %s runs no project setup, so --%s do not apply",
 				request.target, strings.Join(creationSetupFlagNames(), ", --"))
 		}
-		runner, sandbox, err := spec.build(request)
+		runner, sandbox, err := spec.build(cmd, request)
 		if err != nil {
 			return benchmarkTarget{}, err
 		}
@@ -388,7 +388,7 @@ func newBranchBenchmarkRunner(branch string) (benchmarkRunner, benchmarkSandbox,
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
 			err := sandbox.run(func() error {
-				created, err := createBranchWorktreeIn(runCmd, branch, sandbox.worktreeDir())
+				created, err := createBranchWorktreeIn(runCmd, branch, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
 				if created.worktree.Path != "" {
 					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
 				}
@@ -412,7 +412,7 @@ func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, benchmarkSandbox, 
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
 			err := sandbox.run(func() error {
-				created, err := createReviewWorktreeIn(runCmd, prArg, sandbox.worktreeDir())
+				created, err := createReviewWorktreeIn(runCmd, prArg, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
 				if created.worktree.Path != "" {
 					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
 				}

@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/hooks"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/worktree"
 )
 
@@ -24,25 +27,27 @@ type creationPaths struct {
 	// worktree is created at whatever plan selects under the lock, which is
 	// this path unless another process took it in the meantime.
 	path string
+	// configPath is the absolute configuration file used for this snapshot.
+	configPath string
+	// hooks is the consent resolved for this creation's post-create hooks.
+	hooks   hookApproval
+	options creationSetupOptions
 	// protected names the repository paths a worktree may not be placed on.
 	protected worktree.Protected
 	// config is the project configuration the whole flow works from.
 	config config.Config
 }
 
-// prepareCreationPaths resolves where a worktree for branch would go and
-// refuses the operation now if it cannot go there.
+// prepareCreationPathsIn resolves where a worktree for branch would go and
+// refuses the operation now if it cannot go there. An empty parentDir takes
+// the destination from project configuration; a caller that owns the
+// filesystem boundary, as benchmark sandboxes do, supplies its own. Project
+// configuration still supplies every non-location setup option.
 //
-// Creation flows call this before fetching or touching any ref. A destination
-// that is unusable, or a configuration that cannot be read, must not cost the
-// user a network round trip and must never leave a branch behind.
-func prepareCreationPaths(mainRoot, branch string) (creationPaths, error) {
-	return prepareCreationPathsIn(mainRoot, branch, "")
-}
-
-// prepareCreationPathsIn uses parentDir when the caller owns the filesystem
-// boundary, as benchmark sandboxes do. Project configuration still supplies
-// every non-location setup option.
+// Creation flows reach this through prepareApprovedCreationPaths, before
+// fetching or touching any ref. A destination that is unusable, or a
+// configuration that cannot be read, must not cost the user a network round
+// trip and must never leave a branch behind.
 func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, error) {
 	loaded := config.Load(mainRoot)
 	if loaded.Warning != "" {
@@ -66,10 +71,11 @@ func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, 
 	}
 
 	paths := creationPaths{
-		mainRoot:  mainRoot,
-		parentDir: parentDir,
-		protected: worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
-		config:    loaded.Config,
+		mainRoot:   mainRoot,
+		parentDir:  parentDir,
+		protected:  worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
+		config:     loaded.Config,
+		configPath: loaded.Path,
 	}
 
 	existing, err := git.WorktreeList()
@@ -89,7 +95,7 @@ func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, 
 // plan returns the destination selection Git runs under its worktree mutation
 // lock. It repeats the selection and the safety check against the worktrees
 // recorded at that moment, because the destination chosen by
-// prepareCreationPaths may have been taken since, and creates the parent
+// prepareCreationPathsIn may have been taken since, and creates the parent
 // directories only once the destination is known to be usable.
 func (p creationPaths) plan(branch string) git.WorktreePlan {
 	return func(existing []git.WorktreeEntry) (string, error) {
@@ -105,4 +111,25 @@ func (p creationPaths) plan(branch string) git.WorktreePlan {
 		}
 		return path, nil
 	}
+}
+
+// hookApproval holds the exact commands authorized for this creation.
+type hookApproval struct {
+	commands []string
+}
+
+func (a hookApproval) run(w io.Writer, render ui.Renderer, worktreePath string) setupStatus {
+	if len(a.commands) == 0 {
+		return skippedStatus("skipped (no post-create hooks configured)")
+	}
+	fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(a.commands))))
+	results := hooks.RunPostCreate(worktreePath, a.commands, w)
+	for _, r := range results {
+		if r.Err != nil {
+			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("hook %q failed: %v", r.Command, r.Err)))
+		} else {
+			fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Ran: "+r.Command))
+		}
+	}
+	return summarizeHooks(results)
 }

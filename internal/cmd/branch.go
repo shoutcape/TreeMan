@@ -49,19 +49,19 @@ the new worktree instead.`,
 	return cmd
 }
 
-func runBranch(cmd *cobra.Command, query string) error {
-	return runBranchWithSetup(cmd, query, creationSetupOptions{}, "")
+func runBranch(cmd *cobra.Command, query string, setupOptions creationSetupOptions) error {
+	return runBranchWithSetup(cmd, query, setupOptions, "")
 }
 
 func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions, execCommand string) error {
-	created, err := createBranchWorktree(cmd, query)
+	created, err := createBranchWorktree(cmd, query, setupOptions)
 	if err != nil || created.worktree.Path == "" {
 		return err
 	}
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.paths, created.worktree, setupOptions)
+	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
@@ -79,11 +79,11 @@ type branchWorktreeCreation struct {
 	prMap    map[string]forge.PRInfo
 }
 
-func createBranchWorktree(cmd *cobra.Command, query string) (branchWorktreeCreation, error) {
-	return createBranchWorktreeIn(cmd, query, "")
+func createBranchWorktree(cmd *cobra.Command, query string, setupOptions creationSetupOptions) (branchWorktreeCreation, error) {
+	return createBranchWorktreeIn(cmd, query, "", setupOptions)
 }
 
-func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string) (branchWorktreeCreation, error) {
+func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string, setupOptions creationSetupOptions) (branchWorktreeCreation, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
@@ -94,7 +94,6 @@ func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string) (branch
 	if err != nil {
 		return branchWorktreeCreation{}, err
 	}
-
 	var selected forge.BranchInfo
 	prMap := make(map[string]forge.PRInfo)
 	if query != "" && git.RemoteBranchExists(query) {
@@ -115,7 +114,7 @@ func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string) (branch
 	branch := selected.Name
 	// Settle the destination before fetching, so an unusable one costs no
 	// network round trip and leaves no remote-tracking ref behind.
-	paths, err := prepareCreationPathsIn(mainRoot, branch, parentDir)
+	paths, err := prepareApprovedCreationPaths(cmd, mainRoot, branch, parentDir, setupOptions)
 	if err != nil {
 		return branchWorktreeCreation{}, err
 	}

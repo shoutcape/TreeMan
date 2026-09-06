@@ -21,14 +21,15 @@ const deleteBenchmarkBranch = "treeman-benchmark-delete"
 // options are the caller's: a project whose dependency install, database, or
 // hooks cannot run on this machine is still worth benchmarking without them,
 // as long as the report says which steps ran.
-func newDeleteBenchmarkRunner(setup creationSetupOptions) (benchmarkRunner, benchmarkSandbox, error) {
+func newDeleteBenchmarkRunner(setup creationSetupOptions, consent *cobra.Command) (benchmarkRunner, benchmarkSandbox, error) {
 	sandbox, err := newProjectBenchmarkSandbox()
 	if err != nil {
 		return nil, benchmarkSandbox{}, err
 	}
 
 	runner := func(runCmd *cobra.Command) (measuredRun, error) {
-		created, preparation, err := prepareDeleteBenchmarkWorktree(runCmd, sandbox, setup)
+		// Consent uses the original terminal; measured execution stays silenced.
+		created, preparation, err := prepareDeleteBenchmarkWorktree(consent, sandbox, setup)
 		if err != nil {
 			return nil, err
 		}
@@ -60,7 +61,7 @@ func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox
 		}
 		// The fixture goes through production path validation but stays under
 		// the sandbox, which owns every disposable benchmark artifact.
-		paths, err := prepareCreationPathsIn(sandbox.repo, deleteBenchmarkBranch, sandbox.worktreeDir())
+		paths, err := prepareApprovedCreationPaths(cmd, sandbox.repo, deleteBenchmarkBranch, sandbox.worktreeDir(), setup)
 		if err != nil {
 			return err
 		}
@@ -70,7 +71,7 @@ func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox
 		}
 
 		var setupOutput bytes.Buffer
-		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), paths, created, setup)
+		summary := setupCreatedWorktree(&setupOutput, commandRenderer(cmd), paths, created)
 		if failures := summary.failures(); len(failures) > 0 {
 			setupErr := fmt.Errorf("benchmark worktree setup failed: %s (rerun with %s to measure deletion without that step)",
 				strings.Join(failures, "; "), strings.Join(failedSetupFlags(summary), " "))

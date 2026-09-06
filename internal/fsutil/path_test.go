@@ -28,3 +28,11 @@ func TestCanonicalPathMakesRelativePathAbsolute(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, filepath.IsAbs(got))
 }
+
+func TestContainsReportsStrictCanonicalContainment(t *testing.T) {
+	parent := filepath.Join(string(filepath.Separator), "tmp", "parent")
+
+	assert.True(t, fsutil.Contains(parent, filepath.Join(parent, "child")))
+	assert.False(t, fsutil.Contains(parent, parent))
+	assert.False(t, fsutil.Contains(parent, filepath.Join(string(filepath.Separator), "tmp", "parent-other")))
+}

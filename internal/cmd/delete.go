@@ -557,7 +557,7 @@ func samePath(a, b string) bool {
 // that got this far can still destroy.
 func confirmDeletion(cmd *cobra.Command, plan deletionPlan) (deletionPlan, bool, error) {
 	printDeleteConfirmation(cmd, plan)
-	confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ")
+	confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ", errConfirmationRequired)
 	if err != nil {
 		return deletionPlan{}, false, err
 	}
@@ -605,14 +605,27 @@ func commitsWord(count int) string {
 	return "commits"
 }
 
-func confirmYN(cmd *cobra.Command, prompt string) (bool, error) {
+// errConfirmationRequired is what a command whose confirmation can be waived
+// with --yes reports when it has no way to ask. A caller that offers different
+// guidance passes its own.
+var errConfirmationRequired = errors.New("confirmation required; rerun with --yes")
+
+// confirmYN puts a yes/no question to the user and reports their answer.
+// A session that cannot be prompted gets unavailable, which names the flag
+// that decides the question without asking; a clean end of input is a no, and
+// only a read that actually failed is an error.
+func confirmYN(cmd *cobra.Command, prompt string, unavailable error) (bool, error) {
 	if !canInteract(cmd) {
-		return false, fmt.Errorf("confirmation required; rerun with --yes")
+		return false, unavailable
 	}
 	fmt.Fprint(cmd.ErrOrStderr(), prompt)
 	scanner := bufio.NewScanner(cmd.InOrStdin())
 	if scanner.Scan() {
-		return strings.EqualFold(strings.TrimSpace(scanner.Text()), "y"), nil
+		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		return answer == "y" || answer == "yes", nil
+	}
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("read confirmation: %w", err)
 	}
 	return false, nil
 }

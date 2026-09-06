@@ -165,7 +165,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 		return nil
 	}
 	if len(candidates) > 0 && !skipConfirm {
-		confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ")
+		confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ", errConfirmationRequired)
 		if err != nil {
 			return err
 		}

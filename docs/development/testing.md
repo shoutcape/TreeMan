@@ -20,11 +20,11 @@ treeman benchmark list --warmup 3 --runs 10
 
 Benchmark an exact remote branch or PR/MR. The branch benchmark measures the
 exact remote-branch lookup, fetch, and worktree creation; the review benchmark
-also measures forge resolution. Both skip project setup (environment files,
-dependencies, databases, and hooks), then force-remove the created worktree and
-local branch outside each timed iteration. Destructive iterations run in a
-temporary clone of `origin`, leaving the current repository's refs, `FETCH_HEAD`,
-branches, and worktrees unchanged.
+also measures forge resolution. Both skip project setup and hook approval,
+including approval state access and hook execution. They force-remove the
+created worktree and local branch outside each timed iteration. Destructive
+iterations run in a temporary clone of `origin`, leaving the current
+repository's refs, `FETCH_HEAD`, branches, and worktrees unchanged.
 
 ```bash
 treeman benchmark branch feature/login --warmup 3 --runs 10

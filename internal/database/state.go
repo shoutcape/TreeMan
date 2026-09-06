@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"syscall"
 	"time"
 
+	"github.com/shoutcape/treeman/internal/fsutil"
 	"github.com/shoutcape/treeman/internal/git"
 )
 
@@ -119,11 +119,7 @@ func (s *databaseStore) withLock(operation func() error) error {
 		return fmt.Errorf("opening database state lock: %w", err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("locking database state: %w", err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	return operation()
+	return fsutil.WithFileLock(lock, operation)
 }
 
 func (s *databaseStore) repositoryID() (string, error) {
@@ -143,7 +139,7 @@ func (s *databaseStore) repositoryID() (string, error) {
 		return "", fmt.Errorf("generating database repository ID: %w", err)
 	}
 	id := hex.EncodeToString(bytes)
-	if err := writePrivateFile(path, []byte(id), 0o600); err != nil {
+	if err := fsutil.AtomicWriteFile(path, []byte(id), 0o600); err != nil {
 		return "", fmt.Errorf("writing database repository ID: %w", err)
 	}
 	return id, nil
@@ -247,7 +243,7 @@ func (s *databaseStore) save(record *DatabaseRecord) error {
 	if err != nil {
 		return fmt.Errorf("encoding database ownership record: %w", err)
 	}
-	if err := writePrivateFile(s.recordPath(record.WorktreeID), append(data, '\n'), 0o600); err != nil {
+	if err := fsutil.AtomicWriteFile(s.recordPath(record.WorktreeID), append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("writing database ownership record: %w", err)
 	}
 	return nil
@@ -257,7 +253,7 @@ func (s *databaseStore) remove(worktreeID string) error {
 	if err := os.Remove(s.recordPath(worktreeID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing database ownership record: %w", err)
 	}
-	return syncDirectory(s.stateDir())
+	return fsutil.SyncDirectory(s.stateDir())
 }
 
 func (s *databaseStore) list() ([]DatabaseRecord, error) {
@@ -437,41 +433,4 @@ func sameDatabaseResource(a, b *DatabaseRecord) bool {
 
 func sameSetupTarget(a, b *DatabaseRecord) bool {
 	return sameDatabaseResource(a, b) && a.Host == b.Host && a.Port == b.Port && a.User == b.User && a.Container == b.Container
-}
-
-func writePrivateFile(path string, data []byte, mode os.FileMode) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".tmp-")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(path))
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }

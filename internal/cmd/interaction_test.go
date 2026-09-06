@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/shoutcape/treeman/internal/forge"
 	"github.com/shoutcape/treeman/internal/terminal"
@@ -16,33 +17,68 @@ import (
 )
 
 func TestConfirmYNRejectsNonInteractiveInput(t *testing.T) {
+	stderr := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetIn(strings.NewReader("y\n"))
-	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetErr(stderr)
 
-	confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ")
+	confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ", errConfirmationRequired)
 
 	assert.False(t, confirmed)
-	require.EqualError(t, err, "confirmation required; rerun with --yes")
+	require.ErrorIs(t, err, errConfirmationRequired)
+	assert.Empty(t, stderr.String(), "a session that cannot be asked must not be prompted")
 }
 
-func TestConfirmYNAcceptsInteractiveYes(t *testing.T) {
+func TestConfirmYNReadsInteractiveAnswer(t *testing.T) {
 	previousCapabilities := terminalCapabilities
 	terminalCapabilities = func(io.Reader, io.Writer) terminal.Capabilities {
 		return terminal.Capabilities{Interactive: true}
 	}
 	t.Cleanup(func() { terminalCapabilities = previousCapabilities })
 
-	stderr := &bytes.Buffer{}
+	for _, test := range []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "y", input: "Y\n", want: true},
+		{name: "yes", input: "Yes\n", want: true},
+		{name: "no", input: "n\n"},
+		// Answering nothing is not answering yes, and is not a read failure.
+		{name: "end of input", input: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stderr := &bytes.Buffer{}
+			cmd := &cobra.Command{}
+			cmd.SetIn(strings.NewReader(test.input))
+			cmd.SetErr(stderr)
+
+			confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ", errConfirmationRequired)
+
+			require.NoError(t, err)
+			assert.Equal(t, test.want, confirmed)
+			assert.Equal(t, "Remove these worktrees and branches? [y/N] ", stderr.String())
+		})
+	}
+}
+
+func TestConfirmYNReportsReadFailure(t *testing.T) {
+	previousCapabilities := terminalCapabilities
+	terminalCapabilities = func(io.Reader, io.Writer) terminal.Capabilities {
+		return terminal.Capabilities{Interactive: true}
+	}
+	t.Cleanup(func() { terminalCapabilities = previousCapabilities })
+
+	readErr := errors.New("terminal went away")
 	cmd := &cobra.Command{}
-	cmd.SetIn(strings.NewReader("Y\n"))
-	cmd.SetErr(stderr)
+	cmd.SetIn(iotest.ErrReader(readErr))
+	cmd.SetErr(&bytes.Buffer{})
 
-	confirmed, err := confirmYN(cmd, "Remove these worktrees and branches? [y/N] ")
+	confirmed, err := confirmYN(cmd, "Are you sure? [y/N] ", errConfirmationRequired)
 
-	require.NoError(t, err)
-	assert.True(t, confirmed)
-	assert.Equal(t, "Remove these worktrees and branches? [y/N] ", stderr.String())
+	assert.False(t, confirmed)
+	require.ErrorIs(t, err, readErr)
+	assert.ErrorContains(t, err, "read confirmation")
 }
 
 func TestPickBranchBypassesInteractionForExactMatch(t *testing.T) {

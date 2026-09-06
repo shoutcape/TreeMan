@@ -123,7 +123,7 @@ func TestRewriteEnvValue_Basic(t *testing.T) {
 	dir := t.TempDir()
 	original := "NODE_ENV=development\nDATABASE_URI=postgres://old@host:5432/olddb\nSECRET_KEY=abc123\n"
 	envPath := filepath.Join(dir, ".env")
-	require.NoError(t, os.WriteFile(envPath, []byte(original), 0600))
+	require.NoError(t, os.WriteFile(envPath, []byte(original), 0640))
 
 	err := RewriteEnvValue(dir, "DATABASE_URI", "postgres://new@host:5432/newdb")
 	require.NoError(t, err)
@@ -133,6 +133,9 @@ func TestRewriteEnvValue_Basic(t *testing.T) {
 
 	expected := "NODE_ENV=development\nDATABASE_URI=postgres://new@host:5432/newdb\nSECRET_KEY=abc123\n"
 	assert.Equal(t, expected, string(got))
+	info, err := os.Stat(envPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0640), info.Mode().Perm())
 }
 
 func TestRewriteEnvValue_DifferentKey(t *testing.T) {

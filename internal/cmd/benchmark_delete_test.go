@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,11 +12,89 @@ import (
 	"testing"
 
 	"github.com/shoutcape/treeman/internal/git"
+	"github.com/shoutcape/treeman/internal/state"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDeleteBenchmarkShowsConsentBeforeReadingAndReusesApproval(t *testing.T) {
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	cmd := New("test", "", "")
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetContext(interactiveApprovalCommand("").Context())
+	input := &benchmarkConsentReader{t: t, output: &stderr, answer: "y\n"}
+	cmd.SetIn(input)
+	cmd.SetArgs([]string{"benchmark", "delete", "--warmup=1", "--runs=2"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, 1, input.reads)
+	assert.Equal(t, 1, strings.Count(stderr.String(), "Approve and save"))
+	assert.Empty(t, stdout.String())
+	assert.NotContains(t, stderr.String(), "Deleted worktree and branch:")
+	assert.NotContains(t, stderr.String(), "Running 1 post-create hook(s)")
+	assert.Len(t, fixture.preparedPaths(t), 3)
+	store, err := state.NewHookApprovalStore("")
+	require.NoError(t, err)
+	records, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Contains(t, records[0].Scope.Commands[0], "PREPARATION_LOG")
+}
+
+func TestDeleteBenchmarkVisibleConsentRefusalStopsPreparation(t *testing.T) {
+	for _, answer := range []string{"n\n", ""} {
+		t.Run(fmt.Sprintf("answer=%q", answer), func(t *testing.T) {
+			fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
+			stateHome := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", stateHome)
+			var stdout, stderr bytes.Buffer
+			cmd := New("test", "", "")
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetContext(interactiveApprovalCommand("").Context())
+			input := &benchmarkConsentReader{t: t, output: &stderr, answer: answer}
+			cmd.SetIn(input)
+			cmd.SetArgs([]string{"benchmark", "delete", "--warmup=0", "--runs=1"})
+
+			require.ErrorContains(t, cmd.Execute(), "hook approval refused")
+			assert.Equal(t, 1, input.reads)
+			assert.Empty(t, stdout.String())
+			assert.NoFileExists(t, fixture.preparationLog)
+			assert.NoFileExists(t, fixture.dockerLog)
+			assert.NoFileExists(t, filepath.Join(stateHome, "treeman", "hook-approvals.json"))
+		})
+	}
+}
+
+type benchmarkConsentReader struct {
+	t      *testing.T
+	output *bytes.Buffer
+	answer string
+	reads  int
+}
+
+func (r *benchmarkConsentReader) Read(p []byte) (int, error) {
+	r.t.Helper()
+	r.reads++
+	for _, text := range []string{"Repository:", "Config:", "Phase:", "post_create", "Hooks run in the new worktree under ", "PREPARATION_LOG", "Approve and save this exact scope for future use? [y/N]"} {
+		require.Contains(r.t, r.output.String(), text, "consent must be visible before reading input")
+	}
+	assert.False(r.t, git.BranchExists(deleteBenchmarkBranch), "approval must precede branch creation")
+	entries, err := git.WorktreeList()
+	require.NoError(r.t, err)
+	require.Len(r.t, entries, 1, "approval must precede worktree creation")
+	if r.answer == "" {
+		return 0, io.EOF
+	}
+	n := copy(p, r.answer)
+	r.answer = r.answer[n:]
+	return n, nil
+}
 
 func TestDeleteBenchmarkRunsSetupAndDeletesEveryPreparedWorktree(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
@@ -25,7 +104,7 @@ func TestDeleteBenchmarkRunsSetupAndDeletesEveryPreparedWorktree(t *testing.T) {
 	refsBefore := gitTestOutput(t, fixture.repo, "show-ref")
 	worktreesBefore := gitTestOutput(t, fixture.repo, "worktree", "list", "--porcelain")
 
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "delete"}, 1, 2))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "delete", setup: creationSetupOptions{trustHooks: true}}, 1, 2))
 
 	preparedPaths := fixture.preparedPaths(t)
 	require.Len(t, preparedPaths, 3)
@@ -44,7 +123,7 @@ func TestDeleteBenchmarkRunsSetupAndDeletesEveryPreparedWorktree(t *testing.T) {
 func TestDeleteBenchmarkPreparesArtifactsBeforeTimedDeletion(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{trustHooks: true}, &cobra.Command{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
@@ -63,11 +142,25 @@ func TestDeleteBenchmarkPreparesArtifactsBeforeTimedDeletion(t *testing.T) {
 	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
 }
 
+func TestDeleteBenchmarkRejectsUnapprovedHooksBeforeCreation(t *testing.T) {
+	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
+
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{}, &cobra.Command{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
+
+	_, err = runner(&cobra.Command{})
+	require.ErrorContains(t, err, "hook approval required")
+	assert.NoFileExists(t, fixture.preparationLog)
+	assert.NoDirExists(t, filepath.Join(sandbox.worktreeDir(), deleteBenchmarkBranch))
+	gitTestFails(t, sandbox.repo, "show-ref", "--verify", "refs/heads/"+deleteBenchmarkBranch)
+}
+
 func TestDeleteBenchmarkOwnsConfiguredExternalDestination(t *testing.T) {
 	external := filepath.Join(t.TempDir(), "production-worktrees")
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{worktreeDir: external})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{trustHooks: true}, &cobra.Command{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
@@ -84,7 +177,7 @@ func TestDeleteBenchmarkOwnsConfiguredExternalDestination(t *testing.T) {
 func TestDeleteBenchmarkClearsSetupDriftBeforeTimedDeletion(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{trustHooks: true}, &cobra.Command{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
@@ -113,7 +206,7 @@ func TestDeleteBenchmarkClearsSetupDriftBeforeTimedDeletion(t *testing.T) {
 func TestDeleteBenchmarkCleansUpPreparationFailure(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{failingHook: true})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{trustHooks: true}, &cobra.Command{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
@@ -135,7 +228,7 @@ func TestDeleteBenchmarkCleansUpPreparationFailure(t *testing.T) {
 func TestDeleteBenchmarkCleansUpDeletionFailure(t *testing.T) {
 	fixture := newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
-	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{})
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{trustHooks: true}, &cobra.Command{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 
@@ -171,7 +264,7 @@ func TestDeleteBenchmarkRunsInARepositoryWithoutARemote(t *testing.T) {
 	gitTest(t, fixture.repo, "remote", "remove", "origin")
 
 	var stderr bytes.Buffer
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete"}, 0, 1))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete", setup: creationSetupOptions{trustHooks: true}}, 0, 1))
 
 	preparedPaths := fixture.preparedPaths(t)
 	require.Len(t, preparedPaths, 1)
@@ -192,7 +285,7 @@ func TestDeleteBenchmarkReportsWhatEachIterationWasPrepared(t *testing.T) {
 	newDeleteBenchmarkFixture(t, deleteBenchmarkProject{})
 
 	var stderr bytes.Buffer
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete"}, 0, 1))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete", setup: creationSetupOptions{trustHooks: true}}, 0, 1))
 
 	// What a deletion costs is decided by what setup put in the worktree, so
 	// the report says which steps ran rather than leaving the number to be
@@ -205,7 +298,7 @@ func TestDeleteBenchmarkReportsSetupOutputItHadToClear(t *testing.T) {
 	newDeleteBenchmarkFixture(t, deleteBenchmarkProject{unignoredOutput: true})
 
 	var stderr bytes.Buffer
-	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete"}, 0, 1))
+	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &stderr), benchmarkRequest{target: "delete", setup: creationSetupOptions{trustHooks: true}}, 0, 1))
 
 	// Setup output the project does not ignore has to go before the timed,
 	// non-forced deletion can run, which leaves that deletion less to remove
@@ -218,7 +311,7 @@ func TestDeleteBenchmarkSkipsRequestedSetupSteps(t *testing.T) {
 
 	// The hook cannot succeed here, but the deletion of everything else is
 	// still worth measuring.
-	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{skipHooks: true})
+	runner, sandbox, err := newDeleteBenchmarkRunner(creationSetupOptions{skipHooks: true}, &cobra.Command{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sandbox.close()) })
 

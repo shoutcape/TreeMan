@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/shoutcape/treeman/internal/fsutil"
 )
@@ -108,7 +107,7 @@ func validateNotProtected(protected Protected, dest, canonical string) error {
 		if canonical == canonicalCandidate {
 			return fmt.Errorf("cannot place a worktree at %q: it is %s", dest, candidate.name)
 		}
-		if candidate.protectDescendants && pathContains(canonicalCandidate, canonical) {
+		if candidate.protectDescendants && fsutil.Contains(canonicalCandidate, canonical) {
 			return fmt.Errorf("cannot place a worktree at %q: it is inside %s %q", dest, candidate.name, candidate.path)
 		}
 	}
@@ -144,19 +143,6 @@ func EnsureParentDir(dest string) error {
 		return fmt.Errorf("could not create worktree parent directory %q: %w", parent, err)
 	}
 	return nil
-}
-
-// pathContains reports whether child is strictly inside parent. Both paths
-// must already be canonical.
-func pathContains(parent, child string) bool {
-	if parent == child {
-		return false
-	}
-	prefix := parent
-	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
-		prefix += string(filepath.Separator)
-	}
-	return strings.HasPrefix(child, prefix)
 }
 
 func describeExisting(info fs.FileInfo) string {
