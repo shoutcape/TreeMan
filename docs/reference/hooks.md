@@ -87,6 +87,32 @@ before fetches that mutate references or worktree creation. Hooks run in the
 newly created worktree, including when destination selection needs a suffix
 because the original path was taken in the meantime.
 
+## Rerun Flags
+
+`treeman setup` runs hooks in a worktree that exists:
+
+```text
+treeman setup [<branch-or-path>] [--rerun-hooks] [--trust-hooks] [--skip-hooks]
+```
+
+`setup` skips hooks by default. A saved approval does not change that default.
+Repair must not run project commands that you did not ask for.
+
+`--rerun-hooks` requests hooks. It does not authorize them. Authorization comes
+from a saved approval, from an interactive prompt, or from `--trust-hooks`.
+
+`--trust-hooks` requires `--rerun-hooks`. TreeMan rejects `--trust-hooks`
+alone, because authorization must not also request execution.
+
+The approval scope is the same scope that creation uses. It contains the Git
+common directory, the `.treeman.toml` path in the main worktree, the
+`post_create` phase, and every command string in order. Therefore an approval
+that you saved during creation also matches a rerun.
+
+The prompt states that hooks run in a worktree that exists. That worktree can
+already contain your work. Hooks run in the selected worktree. A failed hook
+produces a warning, and setup continues.
+
 ## Manage Approvals
 
 Approval state belongs in a trusted local state directory. During creation,

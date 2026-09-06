@@ -12,6 +12,8 @@ This document describes current behavior. It is not a product roadmap.
 - Do not concurrently replace, move, or delete a worktree directory with direct filesystem commands while TreeMan removes it. TreeMan guards its own operations, but external filesystem mutations do not participate in that coordination.
 - File cleanup after Git deletion is asynchronous and is retried only when a later worktree removal runs. Interrupted staging and failed restoration leave captured directories protected for manual recovery, even if their Git registration is later removed. Recover them from the location named in the error before retrying removal. A capture whose staging metadata does not record where it came from cannot be matched to a worktree or restored automatically; it stays protected and is reported by every later removal until you recover it.
 
+- The `treeman setup` lock coordinates TreeMan setup runs for one worktree. It does not coordinate direct Git commands, editors, or other processes that write in that worktree at the same time.
+
 ## Forge Data
 
 - Branch and PR or MR lists stop at 5000 items or 50 pages. The picker does not show a message when a list stops at one of these limits.

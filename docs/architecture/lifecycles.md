@@ -22,6 +22,43 @@ sequenceDiagram
 
 With `--exec`, TreeMan replaces its own process with the command after setup. It reports no destination, so the shell wrapper does not change directory.
 
+## Setup
+
+`treeman setup` repairs a worktree that exists. The gate stops the run before
+any step changes a file. After the gate, each step is warning-only.
+
+```mermaid
+flowchart TD
+    A[Validate flags] --> B[Resolve the exact target]
+    B --> C[Load config from the main worktree]
+    C --> D[Resolve hook authorization]
+    D --> E[Take the per-worktree setup lock]
+    E --> F[Revalidate path, branch, and registration]
+    F --> G[Environment files]
+    G --> H[Database]
+    H --> I[Dependencies]
+    I --> J[Hooks]
+    J --> K[Summary]
+    subgraph Gate [Gate: a failure here is an error]
+        A
+        B
+        C
+        D
+        E
+        F
+    end
+    subgraph Steps [Steps: a failure here is a warning]
+        G
+        H
+        I
+        J
+    end
+```
+
+TreeMan holds the lock across the environment, database, dependency, and hook
+steps. It resolves hook approval before the lock, therefore a consent prompt
+never waits with the lock held.
+
 ## Remote Branch and Review
 
 ```mermaid

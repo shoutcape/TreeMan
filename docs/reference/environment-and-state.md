@@ -28,9 +28,29 @@ When `update_gitignore` is enabled, TreeMan tries to add the resolved internal w
 
 TreeMan copies each root-level, non-directory file with a name that starts with `.env`. Examples include `.env`, `.env.local`, and `.env.test`.
 
-The copy overwrites a destination file. TreeMan preserves source permissions during the copy. A branch-database rewrite preserves the current file mode, writes atomically, and refuses to follow a symlink.
+The copy policy depends on the command:
 
-Copy failures create warnings and do not stop creation.
+| Command | Destination file exists | Destination file is absent |
+| --- | --- | --- |
+| `treeman create`, `branch`, `review` | TreeMan replaces the file | TreeMan copies the file |
+| `treeman setup` | TreeMan keeps the file | TreeMan copies the file |
+| `treeman setup --refresh-env` | TreeMan replaces the file | TreeMan copies the file |
+
+No copy removes a file that only the destination has.
+
+TreeMan preserves source permissions for a new file. A refresh keeps the permissions of the destination file, writes atomically, and refuses to follow a symlink. TreeMan refuses a source or destination entry that is not a regular file. A branch-database rewrite also preserves the current file mode, writes atomically, and refuses to follow a symlink.
+
+Copy failures create warnings. TreeMan reports each file as copied, preserved, or failed, and one failed file does not stop the other files.
+
+### Refresh and Database Ownership
+
+`--refresh-env` can replace the file that names a branch database. Before that replacement, TreeMan checks the ownership record against both the current file and the replacement file.
+
+- TreeMan restores the database name that it owns after the copy.
+- A different host, port, user, or configured container is an error.
+- TreeMan then keeps that one file and prints a warning. The other environment files still refresh.
+
+`--skip-database` skips database setup. It does not skip these checks.
 
 ## Configuration Files
 
@@ -58,6 +78,7 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Environment values | `.env*` files |
 | Branch databases | Docker PostgreSQL container |
 | Branch database ownership and pending cleanup | `<git-common-dir>/treeman/databases/` |
+| Setup serialization for one worktree | `<git-common-dir>/treeman/setup/` |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
 | Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |
 
