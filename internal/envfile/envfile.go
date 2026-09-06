@@ -29,6 +29,9 @@ type CopyOptions struct {
 	// Skip names files that are never written, even if the destination is
 	// absent. A blocked file does not hold back copying the others.
 	Skip []string
+	// Prepare transforms source data before it is written to a destination.
+	// It is called once for each file that will be written.
+	Prepare func(name string, data []byte) ([]byte, error)
 }
 
 // CopyFailure names one file that could not be copied, and why.
@@ -66,6 +69,12 @@ func Copy(src, dest string) (CopyResult, error) {
 // a CopyFailure in the result instead, so one unreadable file cannot hide the
 // files that copied.
 func CopyWith(src, dest string, opts CopyOptions) (CopyResult, error) {
+	return copyWith(src, dest, opts, fsutil.AtomicWriteFile)
+}
+
+type atomicWriter func(path string, data []byte, mode os.FileMode) error
+
+func copyWith(src, dest string, opts CopyOptions, writeAtomic atomicWriter) (CopyResult, error) {
 	files, err := Files(src)
 	if err != nil {
 		return CopyResult{}, err
@@ -77,7 +86,7 @@ func CopyWith(src, dest string, opts CopyOptions) (CopyResult, error) {
 			result.Skipped = append(result.Skipped, name)
 			continue
 		}
-		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts.Refresh)
+		outcome, err := copyFile(filepath.Join(src, name), filepath.Join(dest, name), opts, writeAtomic)
 		switch {
 		case err != nil:
 			result.Failed = append(result.Failed, CopyFailure{Name: name, Err: err})
@@ -115,7 +124,7 @@ const (
 
 // copyFile applies the policy to one file. It never removes a destination and
 // never writes to one that is not a regular file.
-func copyFile(src, dest string, refresh bool) (copyOutcome, error) {
+func copyFile(src, dest string, opts CopyOptions, writeAtomic atomicWriter) (copyOutcome, error) {
 	// Lstat, not Stat: a symlink named .env must be rejected, not followed.
 	sourceInfo, err := os.Lstat(src)
 	if err != nil {
@@ -134,7 +143,7 @@ func copyFile(src, dest string, refresh bool) (copyOutcome, error) {
 		return 0, err
 	case !destinationInfo.Mode().IsRegular():
 		return 0, ErrDestinationNotRegular
-	case !refresh:
+	case !opts.Refresh:
 		return outcomePreserved, nil
 	default:
 		// Preserve a destination's tightened permissions during replacement.
@@ -145,10 +154,16 @@ func copyFile(src, dest string, refresh bool) (copyOutcome, error) {
 	if err != nil {
 		return 0, err
 	}
-	if destinationInfo == nil {
-		return createFile(dest, data, mode, refresh)
+	if opts.Prepare != nil {
+		data, err = opts.Prepare(filepath.Base(src), data)
+		if err != nil {
+			return 0, err
+		}
 	}
-	if err := fsutil.AtomicWriteFile(dest, data, mode); err != nil {
+	if destinationInfo == nil {
+		return createFile(dest, data, mode, opts.Refresh)
+	}
+	if err := writeAtomic(dest, data, mode); err != nil {
 		return 0, err
 	}
 	return outcomeCopied, nil

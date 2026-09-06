@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,15 @@ func ReadEnvValue(dir, key string) (string, error) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	value, err := readEnvValue(f, key)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", envPath, err)
+	}
+	return value, nil
+}
+
+func readEnvValue(reader io.Reader, key string) (string, error) {
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -49,7 +58,7 @@ func ReadEnvValue(dir, key string) (string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("reading %s: %w", envPath, err)
+		return "", err
 	}
 
 	return "", nil
@@ -74,6 +83,17 @@ func RewriteEnvValue(dir, key, newValue string) error {
 		return fmt.Errorf("reading %s: %w", envPath, err)
 	}
 
+	output, err := rewriteEnvValue(data, key, newValue)
+	if err != nil {
+		return err
+	}
+	if err := fsutil.AtomicWriteFile(envPath, output, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("writing %s: %w", envPath, err)
+	}
+	return nil
+}
+
+func rewriteEnvValue(data []byte, key, newValue string) ([]byte, error) {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 
@@ -101,15 +121,10 @@ func RewriteEnvValue(dir, key, newValue string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("%s not found in %s", key, envPath)
+		return nil, fmt.Errorf("%s not found in %s", key, EnvFileName)
 	}
 
-	output := strings.Join(lines, "\n")
-	if err := fsutil.AtomicWriteFile(envPath, []byte(output), info.Mode().Perm()); err != nil {
-		return fmt.Errorf("writing %s: %w", envPath, err)
-	}
-
-	return nil
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 type envAssignment struct {

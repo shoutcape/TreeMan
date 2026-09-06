@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/git"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -293,58 +294,129 @@ func TestCreationStillRefusesAnActiveRecord(t *testing.T) {
 	assert.ErrorContains(t, err, "already exists")
 }
 
-func TestGuardRefreshReturnsTheRecordedDatabase(t *testing.T) {
+func TestPrepareRefreshReturnsPreparedBytesAndDoesNotWrite(t *testing.T) {
 	worktree, dbName := activateWorktreeDatabase(t, "")
-	source := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(source, ".env"), []byte(testURI), 0o600))
+	envPath := filepath.Join(worktree, ".env")
+	current := "# destination comment\nDATABASE_URL=postgres://app:secret@127.0.0.1:5432/" + dbName + "\nOTHER=unchanged\n"
+	require.NoError(t, os.WriteFile(envPath, []byte(current), 0o600))
 
-	guard, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
+	source := []byte("# source comment\n export  DATABASE_URL = 'postgres://app:secret@127.0.0.1:5432/myapp'  \nOTHER=source\n\n")
+	sourceBefore := append([]byte(nil), source...)
+	prepared, gotDBName, err := PrepareRefresh(worktree, "feature/test", "DATABASE_URL", "", source)
+
 	require.NoError(t, err)
-
-	assert.Equal(t, dbName, guard)
+	assert.Equal(t, dbName, gotDBName)
+	assert.Equal(t, []byte("# source comment\n export  DATABASE_URL = 'postgres://app:secret@127.0.0.1:5432/"+dbName+"'  \nOTHER=source\n\n"), prepared)
+	assert.Equal(t, sourceBefore, source)
+	gotCurrent, err := os.ReadFile(envPath)
+	require.NoError(t, err)
+	assert.Equal(t, current, string(gotCurrent))
 }
 
-func TestGuardRefreshWithoutOwnershipIsNotRequired(t *testing.T) {
+func TestPrepareRefreshWithoutOwnershipReturnsSourceWithoutWritingState(t *testing.T) {
 	_, worktree := newDatabaseWorktree(t)
-	require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte(testURI), 0o600))
-	source := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(source, ".env"), []byte(testURI), 0o600))
-
-	guard, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
+	envPath := filepath.Join(worktree, ".env")
+	destination := []byte(testURI)
+	require.NoError(t, os.WriteFile(envPath, destination, 0o600))
+	source := []byte("# source\nDATABASE_URL=postgres://app:secret@127.0.0.1:5432/replacement\n")
+	commonDir, err := git.CommonDir(worktree)
 	require.NoError(t, err)
 
-	assert.Empty(t, guard)
+	prepared, dbName, err := PrepareRefresh(worktree, "feature/test", "DATABASE_URL", "", source)
+
+	require.NoError(t, err)
+	assert.Empty(t, dbName)
+	assert.Equal(t, source, prepared)
+	gotDestination, err := os.ReadFile(envPath)
+	require.NoError(t, err)
+	assert.Equal(t, destination, gotDestination)
+	assert.NoDirExists(t, filepath.Join(commonDir, databaseStateDirectory))
 }
 
-func TestGuardRefreshRejectsDrift(t *testing.T) {
+func TestPrepareRefreshRefusesOwnedMissingConfigurationWithoutWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		envKey string
+		config string
+	}{
+		{name: "missing file", envKey: "DATABASE_URL"},
+		{name: "missing key", envKey: "DATABASE_URL", config: "OTHER=1\n"},
+		{name: "empty env key", envKey: "", config: testURI},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worktree, dbName := activateWorktreeDatabase(t, "")
+			envPath := filepath.Join(worktree, ".env")
+			if tc.name == "missing file" {
+				require.NoError(t, os.Remove(envPath))
+			}
+			if tc.config != "" {
+				require.NoError(t, os.WriteFile(envPath, []byte(tc.config), 0o600))
+			}
+			store, worktreeID, err := databaseStoreForWorktree(worktree)
+			require.NoError(t, err)
+			stateBefore, err := os.ReadFile(store.recordPath(worktreeID))
+			require.NoError(t, err)
+			source := []byte(testURI)
+
+			_, gotDBName, err := PrepareRefresh(worktree, "feature/test", tc.envKey, "", source)
+
+			require.Error(t, err)
+			assert.Empty(t, gotDBName)
+			assert.ErrorContains(t, err, "no PostgreSQL")
+			stateAfter, readErr := os.ReadFile(store.recordPath(worktreeID))
+			require.NoError(t, readErr)
+			assert.Equal(t, stateBefore, stateAfter)
+			if tc.name != "missing file" {
+				gotConfig, readErr := os.ReadFile(envPath)
+				require.NoError(t, readErr)
+				assert.Equal(t, tc.config, string(gotConfig))
+			}
+			assert.Equal(t, []byte(testURI), source)
+			assert.Equal(t, dbName, loadTestRecord(t, worktree).Database)
+		})
+	}
+}
+
+func TestPrepareRefreshRejectsCurrentAndReplacementDrift(t *testing.T) {
 	drifted := "DATABASE_URL=postgres://app:secret@127.0.0.1:5544/myapp\n"
 	t.Run("current file", func(t *testing.T) {
 		worktree, _ := activateWorktreeDatabase(t, "")
 		require.NoError(t, os.WriteFile(filepath.Join(worktree, ".env"), []byte(drifted), 0o600))
-		source := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(source, ".env"), []byte(testURI), 0o600))
+		source := []byte(testURI)
+		sourceBefore := append([]byte(nil), source...)
 
-		guard, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
+		prepared, dbName, err := PrepareRefresh(worktree, "feature/test", "DATABASE_URL", "", source)
 
 		assert.ErrorContains(t, err, "database setup target changed")
-		assert.Empty(t, guard)
+		assert.Nil(t, prepared)
+		assert.Empty(t, dbName)
+		assert.Equal(t, sourceBefore, source)
+		gotCurrent, readErr := os.ReadFile(filepath.Join(worktree, ".env"))
+		require.NoError(t, readErr)
+		assert.Equal(t, drifted, string(gotCurrent))
 	})
 
 	t.Run("replacement file", func(t *testing.T) {
-		worktree, _ := activateWorktreeDatabase(t, "")
-		source := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(source, ".env"), []byte(drifted), 0o600))
+		worktree, dbName := activateWorktreeDatabase(t, "")
+		envPath := filepath.Join(worktree, ".env")
+		current := "DATABASE_URL=postgres://app:secret@127.0.0.1:5432/" + dbName + "\n"
+		require.NoError(t, os.WriteFile(envPath, []byte(current), 0o600))
+		source := []byte(drifted)
+		sourceBefore := append([]byte(nil), source...)
 
-		_, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
+		_, _, err := PrepareRefresh(worktree, "feature/test", "DATABASE_URL", "", source)
 		assert.ErrorContains(t, err, "database setup target changed")
+		assert.Equal(t, sourceBefore, source)
+		gotCurrent, readErr := os.ReadFile(envPath)
+		require.NoError(t, readErr)
+		assert.Equal(t, current, string(gotCurrent))
 	})
 
 	t.Run("replacement without a URI", func(t *testing.T) {
 		worktree, _ := activateWorktreeDatabase(t, "")
-		source := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(source, ".env"), []byte("OTHER=1\n"), 0o600))
+		source := []byte("OTHER=1\n")
 
-		_, err := GuardRefresh(worktree, source, "feature/test", "DATABASE_URL", "")
+		_, _, err := PrepareRefresh(worktree, "feature/test", "DATABASE_URL", "", source)
 		assert.ErrorContains(t, err, "no PostgreSQL")
 	})
 }

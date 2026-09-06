@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/shoutcape/treeman/internal/fsutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -243,6 +244,99 @@ func TestCopyWith_OneFailureDoesNotStopTheOtherFiles(t *testing.T) {
 	assert.ElementsMatch(t, []string{".env", ".env.local"}, result.Copied)
 	require.Len(t, result.Failed, 1)
 	assert.Equal(t, ".env.broken", result.Failed[0].Name)
+}
+
+func TestCopyWith_PrepareFailureDoesNotWriteAndContinues(t *testing.T) {
+	src, dest := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, ".env"), []byte("URI=one"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(src, ".env.local"), []byte("URI=two"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, ".env"), []byte("old"), 0o600))
+
+	result, err := CopyWith(src, dest, CopyOptions{
+		Refresh: true,
+		Prepare: func(name string, data []byte) ([]byte, error) {
+			if name == ".env" {
+				return nil, fmt.Errorf("prepare %s", name)
+			}
+			return append(data, []byte(" prepared")...), nil
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Failed, 1)
+	assert.Equal(t, ".env", result.Failed[0].Name)
+	assert.Equal(t, []string{".env.local"}, result.Copied)
+
+	data, err := os.ReadFile(filepath.Join(dest, ".env"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("old"), data)
+	data, err = os.ReadFile(filepath.Join(dest, ".env.local"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("URI=two prepared"), data)
+}
+
+func TestCopyWith_PrepareReadsSourceOnceAndWritesPreparedDataOnce(t *testing.T) {
+	src, dest := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, ".env"), []byte("URI=source"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, ".env"), []byte("old"), 0o600))
+
+	writeCalls := 0
+	result, err := copyWith(src, dest, CopyOptions{
+		Refresh: true,
+		Prepare: func(name string, data []byte) ([]byte, error) {
+			require.Equal(t, ".env", name)
+			require.Equal(t, []byte("URI=source"), data)
+			require.NoError(t, os.WriteFile(filepath.Join(src, ".env"), []byte("URI=mutated"), 0o600))
+			return []byte("URI=prepared"), nil
+		},
+	}, func(path string, data []byte, mode os.FileMode) error {
+		writeCalls++
+		return fsutil.AtomicWriteFile(path, data, mode)
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{".env"}, result.Copied)
+	assert.Equal(t, 1, writeCalls)
+
+	data, err := os.ReadFile(filepath.Join(dest, ".env"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("URI=prepared"), data)
+}
+
+func TestCopyWith_PublicationFailuresNeverPublishUnpreparedSource(t *testing.T) {
+	src, dest := t.TempDir(), t.TempDir()
+	source := []byte("DATABASE_URL=postgres://app@localhost/main\nSETTING=new\n")
+	previous := []byte("DATABASE_URL=postgres://app@localhost/owned\nSETTING=old\n")
+	prepared := []byte("DATABASE_URL=postgres://app@localhost/owned\nSETTING=new\n")
+	require.NoError(t, os.WriteFile(filepath.Join(src, ".env"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, ".env"), previous, 0o600))
+
+	writeErr := fmt.Errorf("writer failed")
+	result, err := copyWith(src, dest, CopyOptions{
+		Refresh: true,
+		Prepare: func(string, []byte) ([]byte, error) { return prepared, nil },
+	}, func(string, []byte, os.FileMode) error {
+		return writeErr
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Failed, 1)
+	assert.ErrorIs(t, result.Failed[0].Err, writeErr)
+	data, err := os.ReadFile(filepath.Join(dest, ".env"))
+	require.NoError(t, err)
+	assert.Equal(t, previous, data)
+
+	result, err = copyWith(src, dest, CopyOptions{
+		Refresh: true,
+		Prepare: func(string, []byte) ([]byte, error) { return prepared, nil },
+	}, func(path string, data []byte, mode os.FileMode) error {
+		require.Equal(t, prepared, data)
+		require.NoError(t, fsutil.AtomicWriteFile(path, data, mode))
+		return writeErr
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Failed, 1)
+	assert.ErrorIs(t, result.Failed[0].Err, writeErr)
+	data, err = os.ReadFile(filepath.Join(dest, ".env"))
+	require.NoError(t, err)
+	assert.Equal(t, prepared, data)
 }
 
 func TestCopy_ReplacesForCreation(t *testing.T) {

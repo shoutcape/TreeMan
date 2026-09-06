@@ -86,8 +86,8 @@ func TestSetupRefreshPreservesTheProtectedFileWhenOwnershipCannotBeProven(t *tes
 	assert.Equal(t, branchEnv, readTestFile(t, filepath.Join(worktree, ".env")))
 	assert.Equal(t, "LOCAL=main\n", readTestFile(t, filepath.Join(worktree, ".env.local")),
 		"one protected file must not hold back the others")
-	assert.Contains(t, stderr, "skipping .env")
-	assert.Contains(t, stderr, "Skipped .env.")
+	assert.Contains(t, stderr, "could not copy .env")
+	assert.Contains(t, stderr, "failed 1")
 }
 
 func TestSetupNormalRerunNeverOverwritesAnEditedDatabaseTarget(t *testing.T) {
@@ -153,7 +153,7 @@ func TestSetupRefreshSkipsEnvironmentWhenOwnershipStateIsInvalid(t *testing.T) {
 				assert.NoFileExists(t, filepath.Join(worktree, ".env"))
 			}
 			assert.Equal(t, "LOCAL=main\n", readTestFile(t, filepath.Join(worktree, ".env.local")))
-			assert.Contains(t, stderr, "skipping .env")
+			assert.Contains(t, stderr, "could not copy .env")
 			assert.NotContains(t, stderr, "Kept database")
 			assert.NotContains(t, stderr, "Preserved existing .env.")
 		})

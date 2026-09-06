@@ -12,6 +12,10 @@ import (
 // A directory-sync error is returned after replacement; it does not restore
 // the previous file.
 func AtomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	return atomicWriteFile(path, data, mode, SyncDirectory)
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode, syncDirectory func(string) error) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".tmp-")
 	if err != nil {
 		return err
@@ -37,7 +41,7 @@ func AtomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	return SyncDirectory(filepath.Dir(path))
+	return syncDirectory(filepath.Dir(path))
 }
 
 // SyncDirectory flushes directory metadata to durable storage.

@@ -250,12 +250,18 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setupStatus {
 	options := envfile.CopyOptions{Refresh: setup.environment == envReplace || setup.environment == envRefresh}
 
-	restore, guardErr := setup.guardEnvironmentRefresh()
-	if guardErr != nil {
-		// One protected file, not the whole step: every other environment
-		// file still refreshes.
-		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("skipping %s: %v", database.EnvFileName, guardErr)))
-		options.Skip = append(options.Skip, database.EnvFileName)
+	var ownedDatabase string
+	if setup.environment == envRefresh {
+		// --skip-database skips provisioning, not protection of owned data.
+		options.Prepare = func(name string, source []byte) ([]byte, error) {
+			if name != database.EnvFileName {
+				return source, nil
+			}
+			prepared, owned, err := database.PrepareRefresh(setup.worktreePath, setup.branch,
+				setup.projectConfig.DatabaseEnvKey(), setup.projectConfig.DatabaseContainer(), source)
+			ownedDatabase = owned
+			return prepared, err
+		}
 	}
 
 	result, err := envfile.CopyWith(setup.mainRoot, setup.worktreePath, options)
@@ -265,42 +271,10 @@ func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setu
 	}
 	status := reportEnvironmentCopy(w, render, result)
 
-	if guardErr != nil || restore == "" || !slices.Contains(result.Copied, database.EnvFileName) {
-		return status
+	if ownedDatabase != "" && slices.Contains(result.Copied, database.EnvFileName) {
+		fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Kept database "+ownedDatabase+" in "+database.EnvFileName+"."))
 	}
-	// The copy brought in the main worktree's database name. Put the owned one
-	// back, or the branch would run against the shared database.
-	if err := restoreOwnedDatabase(setup.worktreePath, setup.projectConfig.DatabaseEnvKey(), restore); err != nil {
-		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not restore database %s in %s: %v", restore, database.EnvFileName, err)))
-		return failedStatus(fmt.Sprintf("%s, database name not restored", status.text))
-	}
-	fmt.Fprintln(w, render.Status(ui.ToneSuccess, "✓", "Kept database "+restore+" in "+database.EnvFileName+"."))
 	return status
-}
-
-// guardEnvironmentRefresh reports whether the database-bearing environment
-// file may be replaced. It runs for every refresh, including one that skips
-// the database step: --skip-database skips provisioning work, not the
-// protection of a database TreeMan already owns.
-func (setup worktreeSetup) guardEnvironmentRefresh() (string, error) {
-	if setup.environment != envRefresh {
-		return "", nil
-	}
-	return database.GuardRefresh(setup.worktreePath, setup.mainRoot, setup.branch,
-		setup.projectConfig.DatabaseEnvKey(), setup.projectConfig.DatabaseContainer())
-}
-
-// restoreOwnedDatabase rewrites the copied URI to name the owned database.
-func restoreOwnedDatabase(worktreePath, envKey, dbName string) error {
-	uri, err := database.ReadEnvValue(worktreePath, envKey)
-	if err != nil {
-		return err
-	}
-	restored, err := database.ReplaceDatabase(uri, dbName)
-	if err != nil {
-		return err
-	}
-	return database.RewriteEnvValue(worktreePath, envKey, restored)
 }
 
 // reportEnvironmentCopy prints one line per file and reduces the copy to a

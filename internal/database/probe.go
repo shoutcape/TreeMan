@@ -44,6 +44,10 @@ func loadSetupTarget(worktreePath, envKey string) (setupTarget, error) {
 	if err != nil {
 		return setupTarget{}, fmt.Errorf("reading %s: %w", envKey, err)
 	}
+	return parseSetupTarget(uri, envKey)
+}
+
+func parseSetupTarget(uri, envKey string) (setupTarget, error) {
 	if uri == "" || !isPostgresURI(uri) {
 		return setupTarget{skipped: true}, nil
 	}

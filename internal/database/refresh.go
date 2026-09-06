@@ -1,58 +1,62 @@
 package database
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+)
 
-// GuardRefresh decides whether the database-bearing environment file in
-// worktreePath may be replaced by the one in sourcePath.
-//
-// It reads local state only, with no Docker call, so a refresh still works
-// while the container is stopped. An error means the caller must neither create
-// nor replace the file. On success, a non-empty name must be restored into the
-// copied file. An empty name means no database is owned here.
-func GuardRefresh(worktreePath, sourcePath, branch, envKey, configuredContainer string) (string, error) {
-	if envKey == "" {
-		return "", nil
-	}
-	store, worktreeID, err := databaseStoreForWorktree(worktreePath)
+// PrepareRefresh validates local ownership and returns the complete replacement
+// contents, with any owned database name already substituted. The caller must
+// publish these bytes rather than reread the source. No files or resources are
+// changed, and no Docker call is needed while the container is stopped.
+func PrepareRefresh(worktreePath, branch, envKey, configuredContainer string, source []byte) ([]byte, string, error) {
+	_, _, record, err := readOnlyDatabaseOwnership(worktreePath)
 	if err != nil {
-		return "", err
-	}
-	record, err := store.ownership(worktreeID)
-	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if record == nil {
-		// Nothing is owned here, so the file carries no database TreeMan has
-		// to preserve.
-		return "", nil
+		return source, "", nil
 	}
-
 	if record.Branch != branch {
-		return "", fmt.Errorf("database ownership record for worktree %q names branch %q, not %q", record.WorktreePath, record.Branch, branch)
+		return nil, "", fmt.Errorf("database ownership record for worktree %q names branch %q, not %q", record.WorktreePath, record.Branch, branch)
 	}
 	if err := matchesRecordedWorktree(record, worktreePath); err != nil {
-		return "", err
+		return nil, "", err
 	}
-	// Both sides are checked. The current file must not hide an edited target
-	// behind the copy, and the replacement must reach the same server as the
-	// record, or restoring the database name would point it somewhere else.
-	if err := guardedTarget(worktreePath, envKey, "current", record, configuredContainer); err != nil {
-		return "", err
+	// The current target must not hide drift behind the refresh. Validate the
+	// replacement from the same snapshot that will be rewritten and published.
+	current, err := loadSetupTarget(worktreePath, envKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading current %s: %w", EnvFileName, err)
 	}
-	if err := guardedTarget(sourcePath, envKey, "replacement", record, configuredContainer); err != nil {
-		return "", err
+	if err := guardedTarget(current, envKey, "current", record, configuredContainer); err != nil {
+		return nil, "", err
 	}
-	return record.Database, nil
+	uri, err := readEnvValue(bytes.NewReader(source), envKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading replacement %s: %w", EnvFileName, err)
+	}
+	replacement, err := parseSetupTarget(uri, envKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading replacement %s: %w", EnvFileName, err)
+	}
+	if err := guardedTarget(replacement, envKey, "replacement", record, configuredContainer); err != nil {
+		return nil, "", err
+	}
+	ownedURI, err := ReplaceDatabase(uri, record.Database)
+	if err != nil {
+		return nil, "", err
+	}
+	prepared, err := rewriteEnvValue(source, envKey, ownedURI)
+	if err != nil {
+		return nil, "", err
+	}
+	return prepared, record.Database, nil
 }
 
-// guardedTarget checks one side of a refresh against the ownership record.
-func guardedTarget(dir, envKey, role string, record *DatabaseRecord, configuredContainer string) error {
-	target, err := loadSetupTarget(dir, envKey)
-	if err != nil {
-		return fmt.Errorf("reading %s %s: %w", role, EnvFileName, err)
-	}
+func guardedTarget(target setupTarget, envKey, role string, record *DatabaseRecord, configuredContainer string) error {
 	if target.skipped {
-		return fmt.Errorf("%s %s has no PostgreSQL %s, so restoring database %q would have nowhere to go", role, EnvFileName, envKey, record.Database)
+		return fmt.Errorf("%s %s has no PostgreSQL %s, so preserving database %q would have nowhere to go", role, EnvFileName, envKey, record.Database)
 	}
 	if err := matchesRecordedTarget(record, target.parsed, configuredContainer); err != nil {
 		return fmt.Errorf("%s %s: %w", role, EnvFileName, err)
