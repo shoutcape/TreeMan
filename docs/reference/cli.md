@@ -138,8 +138,9 @@ A normal rerun copies each missing `.env*` file and keeps each file that
 exists. Use `--refresh-env` to replace them.
 
 A refresh keeps the database name that TreeMan owns. If TreeMan cannot prove
-that the replacement is safe, it keeps that one file and prints a warning. The
-other environment files still refresh. Read
+that the replacement is safe, it skips that file entirely and prints a warning:
+an existing file stays unchanged, and an absent file is not created. The other
+environment files still refresh. Read
 [Environment Files](environment-and-state.md#environment-files).
 
 ### Databases

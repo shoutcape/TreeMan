@@ -34,21 +34,22 @@ The copy policy depends on the command:
 | --- | --- | --- |
 | `treeman create`, `branch`, `review` | TreeMan replaces the file | TreeMan copies the file |
 | `treeman setup` | TreeMan keeps the file | TreeMan copies the file |
-| `treeman setup --refresh-env` | TreeMan replaces the file | TreeMan copies the file |
+| `treeman setup --refresh-env` | TreeMan replaces the file unless database ownership checks block it | TreeMan copies the file unless database ownership checks block it |
 
 No copy removes a file that only the destination has.
 
 TreeMan preserves source permissions for a new file. A refresh keeps the permissions of the destination file, writes atomically, and refuses to follow a symlink. TreeMan refuses a source or destination entry that is not a regular file. A branch-database rewrite also preserves the current file mode, writes atomically, and refuses to follow a symlink.
 
-Copy failures create warnings. TreeMan reports each file as copied, preserved, or failed, and one failed file does not stop the other files.
+Copy failures create warnings. TreeMan reports each file as copied, preserved, skipped, or failed, and one failed or skipped file does not stop the other files.
 
 ### Refresh and Database Ownership
 
 `--refresh-env` can replace the file that names a branch database. Before that replacement, TreeMan checks the ownership record against both the current file and the replacement file.
 
-- TreeMan restores the database name that it owns after the copy.
+- When both checks succeed, TreeMan restores the database name that it owns after the copy.
 - A different host, port, user, or configured container is an error.
-- TreeMan then keeps that one file and prints a warning. The other environment files still refresh.
+- If ownership cannot be proven, TreeMan skips that file entirely and prints a warning. An existing file stays unchanged; an absent file is not created. The other environment files still refresh.
+- A missing current `.env` cannot prove the owned database target, even when the replacement matches the record. Invalid or unreadable ownership state also blocks the file.
 
 `--skip-database` skips database setup. It does not skip these checks.
 
