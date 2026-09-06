@@ -19,8 +19,8 @@ Shell integration uses that destination to change the current interactive shell 
 | `treeman clean [--dry-run] [--yes]` | `wtc` | Remove clean worktrees merged into the default branch |
 | `treeman delete [query]` | `wtd` | Delete a linked worktree and branch |
 | `treeman shell` | None | Install and manage shell integration |
-| `treeman doctor` | None | Check repository readiness and configuration |
-| `treeman preflight` | None | Report setup compatibility before creation |
+| `treeman doctor [--json]` | None | Check repository readiness and configuration |
+| `treeman preflight [--json]` | None | Report setup compatibility before creation |
 | `treeman theme` | None | Select a terminal color theme |
 | `treeman version` | None | Print build data |
 
@@ -74,10 +74,12 @@ Use `-x <command>` to run a command in the new worktree instead of printing its 
 ## `preflight`
 
 ```text
-treeman preflight
+treeman preflight [--json]
 ```
 
 Report whether environment file copy, dependency installation, database setup, and post-create hooks can run for the current repository. The report reads repository files, checks required dependency installers, and checks the configured PostgreSQL container without creating a worktree, branch, or database, or running hooks. For Corepack-managed Yarn projects, it reports `corepack yarn install` and warns when `corepack` is unavailable. Nested modules are reported but remain skipped; use trusted post-create hooks for their setup.
+
+Without `--json`, the report is written only to stderr. With `--json`, see the [diagnostic JSON contract](#diagnostic-json). Collected failed checks do not cause a nonzero exit: automation must inspect `ok` for readiness. Fatal repository/worktree setup errors and JSON write failures do return nonzero. Setup errors emit a failed `repository` or `worktree` check before returning the error in JSON mode; human mode retains error-only output.
 
 ## `branch`
 
@@ -210,16 +212,38 @@ The integration defines a `treeman` adapter and the `wt`, `wtb`, `wtpr`, `wtmr`,
 ## `doctor`
 
 ```text
-treeman doctor
+treeman doctor [--json]
 ```
 
-Check Git repository, forge CLI, optional configuration and database setup, `fzf`, Docker, and shell integration readiness. The diagnostic report, including hints and its summary, is written to stderr; `doctor` writes no stdout output.
+Check Git repository, forge CLI, optional configuration and database setup, `fzf`, Docker, and shell integration readiness. Without `--json`, the diagnostic report, including hints and its summary, is written to stderr; `doctor` writes no stdout output. With `--json`, see the [diagnostic JSON contract](#diagnostic-json).
 
 `doctor` exits non-zero after rendering the full report when any diagnostic fails. Warnings and informational diagnostics do not cause a non-zero exit.
 
 Docker readiness uses a read-only daemon connectivity check. It does not inspect containers or connect to PostgreSQL. A missing Docker executable or unavailable daemon is a warning.
 
 Shell integration is checked only when `SHELL` identifies active `bash` or `zsh`. TreeMan recognizes its managed block and legacy `treeman init` entries. Missing or unsupported `SHELL` values are informational and are not treated as bash.
+
+### Diagnostic JSON
+
+`preflight --json` and `doctor --json` write exactly one JSON document followed by a newline to stdout, without ANSI formatting or human report output. Incidental warnings and returned errors remain on stderr. Help and argument/flag errors are outside this contract.
+
+```json
+{"ok":true,"checks":[{"name":"configuration","status":"info","message":"No .treeman.toml found; optional setup disabled","hint":""}]}
+```
+
+`ok` is true when no check has status `fail`. Statuses are `pass` (ready), `info` (informational or not configured), `warn` (limited readiness), and `fail` (failed check). All four check fields are always present; absent hints use an empty string and empty reports use `checks: []`.
+
+Stable check identifiers:
+
+| Command | Identifiers |
+| --- | --- |
+| `preflight` | `environment`, `dependencies`, `nested_modules`, `nested_module`, `configuration`, `database`, `hooks` |
+| Preflight setup errors | `repository`, `worktree` |
+| `doctor` | `git`, `repository`, `forge_cli`, `configuration`, `database_setup`, `interactive_picker`, `container_support`, `shell_integration` |
+
+Checks may be omitted when prerequisites prevent evaluation. `nested_module` may repeat, with the path and manifest in its message. Names and statuses are the stable parsing interface; messages and hints are descriptive and may change. Consumers must tolerate additional fields and checks. No schema-version field is provided initially.
+
+Doctor returns nonzero after emitting a report with `ok: false`; warnings and information alone succeed. Preflight still exits successfully for collected failures, so inspect `ok` rather than only its exit code. Fatal setup errors and JSON write failures return nonzero.
 
 ## `version`
 

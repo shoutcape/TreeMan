@@ -75,8 +75,8 @@ func printOverview(cmd *cobra.Command) {
 		{use: "treeman benchmark [command]", short: "Measure command execution time"},
 		{use: "treeman clean", short: "Remove clean worktrees merged into default branch"},
 		{use: "treeman delete [query]", short: "Remove a worktree and branch"},
-		{use: "treeman doctor", short: "Check repository readiness and configuration"},
-		{use: "treeman preflight", short: "Report setup compatibility before creation"},
+		{use: "treeman doctor [--json]", short: "Check repository readiness and configuration"},
+		{use: "treeman preflight [--json]", short: "Report setup compatibility before creation"},
 		{use: "treeman theme", short: "Select a terminal color theme"},
 	}
 
