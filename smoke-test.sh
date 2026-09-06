@@ -94,6 +94,7 @@ REAL_PATH="$PATH"
 
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_STATE_HOME="$HOME/.local/state"
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME="TreeMan Test"
 export GIT_AUTHOR_EMAIL="test@example.com"
@@ -457,8 +458,20 @@ assert_missing "$DOCKER_CALLS"
 echo "==> worktree create"
 
 cd "$MAIN_REPO"
-wt feature/test
+# Unattended creation must not run repository hooks without explicit consent.
+if wt feature/unapproved </dev/null >"$TMP_DIR/unapproved-output" 2>&1; then
+  fail "wt should require hook approval"
+fi
+assert_file_contains "$TMP_DIR/unapproved-output" "hook approval required"
+assert_missing "$MAIN_REPO/.worktrees/feature-unapproved"
+if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/unapproved; then
+  fail "Unapproved creation must not create a branch"
+fi
+
+wt feature/test --trust-hooks
 assert_exists "$WORKTREE_REPO"
+assert_exists "$WORKTREE_REPO/hook-ran"
+assert_missing "$XDG_STATE_HOME/treeman/hook-approvals.json"
 [[ "$(pwd)" == "$WORKTREE_REPO" ]] || fail "Expected wt to cd into created worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/test \
   || fail "Expected feature/test branch to exist"
@@ -482,8 +495,9 @@ echo "==> review worktree create (GitHub wtpr)"
 
 cd "$MAIN_REPO"
 export MOCK_GH_VIEW_123='{"number":123,"title":"Alpha review","head":{"ref":"feature/review-alpha","repo":{"owner":{"login":"shoutcape"}}}}'
-wtpr 123
+wtpr 123 --trust-hooks
 assert_exists "$REVIEW_WT_ALPHA"
+assert_exists "$REVIEW_WT_ALPHA/hook-ran"
 assert_exists "$REVIEW_WT_ALPHA/review-alpha.txt"
 [[ "$(pwd)" == "$REVIEW_WT_ALPHA" ]] || fail "Expected wtpr to cd into created review worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/review-alpha \
@@ -510,7 +524,7 @@ export MOCK_GH_VIEW_124='{"number":124,"title":"Beta review","head":{"ref":"feat
 export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":123,"title":"Alpha review","headRefName":"feature/review-alpha"},{"number":124,"title":"Beta review","headRefName":"feature/review-beta"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 # FZF_CHOICE=3 selects the second data row (row 1 = header, row 2 = #123, row 3 = #124).
 export FZF_CHOICE=3
-wtmr
+wtmr --trust-hooks
 assert_exists "$REVIEW_WT_BETA"
 assert_exists "$REVIEW_WT_BETA/review-beta.txt"
 [[ "$(pwd)" == "$REVIEW_WT_BETA" ]] || fail "Expected wtmr to cd into created review worktree"
@@ -650,8 +664,9 @@ export MOCK_GH_BRANCHES='[{"name":"feature/remote-only","protected":false,"commi
 export MOCK_GH_GRAPHQL='{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
 
 cd "$MAIN_REPO"
-wtb feature/remote-only
+wtb feature/remote-only --trust-hooks
 assert_exists "$BRANCH_WT"
+assert_exists "$BRANCH_WT/hook-ran"
 assert_exists "$BRANCH_WT/remote-only.txt"
 [[ "$(pwd)" == "$BRANCH_WT" ]] || fail "Expected wtb to cd into created branch worktree"
 git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/remote-only \
@@ -689,7 +704,7 @@ export MOCK_GH_BRANCH_PRS='feature/picker-test=99'
 cd "$MAIN_REPO"
 # FZF_CHOICE=2 picks the first data row (row 1 = header).
 export FZF_CHOICE=2
-wtb
+wtb --trust-hooks
 assert_exists "$BRANCH_WT_PICKER"
 [[ "$(pwd)" == "$BRANCH_WT_PICKER" ]] || fail "Expected wtb picker to cd into created worktree"
 unset FZF_CHOICE
@@ -724,7 +739,7 @@ export FZF_CHOICE=2
 
 cd "$MAIN_REPO"
 picker_started=$SECONDS
-wtb
+wtb --trust-hooks
 picker_elapsed=$((SECONDS - picker_started))
 assert_exists "$BRANCH_WT_EARLY"
 [[ "$(pwd)" == "$BRANCH_WT_EARLY" ]] || fail "Expected wtb to cd into the worktree picked from a streamed row"
