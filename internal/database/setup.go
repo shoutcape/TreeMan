@@ -39,23 +39,38 @@ func Setup(opts SetupOptions) (SetupResult, error) {
 }
 
 func setupDatabase(backend Backend, opts SetupOptions) (SetupResult, error) {
+	store, worktreeID, record, err := readOnlyDatabaseOwnership(opts.WorktreePath)
+	if err != nil {
+		return SetupResult{}, err
+	}
+	if record != nil {
+		record, err = applySetupOwnership(record, opts)
+		if err != nil {
+			return SetupResult{}, err
+		}
+	}
 	targetInput, err := loadSetupTarget(opts.WorktreePath, opts.EnvKey)
 	if err != nil {
 		return SetupResult{}, err
 	}
 	if targetInput.skipped {
-		return SetupResult{Skipped: true}, nil
+		if record == nil {
+			return SetupResult{Skipped: true}, nil
+		}
+		return SetupResult{}, fmt.Errorf("owned database %q requires a PostgreSQL %s in %s", record.Database, opts.EnvKey, EnvFileName)
+	}
+	if record == nil {
+		store, worktreeID, err = databaseStoreForWorktree(opts.WorktreePath)
+		if err != nil {
+			return SetupResult{}, err
+		}
+		record, err = setupOwnership(store, worktreeID, opts)
+		if err != nil {
+			return SetupResult{}, err
+		}
 	}
 	uri := targetInput.uri
 	parsed := targetInput.parsed
-	store, worktreeID, err := databaseStoreForWorktree(opts.WorktreePath)
-	if err != nil {
-		return SetupResult{}, err
-	}
-	record, err := setupOwnership(store, worktreeID, opts)
-	if err != nil {
-		return SetupResult{}, err
-	}
 	if record != nil {
 		if err := matchesRecordedTarget(record, parsed, opts.ConfiguredContainer); err != nil {
 			return SetupResult{}, err
@@ -85,6 +100,10 @@ func setupOwnership(store *databaseStore, worktreeID string, opts SetupOptions) 
 	if err != nil || record == nil {
 		return record, err
 	}
+	return applySetupOwnership(record, opts)
+}
+
+func applySetupOwnership(record *DatabaseRecord, opts SetupOptions) (*DatabaseRecord, error) {
 	if record.Branch != opts.Branch {
 		return nil, fmt.Errorf("database ownership record for worktree %q names branch %q, not %q", record.WorktreePath, record.Branch, opts.Branch)
 	}
