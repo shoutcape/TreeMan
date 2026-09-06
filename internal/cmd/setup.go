@@ -45,6 +45,8 @@ func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, 
 		projectConfig: paths.config,
 		hooks:         paths.hooks,
 		options:       paths.options,
+		environment:   envReplace,
+		hooksSkipped:  "skipped (requested)",
 	})
 }
 
@@ -107,6 +109,14 @@ func creationSetupFlagsChanged(cmd *cobra.Command) bool {
 	return false
 }
 
+type envPolicy int
+
+const (
+	envReplace  envPolicy = iota // Creation replaces destination files.
+	envPreserve                  // Reruns preserve branch-local edits.
+	envRefresh                   // Explicit refresh guards owned database targets.
+)
+
 type worktreeSetup struct {
 	mainRoot     string
 	worktreePath string
@@ -118,24 +128,11 @@ type worktreeSetup struct {
 	projectConfig config.Config
 	hooks         hookApproval
 	options       creationSetupOptions
-	// rerun switches the environment and database steps from creation
-	// semantics to repair semantics: preserve what is already there, and
-	// verify owned state instead of provisioning it.
-	rerun bool
-	// refreshEnv replaces existing environment files during a rerun. It is
-	// meaningless without rerun, because creation always replaces.
-	refreshEnv bool
+	environment   envPolicy
 	// hooksSkipped explains a skipped hooks step in the caller's own terms. A
 	// rerun skips hooks by default, which the user did not ask for, so saying
 	// "requested" there would be wrong.
 	hooksSkipped string
-}
-
-func (setup worktreeSetup) hooksSkippedText() string {
-	if setup.hooksSkipped != "" {
-		return setup.hooksSkipped
-	}
-	return "skipped (requested)"
 }
 
 type setupStatusKind int
@@ -207,7 +204,7 @@ func (summary setupSummary) failures() []string {
 }
 
 // runWorktreeSetup performs the common best-effort setup actions for every
-// newly created worktree and captures their results for a consistent summary.
+// created or existing worktree and captures their results for a consistent summary.
 func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setupSummary {
 	// Probe the source before copying so --skip-env and copy failures do not
 	// hide an .envrc that would otherwise be supplied to the worktree.
@@ -232,7 +229,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 	}
 	reportNestedModules(w, render, setup.worktreePath, setup.worktreeDir)
 
-	hooksStatus := skippedStatus(setup.hooksSkippedText())
+	hooksStatus := skippedStatus(setup.hooksSkipped)
 	if !setup.options.skipHooks {
 		hooksStatus = setup.hooks.run(w, render, setup.worktreePath)
 	}
@@ -251,7 +248,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 // it was asked to refresh, and a refresh proves database ownership before it
 // replaces the one file that names the branch database.
 func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setupStatus {
-	options := envfile.CopyOptions{Refresh: !setup.rerun || setup.refreshEnv}
+	options := envfile.CopyOptions{Refresh: setup.environment == envReplace || setup.environment == envRefresh}
 
 	restore, guardErr := setup.guardEnvironmentRefresh()
 	if guardErr != nil {
@@ -286,7 +283,7 @@ func (setup worktreeSetup) copyEnvironment(w io.Writer, render ui.Renderer) setu
 // the database step: --skip-database skips provisioning work, not the
 // protection of a database TreeMan already owns.
 func (setup worktreeSetup) guardEnvironmentRefresh() (string, error) {
-	if !setup.rerun || !setup.refreshEnv {
+	if setup.environment != envRefresh {
 		return "", nil
 	}
 	return database.GuardRefresh(setup.worktreePath, setup.mainRoot, setup.branch,
@@ -307,7 +304,7 @@ func restoreOwnedDatabase(worktreePath, envKey, dbName string) error {
 }
 
 // reportEnvironmentCopy prints one line per file and reduces the copy to a
-// single status. Copying, preserving, and failing are independent outcomes, so
+// single status. Copying, preserving, skipping, and failing are independent outcomes, so
 // the status names each one that happened rather than reporting only the worst.
 func reportEnvironmentCopy(w io.Writer, render ui.Renderer, result envfile.CopyResult) setupStatus {
 	for _, name := range result.Copied {

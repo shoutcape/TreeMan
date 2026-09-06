@@ -24,7 +24,7 @@ func setupWorktreeDatabase(out io.Writer, render ui.Renderer, setup worktreeSetu
 		Branch:              setup.branch,
 		EnvKey:              envKey,
 		ConfiguredContainer: setup.projectConfig.DatabaseContainer(),
-		Rerun:               setup.rerun,
+		Rerun:               setup.environment != envReplace,
 	})
 	switch {
 	case err != nil:

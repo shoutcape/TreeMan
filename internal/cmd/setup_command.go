@@ -96,11 +96,10 @@ func (o rerunSetupOptions) setupOptions() creationSetupOptions {
 	}
 }
 
-// hooksSkippedText says why hooks did not run, when the reason is the default
-// rather than something the caller asked for.
+// hooksSkippedText distinguishes explicit skipping from the rerun default.
 func (o rerunSetupOptions) hooksSkippedText() string {
 	if o.skipHooks || o.rerunHooks {
-		return ""
+		return "skipped (requested)"
 	}
 	return "skipped (pass --rerun-hooks)"
 }
@@ -136,6 +135,10 @@ func runSetup(cmd *cobra.Command, query string, options rerunSetupOptions) error
 		if err := revalidateSetupTarget(target); err != nil {
 			return err
 		}
+		policy := envPreserve
+		if options.refreshEnv {
+			policy = envRefresh
+		}
 		summary := runWorktreeSetup(out, render, worktreeSetup{
 			mainRoot:      project.mainRoot,
 			worktreePath:  target.Path,
@@ -144,8 +147,7 @@ func runSetup(cmd *cobra.Command, query string, options rerunSetupOptions) error
 			projectConfig: project.config,
 			hooks:         approval,
 			options:       options.setupOptions(),
-			rerun:         true,
-			refreshEnv:    options.refreshEnv,
+			environment:   policy,
 			hooksSkipped:  options.hooksSkippedText(),
 		})
 		printSetupSummary(out, render, summary)
