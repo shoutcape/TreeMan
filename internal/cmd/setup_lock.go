@@ -7,7 +7,6 @@ import (
 	"syscall"
 
 	"github.com/shoutcape/treeman/internal/fsutil"
-	"github.com/shoutcape/treeman/internal/git"
 )
 
 // setupLockDirectory holds one lock file per linked worktree, beside the other
@@ -21,22 +20,16 @@ const setupLockDirectory = "treeman/setup"
 // The lock does not wait. A second run that queued behind an installer would
 // look like a hang with nothing on screen to explain it, so it says what is
 // happening and exits instead. Setup in a different worktree is unaffected:
-// the lock is per worktree, not per repository.
-func withSetupLock(worktreePath string, fn func() error) error {
-	commonDir, err := git.CommonDir(worktreePath)
-	if err != nil {
-		return err
-	}
-	worktreeID, err := git.WorktreeID(worktreePath)
-	if err != nil {
-		return err
-	}
-	directory := filepath.Join(commonDir, setupLockDirectory)
+// the lock is per worktree, not per repository. This is TreeMan's lock only;
+// external Git worktree changes do not participate. Setup revalidates the
+// selected target after acquiring the lock, before starting any setup steps.
+func withSetupLock(target setupTarget, fn func() error) error {
+	directory := filepath.Join(target.commonDir, setupLockDirectory)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("creating setup lock directory: %w", err)
 	}
 
-	lock, err := openSetupLock(filepath.Join(directory, worktreeID+".lock"))
+	lock, err := openSetupLock(filepath.Join(directory, target.worktreeID+".lock"))
 	if err != nil {
 		return err
 	}
@@ -47,7 +40,7 @@ func withSetupLock(worktreePath string, fn func() error) error {
 		return err
 	}
 	if !acquired {
-		return fmt.Errorf("another treeman setup is already running for %q", worktreePath)
+		return fmt.Errorf("another treeman setup is already running for %q", target.Path)
 	}
 	return nil
 }

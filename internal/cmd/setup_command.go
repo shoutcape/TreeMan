@@ -19,6 +19,13 @@ type rerunSetupOptions struct {
 	skipHooks    bool
 }
 
+// setupTarget captures the Git identity selected for one setup run.
+type setupTarget struct {
+	git.WorktreeEntry
+	commonDir  string
+	worktreeID string
+}
+
 func newSetupCmd() *cobra.Command {
 	var options rerunSetupOptions
 	cmd := &cobra.Command{
@@ -129,9 +136,10 @@ func runSetup(cmd *cobra.Command, query string, options rerunSetupOptions) error
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	return withSetupLock(target.Path, func() error {
+	return withSetupLock(target, func() error {
 		// The target was chosen before the lock. Confirm it still describes
-		// the same worktree now that nothing else can change it.
+		// the same worktree before starting; external Git changes do not
+		// participate in TreeMan's setup lock.
 		if err := revalidateSetupTarget(target); err != nil {
 			return err
 		}
@@ -171,17 +179,17 @@ func approveSetupHooks(cmd *cobra.Command, project projectPaths, options rerunSe
 // Selection is exact. There is no picker and no fuzzy match: setup runs a
 // project's own commands and can install into whatever it selects, so a near
 // miss must be an error rather than a guess.
-func resolveSetupTarget(query string) (git.WorktreeEntry, error) {
+func resolveSetupTarget(query string) (setupTarget, error) {
 	entries, err := git.WorktreeList()
 	if err != nil {
-		return git.WorktreeEntry{}, err
+		return setupTarget{}, err
 	}
 
 	pathOnly := query == ""
 	if pathOnly {
 		root, err := git.CurrentWorktreeRoot()
 		if err != nil {
-			return git.WorktreeEntry{}, err
+			return setupTarget{}, err
 		}
 		// --show-toplevel already answers from a subdirectory, so running
 		// setup from anywhere inside a worktree selects that worktree.
@@ -200,15 +208,27 @@ func resolveSetupTarget(query string) (git.WorktreeEntry, error) {
 	}
 	if len(matches) == 0 {
 		if pathOnly {
-			return git.WorktreeEntry{}, fmt.Errorf("%q is not a registered worktree", query)
+			return setupTarget{}, fmt.Errorf("%q is not a registered worktree", query)
 		}
-		return git.WorktreeEntry{}, fmt.Errorf("no worktree matches %q by exact branch name or path", query)
+		return setupTarget{}, fmt.Errorf("no worktree matches %q by exact branch name or path", query)
 	}
 	if !pathOnly && len(matches) > 1 {
-		return git.WorktreeEntry{}, fmt.Errorf("%q matches more than one worktree (%s and %s); name one by its path", query, matches[0].Path, matches[1].Path)
+		return setupTarget{}, fmt.Errorf("%q matches more than one worktree (%s and %s); name one by its path", query, matches[0].Path, matches[1].Path)
 	}
 
-	return matches[0], validateSetupTarget(matches[0])
+	if err := validateSetupTarget(matches[0]); err != nil {
+		return setupTarget{}, err
+	}
+	commonDir, err := git.CommonDir(matches[0].Path)
+	if err != nil {
+		return setupTarget{}, err
+	}
+	commonDir = git.CanonicalPath(commonDir)
+	worktreeID, err := git.WorktreeID(matches[0].Path)
+	if err != nil {
+		return setupTarget{}, err
+	}
+	return setupTarget{WorktreeEntry: matches[0], commonDir: commonDir, worktreeID: worktreeID}, nil
 }
 
 // validateSetupTarget rejects every target setup cannot repair. A detached
@@ -236,8 +256,8 @@ func validateSetupTarget(entry git.WorktreeEntry) error {
 }
 
 // revalidateSetupTarget confirms under the lock that the registration, path,
-// and branch chosen outside it still describe the same worktree.
-func revalidateSetupTarget(target git.WorktreeEntry) error {
+// branch, and Git identity chosen outside it still describe the same worktree.
+func revalidateSetupTarget(target setupTarget) error {
 	entries, err := git.WorktreeList()
 	if err != nil {
 		return err
@@ -249,7 +269,25 @@ func revalidateSetupTarget(target git.WorktreeEntry) error {
 		if entry.Branch != target.Branch {
 			return fmt.Errorf("worktree %q changed branch from %q to %q before setup started", target.Path, target.Branch, entry.Branch)
 		}
-		return validateSetupTarget(entry)
+		if err := validateSetupTarget(entry); err != nil {
+			return err
+		}
+		commonDir, err := git.CommonDir(entry.Path)
+		if err != nil {
+			return err
+		}
+		commonDir = git.CanonicalPath(commonDir)
+		if commonDir != target.commonDir {
+			return fmt.Errorf("worktree %q changed Git common directory before setup started", target.Path)
+		}
+		worktreeID, err := git.WorktreeID(entry.Path)
+		if err != nil {
+			return err
+		}
+		if worktreeID != target.worktreeID {
+			return fmt.Errorf("worktree %q changed Git worktree ID from %q to %q before setup started", target.Path, target.worktreeID, worktreeID)
+		}
+		return nil
 	}
 	return fmt.Errorf("worktree %q is no longer registered", target.Path)
 }

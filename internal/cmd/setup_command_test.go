@@ -256,9 +256,11 @@ func TestSetupContinuesAfterAStepFails(t *testing.T) {
 
 func TestSetupSerializesRunsForOneWorktree(t *testing.T) {
 	_, worktree := setupTestRepo(t, "feature/lock")
+	target, err := resolveSetupTarget(worktree)
+	require.NoError(t, err)
 
 	var inner error
-	require.NoError(t, withSetupLock(worktree, func() error {
+	require.NoError(t, withSetupLock(target, func() error {
 		_, _, inner = runSetupIn(t, worktree, quietSetup())
 		return nil
 	}))
@@ -268,10 +270,12 @@ func TestSetupSerializesRunsForOneWorktree(t *testing.T) {
 
 func TestSetupReleasesTheLockAfterAFailure(t *testing.T) {
 	_, worktree := setupTestRepo(t, "feature/lock-release")
+	target, err := resolveSetupTarget(worktree)
+	require.NoError(t, err)
 
-	require.Error(t, withSetupLock(worktree, func() error { return assert.AnError }))
+	require.Error(t, withSetupLock(target, func() error { return assert.AnError }))
 
-	_, _, err := runSetupIn(t, worktree, quietSetup())
+	_, _, err = runSetupIn(t, worktree, quietSetup())
 	assert.NoError(t, err)
 }
 
@@ -279,14 +283,74 @@ func TestSetupAllowsConcurrentRunsInDifferentWorktrees(t *testing.T) {
 	repo, first := setupTestRepo(t, "feature/one")
 	second := filepath.Join(t.TempDir(), "second")
 	gitTest(t, repo, "worktree", "add", "-b", "feature/two", second)
+	firstTarget, err := resolveSetupTarget(first)
+	require.NoError(t, err)
 
 	var inner error
-	require.NoError(t, withSetupLock(first, func() error {
+	require.NoError(t, withSetupLock(firstTarget, func() error {
 		_, _, inner = runSetupIn(t, second, quietSetup())
 		return nil
 	}))
 
 	assert.NoError(t, inner)
+}
+
+func TestSetupRejectsAChangedWorktreeAdminIDBeforeRunning(t *testing.T) {
+	repo, worktree := setupTestRepo(t, "feature/identity")
+	target, err := resolveSetupTarget(worktree)
+	require.NoError(t, err)
+	capturedID := target.worktreeID
+	chdirForTest(t, repo)
+
+	// Removing and recreating at the same path can reuse Git's old admin ID.
+	// Keep the replacement at another path first, then move it into place so
+	// Git must retain the replacement's genuinely different administration.
+	replacementPath := filepath.Join(t.TempDir(), "replacement")
+	gitTest(t, repo, "worktree", "remove", "--force", worktree)
+	gitTest(t, repo, "worktree", "add", replacementPath, "feature/identity")
+	replacement, err := resolveSetupTarget(replacementPath)
+	require.NoError(t, err)
+	gitTest(t, repo, "worktree", "move", replacementPath, worktree)
+	current, err := resolveSetupTarget(worktree)
+	require.NoError(t, err)
+	require.Equal(t, target.Branch, current.Branch)
+	require.True(t, samePath(target.Path, current.Path))
+	require.Equal(t, replacement.worktreeID, current.worktreeID)
+	require.NotEqual(t, capturedID, current.worktreeID, "replacement must retain a genuinely different worktree administration ID")
+	assert.Equal(t, capturedID, target.worktreeID, "selection must retain its captured identity")
+
+	ran := false
+	err = withSetupLock(target, func() error {
+		if err := revalidateSetupTarget(target); err != nil {
+			return err
+		}
+		ran = true
+		return nil
+	})
+
+	assert.ErrorContains(t, err, "changed Git worktree ID")
+	assert.False(t, ran)
+	assert.FileExists(t, filepath.Join(target.commonDir, setupLockDirectory, capturedID+".lock"))
+	assert.NoFileExists(t, filepath.Join(target.commonDir, setupLockDirectory, current.worktreeID+".lock"))
+}
+
+func TestSetupRejectsAChangedCommonDirectoryBeforeRunning(t *testing.T) {
+	_, worktree := setupTestRepo(t, "feature/common-dir")
+	target, err := resolveSetupTarget(worktree)
+	require.NoError(t, err)
+	target.commonDir = t.TempDir()
+
+	ran := false
+	err = withSetupLock(target, func() error {
+		if err := revalidateSetupTarget(target); err != nil {
+			return err
+		}
+		ran = true
+		return nil
+	})
+
+	assert.ErrorContains(t, err, "changed Git common directory")
+	assert.False(t, ran)
 }
 
 func mustGetwd(t *testing.T) string {
