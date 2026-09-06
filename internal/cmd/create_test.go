@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -175,4 +176,51 @@ func TestRunCreateReportsAnOccupiedDirectory(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 	assert.Empty(t, stdout.String())
+}
+
+func TestRunCreateUsesConfiguredExternalDirectory(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	external := filepath.Join(t.TempDir(), "trees with spaces")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \""+external+"\"\nupdate_gitignore = true\n"), 0o600))
+	changeToDir(t, repo)
+	pathWithOnlyGit(t)
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	require.NoError(t, runCreate(commandWithOutput(stdout, stderr), "configurable-external", creationSetupOptions{
+		skipEnv: true, skipDeps: true, skipDatabase: true, skipHooks: true,
+	}, ""))
+
+	want := filepath.Join(external, "configurable-external")
+	assert.Equal(t, want+"\n", stdout.String())
+	assert.DirExists(t, want)
+	assert.NoFileExists(t, filepath.Join(repo, ".gitignore"))
+
+	stdout.Reset()
+	require.NoError(t, runList(commandWithOutput(stdout, stderr), true))
+	assert.Contains(t, stdout.String(), `"path":"`+want+`"`)
+
+	// Lifecycle commands use Git's recorded path even after configuration
+	// changes, rather than reconstructing it from the current setting.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \".worktrees\"\n"), 0o600))
+	stdout.Reset()
+	require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), "configurable-external", ""))
+	assert.Equal(t, want+"\n", stdout.String())
+	require.NoError(t, runDeleteDirect(commandWithOutput(&bytes.Buffer{}, stderr), want, "configurable-external", true, false))
+	assert.NoDirExists(t, want)
+}
+
+func TestRunCreateInvalidWorktreeDirectoryLeavesNoBranchOrWorktree(t *testing.T) {
+	repo, _ := createMergedCleanWorktree(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \"{branch}\"\n"), 0o600))
+	changeToDir(t, repo)
+	pathWithOnlyGit(t)
+
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	err := runCreate(commandWithOutput(stdout, stderr), "feature/invalid-path", creationSetupOptions{}, "")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot use {branch}")
+	assert.NoDirExists(t, filepath.Join(repo, ".worktrees"))
+	branchCheck := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/feature/invalid-path")
+	assert.Error(t, branchCheck.Run())
 }

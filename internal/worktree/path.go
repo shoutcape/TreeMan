@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/fsutil"
 	"github.com/shoutcape/treeman/internal/git"
 )
 
@@ -34,24 +35,28 @@ func SlugSuffix(branch string) string {
 }
 
 // PathForBranch builds the plain worktree path for a given branch inside the
-// repo. It does not examine the worktrees that exist. Use
-// ResolvePathForBranch to select the path of a new worktree.
+// resolved worktree parent directory. It does not examine the worktrees that
+// exist. Use ResolvePathForBranch to select the path of a new worktree.
 //
 // The formula is:
 //
-//	<mainRoot>/.worktrees/<branchSlug>
+//	<parentDir>/<branchSlug>
 //
 // Example:
 //
-//	mainRoot = "/home/user/Github/my-project"
-//	branch   = "feature/cool-thing"
-//	result   = "/home/user/Github/my-project/.worktrees/feature-cool-thing"
-func PathForBranch(mainRoot, branch string) string {
+//	parentDir = "/home/user/Github/my-project/.worktrees"
+//	branch    = "feature/cool-thing"
+//	result    = "/home/user/Github/my-project/.worktrees/feature-cool-thing"
+//
+// parentDir comes from ResolveDir, which turns the project's worktree_dir
+// setting into an absolute directory. The default is ".worktrees" inside the
+// main worktree, so an unconfigured project keeps the paths it has today.
+func PathForBranch(parentDir, branch string) string {
 	slug := BranchSlug(branch)
-	return filepath.Join(mainRoot, ".worktrees", slug)
+	return filepath.Join(parentDir, slug)
 }
 
-// ResolvePathForBranch selects the worktree path for branch inside mainRoot.
+// ResolvePathForBranch selects the worktree path for branch inside parentDir.
 //
 // Slug conversion changes "/" to "-", so two different branch names can want
 // the same directory. For example, "feature/login" and "feature-login" both
@@ -62,24 +67,39 @@ func PathForBranch(mainRoot, branch string) string {
 // full branch name. Therefore, a branch that does not collide keeps the path
 // it has today.
 //
+// Paths are compared canonically, so a worktree Git recorded under a
+// symlinked parent still counts as occupying the path it resolves to.
+//
 // Example:
 //
-//	mainRoot = "/repo"
-//	branch   = "feature/login"
-//	existing = worktree of "feature-login" at "/repo/.worktrees/feature-login"
-//	result   = "/repo/.worktrees/feature-login-df7c7a"
+//	parentDir = "/repo/.worktrees"
+//	branch    = "feature/login"
+//	existing  = worktree of "feature-login" at "/repo/.worktrees/feature-login"
+//	result    = "/repo/.worktrees/feature-login-df7c7a"
 //
 // ResolvePathForBranch returns an error when a different branch also has a
 // worktree at the suffixed path.
-func ResolvePathForBranch(mainRoot, branch string, existing []git.WorktreeEntry) (string, error) {
-	plain := PathForBranch(mainRoot, branch)
-	owner, taken := occupant(existing, plain)
+func ResolvePathForBranch(parentDir, branch string, existing []git.WorktreeEntry) (string, error) {
+	occupants, err := occupantsByPath(existing)
+	if err != nil {
+		return "", err
+	}
+
+	plain := PathForBranch(parentDir, branch)
+	owner, taken, err := occupants.at(plain)
+	if err != nil {
+		return "", err
+	}
 	if !taken || owner == branch {
 		return plain, nil
 	}
 
 	suffixed := plain + "-" + SlugSuffix(branch)
-	if other, taken := occupant(existing, suffixed); taken && other != branch {
+	other, taken, err := occupants.at(suffixed)
+	if err != nil {
+		return "", err
+	}
+	if taken && other != branch {
 		return "", fmt.Errorf(
 			"cannot place a worktree for branch %q: %q belongs to %s and %q belongs to %s",
 			branch, plain, describeOccupant(owner), suffixed, describeOccupant(other))
@@ -87,16 +107,30 @@ func ResolvePathForBranch(mainRoot, branch string, existing []git.WorktreeEntry)
 	return suffixed, nil
 }
 
-// occupant reports the branch of the worktree at path, if a worktree is there.
-// A detached worktree occupies the path with an empty branch name.
-func occupant(existing []git.WorktreeEntry, path string) (string, bool) {
-	target := filepath.Clean(path)
+// occupants maps the canonical path of every recorded worktree to its branch.
+// A detached worktree occupies its path with an empty branch name.
+type occupants map[string]string
+
+func occupantsByPath(existing []git.WorktreeEntry) (occupants, error) {
+	byPath := make(occupants, len(existing))
 	for _, entry := range existing {
-		if filepath.Clean(entry.Path) == target {
-			return entry.Branch, true
+		canonical, err := fsutil.CanonicalPath(entry.Path)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve the path of the worktree at %q: %w", entry.Path, err)
 		}
+		byPath[canonical] = entry.Branch
 	}
-	return "", false
+	return byPath, nil
+}
+
+// at reports the branch of the worktree at path, if a worktree is there.
+func (o occupants) at(path string) (string, bool, error) {
+	canonical, err := fsutil.CanonicalPath(path)
+	if err != nil {
+		return "", false, fmt.Errorf("cannot resolve worktree destination %q: %w", path, err)
+	}
+	branch, taken := o[canonical]
+	return branch, taken, nil
 }
 
 func describeOccupant(branch string) string {

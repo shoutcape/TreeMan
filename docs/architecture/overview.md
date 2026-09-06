@@ -25,7 +25,7 @@ flowchart TD
 | --- | --- |
 | Branches and worktree records | Git |
 | Worktree directories | Git and file system |
-| `.worktrees/` ignore entry | Main worktree `.gitignore` |
+| Internal worktree-directory ignore entry | Main worktree `.gitignore` |
 | Environment files | Main and linked worktrees |
 | Project configuration | `.treeman.toml` |
 | Branch databases | Docker PostgreSQL |

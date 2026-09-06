@@ -377,6 +377,23 @@ func CreateWorktree(path, branch, startPoint string) (CreatedWorktree, error) {
 	return createWorktree("", path, branch, startPoint)
 }
 
+// WorktreePlan chooses the destination of a new worktree from the worktrees
+// Git currently records. It runs inside the worktree mutation lock, so the
+// worktrees it is given cannot change before the destination is used.
+type WorktreePlan func(existing []WorktreeEntry) (string, error)
+
+// CreatePlannedWorktree selects a destination and creates the worktree there
+// as one locked operation.
+//
+// Choosing a path from a `git worktree list` taken outside the lock and then
+// creating the worktree is a race: another TreeMan can register the same
+// destination in between, and the second process would either fail late or
+// take a directory the first is populating. Running the plan under the lock
+// makes selection and creation one decision.
+func CreatePlannedWorktree(plan WorktreePlan, branch, startPoint string) (CreatedWorktree, error) {
+	return createPlannedWorktree("", plan, branch, startPoint)
+}
+
 // WorktreeList returns the list of all worktrees, parsed from
 // `git worktree list --porcelain`.
 func WorktreeList() ([]WorktreeEntry, error) {
@@ -794,8 +811,21 @@ func worktreeAdd(dir, path, branch, startPoint string) error {
 }
 
 func createWorktree(dir, path, branch, startPoint string) (CreatedWorktree, error) {
+	return createPlannedWorktree(dir, func([]WorktreeEntry) (string, error) { return path, nil }, branch, startPoint)
+}
+
+func createPlannedWorktree(dir string, plan WorktreePlan, branch, startPoint string) (CreatedWorktree, error) {
 	var created CreatedWorktree
 	err := withWorktreeMutationLock(dir, func() error {
+		existing, err := worktreeListInDir(dir)
+		if err != nil {
+			return err
+		}
+		path, err := plan(existing)
+		if err != nil {
+			return err
+		}
+
 		sha, err := runInDir(dir, "rev-parse", "--verify", startPoint+"^{commit}")
 		if err != nil {
 			return fmt.Errorf("could not resolve worktree start point %q: %w", startPoint, err)

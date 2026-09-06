@@ -233,6 +233,22 @@ func TestRunDoctor_ReportsInvalidConfigWithoutProvisioning(t *testing.T) {
 	assert.Contains(t, out, "Fix could not parse")
 }
 
+func TestRunDoctor_ReportsInvalidWorktreeDirectory(t *testing.T) {
+	repo, _ := createTestWorktree(t, "feature/doctor-worktree-dir")
+	chdirForTest(t, repo)
+	t.Setenv("_TREEMAN_REMOTE_URL", "https://github.com/example/repo.git")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \"{branch}\"\n"), 0o600))
+	stubLookPath(t, func(string) error { return nil })
+	stubDockerDaemonReady(t, nil)
+
+	buf := &bytes.Buffer{}
+	require.Error(t, runDoctor(commandWithOutput(&bytes.Buffer{}, buf), nil))
+
+	out := ui.StripANSI(buf.String())
+	assert.Contains(t, out, "✗  Configuration        Invalid .treeman.toml")
+	assert.Contains(t, out, "cannot use {branch}")
+}
+
 func TestRunDoctor_ReportsUnsupportedForge(t *testing.T) {
 	repo, _ := createTestWorktree(t, "feature/doctor-forge")
 	chdirForTest(t, repo)

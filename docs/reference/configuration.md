@@ -1,6 +1,6 @@
 # Configuration Reference
 
-TreeMan reads optional TOML configuration. Invalid project configuration produces a warning. It does not stop worktree creation.
+TreeMan reads optional TOML configuration. Read-only commands report invalid project configuration as a warning. Commands that create worktrees stop before fetching or changing Git when configuration cannot be read, parsed, or validated.
 
 ## Project Configuration
 
@@ -8,6 +8,7 @@ Put `.treeman.toml` in the main project directory. TreeMan searches from the mai
 
 ```toml
 update_gitignore = true
+worktree_dir = "~/worktrees/{repo}"
 
 [database]
 env_key = "DATABASE_URI"
@@ -23,7 +24,19 @@ post_create = ["pnpm generate", "git status --short"]
 update_gitignore = true
 ```
 
-When `true`, TreeMan appends `.worktrees/` to the root `.gitignore` the first time a worktree is created (idempotent - no duplicate entries). Defaults to `false`. Set this to `true` if you want TreeMan to manage the `.gitignore` entry automatically.
+When `true`, TreeMan appends the resolved internal worktree directory to the root `.gitignore` the first time a worktree is created (idempotent - no duplicate entries). The default entry remains `.worktrees/`. External directories need no repository ignore entry, so TreeMan does not add one. Defaults to `false`.
+
+## `worktree_dir`
+
+```toml
+worktree_dir = "~/worktrees/{repo}"
+```
+
+`worktree_dir` selects the parent directory for newly created worktrees. TreeMan appends the branch slug, and a collision suffix when needed. The default is `.worktrees` inside the main worktree.
+
+Relative values resolve from the main worktree root, including when TreeMan is run from a linked worktree. Absolute paths and a leading `~/` are supported. `{repo}` expands to the main worktree directory name. No other placeholder is supported; `{branch}`, unknown placeholders, malformed braces, and forms such as `~other/path` are rejected.
+
+TreeMan creates missing parent directories after validating the destination. The worktree parent must be a dedicated directory, not the main worktree root itself. TreeMan also refuses existing destinations, invalid parent paths, Git metadata, and aliases of protected paths reached through symlinks. External paths are allowed when filesystem permissions permit them. Changing this setting does not move existing worktrees; lifecycle commands continue to use the paths recorded by Git.
 
 ## `[database]`
 

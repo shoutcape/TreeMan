@@ -59,9 +59,9 @@ treeman create <branch-name> [-x <command>] [--skip-env] [--skip-database] [--sk
 
 Create a local branch from the fetched default branch. TreeMan reads `refs/remotes/origin/HEAD` to detect that branch. If that ref is absent, TreeMan looks for `main` or `master` on `origin`. The command fails when it finds neither name.
 
-The command fails when the branch or target directory exists. It creates `.worktrees/<branch-slug>`. The branch slug changes `/` to `-`.
+The command fails when the branch or target directory exists. By default it creates `.worktrees/<branch-slug>`; `worktree_dir` can select another parent. The branch slug changes `/` to `-`.
 
-If a different branch holds that path, TreeMan adds a slug suffix and creates `.worktrees/<branch-slug>-<slug-suffix>`. Existing worktrees keep their paths.
+If a different branch holds that path, TreeMan adds a slug suffix and creates `<worktree-dir>/<branch-slug>-<slug-suffix>`. Existing worktrees keep their Git-recorded paths.
 
 TreeMan then updates `.gitignore`, copies `.env*` files, loads configuration, sets up a database, installs dependencies, and runs hooks. These later actions are warning-only.
 

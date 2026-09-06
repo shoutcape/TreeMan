@@ -114,6 +114,51 @@ func TestRunReviewLaunchesTheExecCommand(t *testing.T) {
 	assert.Empty(t, stdout.String(), "the launched command owns stdout, and there is no destination to report")
 }
 
+func TestBranchAndReviewUseConfiguredExternalDirectory(t *testing.T) {
+	t.Run("branch", func(t *testing.T) {
+		repo := createRemoteRepoWithNestedModule(t)
+		gitTest(t, repo, "checkout", "-b", "feature/external-branch")
+		gitTest(t, repo, "push", "-u", "origin", "feature/external-branch")
+		gitTest(t, repo, "checkout", "main")
+		gitTest(t, repo, "branch", "-D", "feature/external-branch")
+		external := filepath.Join(t.TempDir(), "trees")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \""+external+"\"\n"), 0o600))
+		chdirForTest(t, repo)
+		pathWithOnlyGit(t)
+
+		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+		require.NoError(t, runBranch(commandWithOutput(stdout, stderr), "feature/external-branch"))
+
+		want := filepath.Join(external, "feature-external-branch")
+		assert.Equal(t, want+"\n", stdout.String())
+		assert.DirExists(t, want)
+	})
+
+	t.Run("review", func(t *testing.T) {
+		repo := createRemoteRepoWithNestedModule(t)
+		gitTest(t, repo, "checkout", "-b", "feature/review")
+		gitTest(t, repo, "push", "-u", "origin", "feature/review")
+		gitTest(t, repo, "push", "origin", "feature/review:refs/pull/1/head")
+		gitTest(t, repo, "checkout", "main")
+		gitTest(t, repo, "branch", "-D", "feature/review")
+		external := filepath.Join(t.TempDir(), "trees")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte("worktree_dir = \""+external+"\"\n"), 0o600))
+		chdirForTest(t, repo)
+		pathWithGitAndGH(t)
+		t.Setenv("_TREEMAN_FORGE", "github")
+		t.Setenv("_TREEMAN_GH_REPO", "owner/repo")
+
+		stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+		require.NoError(t, runReview(commandWithOutput(stdout, stderr), "1", creationSetupOptions{
+			skipEnv: true, skipDeps: true, skipDatabase: true, skipHooks: true,
+		}, ""))
+
+		want := filepath.Join(external, "feature-review")
+		assert.Equal(t, want+"\n", stdout.String())
+		assert.DirExists(t, want)
+	})
+}
+
 func createRemoteRepoWithNestedModule(t *testing.T) string {
 	t.Helper()
 	parent := t.TempDir()

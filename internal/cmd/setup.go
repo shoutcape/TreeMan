@@ -24,21 +24,22 @@ type creationSetupOptions struct {
 	skipHooks    bool
 }
 
-func setupCreatedWorktree(w io.Writer, render ui.Renderer, mainRoot string, created git.CreatedWorktree, options creationSetupOptions) setupSummary {
-	cfgResult := config.Load(mainRoot)
-	if cfgResult.Warning != "" {
-		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", cfgResult.Warning))
-	}
-	if cfgResult.Config.ShouldUpdateGitignore() {
-		if err := worktree.EnsureIgnored(mainRoot); err != nil {
+// setupCreatedWorktree performs the setup every newly created worktree gets.
+// It works from the paths the flow already resolved, so the configuration that
+// chose the worktree's location is the same one that decides what to ignore
+// and which hooks to run.
+func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, created git.CreatedWorktree, options creationSetupOptions) setupSummary {
+	if paths.config.ShouldUpdateGitignore() {
+		if err := worktree.EnsureIgnored(paths.mainRoot, paths.parentDir); err != nil {
 			fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not update .gitignore: %v", err)))
 		}
 	}
 	return runWorktreeSetup(w, render, worktreeSetup{
-		mainRoot:      mainRoot,
+		mainRoot:      paths.mainRoot,
 		worktreePath:  created.Path,
 		branch:        created.Branch,
-		projectConfig: cfgResult.Config,
+		worktreeDir:   paths.parentDir,
+		projectConfig: paths.config,
 		options:       options,
 	})
 }
@@ -89,9 +90,13 @@ func creationSetupFlagsChanged(cmd *cobra.Command) bool {
 }
 
 type worktreeSetup struct {
-	mainRoot      string
-	worktreePath  string
-	branch        string
+	mainRoot     string
+	worktreePath string
+	branch       string
+	// worktreeDir is the configured worktree parent directory. Nested-module
+	// discovery skips it so worktrees placed inside the repository are not
+	// reported as modules of the tree that contains them.
+	worktreeDir   string
 	projectConfig config.Config
 	options       creationSetupOptions
 }
@@ -199,7 +204,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 	if !setup.options.skipDeps {
 		dependenciesStatus = setupDependencies(w, render, setup.worktreePath)
 	}
-	reportNestedModules(w, render, setup.worktreePath)
+	reportNestedModules(w, render, setup.worktreePath, setup.worktreeDir)
 
 	hooksStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipHooks {
@@ -337,8 +342,8 @@ func setupDependencies(out io.Writer, render ui.Renderer, worktreePath string) s
 	return completedStatus(fmt.Sprintf("completed: installed with %s", installer.Binary))
 }
 
-func reportNestedModules(w io.Writer, render ui.Renderer, dir string) {
-	modules, err := deps.DiscoverNestedModules(dir)
+func reportNestedModules(w io.Writer, render ui.Renderer, dir string, excluded ...string) {
+	modules, err := deps.DiscoverNestedModules(dir, excluded...)
 	if err != nil {
 		fmt.Fprintln(w, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not discover nested modules: %v", err)))
 		return

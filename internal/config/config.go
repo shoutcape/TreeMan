@@ -2,12 +2,17 @@
 //
 // The config file is optional. When absent, all features requiring config
 // (such as per-branch database management) are silently disabled.
-// Parse errors are surfaced as warnings rather than hard failures so that
-// a malformed config never prevents worktree creation.
+// A config file that exists but cannot be read, parsed, or validated is
+// reported as a warning rather than an error, so read-only commands can
+// describe the problem. Creation flows refuse to run on a warning: the file
+// may place worktrees somewhere other than the default, and creating one in
+// the default location instead would silently ignore what the user asked for.
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,10 +33,17 @@ type Config struct {
 	// Nil when the [hooks] section is absent (no custom hooks).
 	Hooks *HooksConfig `toml:"hooks"`
 
-	// UpdateGitignore controls whether TreeMan appends ".worktrees/" to the
-	// root .gitignore when creating a worktree. Defaults to false so that
-	// projects managing their own .gitignore are not modified without consent.
+	// UpdateGitignore controls whether TreeMan appends the worktree directory
+	// to the root .gitignore when creating a worktree. Defaults to false so
+	// that projects managing their own .gitignore are not modified without
+	// consent.
 	UpdateGitignore bool `toml:"update_gitignore"`
+
+	// WorktreeDir is the parent directory new worktrees are created in.
+	// Empty means the default, ".worktrees" inside the main worktree.
+	// The value is resolved by the worktree package, which owns the
+	// placeholder, tilde, and relative-path rules.
+	WorktreeDir string `toml:"worktree_dir"`
 }
 
 // HooksConfig configures lifecycle hook commands.
@@ -78,10 +90,16 @@ func (c Config) PostCreateHooks() []string {
 	return c.Hooks.PostCreate
 }
 
-// ShouldUpdateGitignore reports whether TreeMan should append ".worktrees/"
-// to the root .gitignore when creating a worktree.
+// ShouldUpdateGitignore reports whether TreeMan should append the worktree
+// directory to the root .gitignore when creating a worktree.
 func (c Config) ShouldUpdateGitignore() bool {
 	return c.UpdateGitignore
+}
+
+// WorktreeDirSetting returns the configured worktree parent directory exactly
+// as written. Empty means the caller should apply the default.
+func (c Config) WorktreeDirSetting() string {
+	return c.WorktreeDir
 }
 
 // LoadResult holds the outcome of loading a config file.
@@ -92,8 +110,8 @@ type LoadResult struct {
 	// Path is the absolute path to the config file that was loaded.
 	// Empty when no config was found.
 	Path string
-	// Warning is set when the config file was found but could not be parsed.
-	// Callers should display this to the user but not treat it as a hard error.
+	// Warning is set when configuration could not be discovered, read, parsed,
+	// or validated. Read-only commands display it; creation commands stop.
 	Warning string
 }
 
@@ -101,10 +119,16 @@ type LoadResult struct {
 // filesystem root. It returns the first config found or a zero LoadResult
 // if none exists.
 //
-// Parse errors are returned as warnings in LoadResult.Warning rather than
-// as errors, so a malformed config never blocks worktree operations.
+// Configuration errors are returned as warnings in LoadResult.Warning rather
+// than as errors. Creation commands promote the warning to an error because
+// falling back could place a worktree somewhere the user did not request.
 func Load(dir string) LoadResult {
-	path := findConfig(dir)
+	path, err := findConfig(dir)
+	if err != nil {
+		return LoadResult{
+			Warning: fmt.Sprintf("could not search for %s from %s: %v", ConfigFileName, dir, err),
+		}
+	}
 	if path == "" {
 		return LoadResult{}
 	}
@@ -147,22 +171,30 @@ func Load(dir string) LoadResult {
 
 // findConfig walks from dir upward looking for ConfigFileName.
 // Returns the absolute path of the first match, or "" if not found.
-func findConfig(dir string) string {
+//
+// Only a genuine "not there" answer continues the walk. A directory that
+// cannot be searched is reported instead, because treating an unreadable
+// ancestor as an absent config would hide a file the user did write and let
+// creation fall back to defaults the user configured away from.
+func findConfig(dir string) (string, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return ""
+		return "", err
 	}
 
 	for {
 		candidate := filepath.Join(absDir, ConfigFileName)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		switch _, err := os.Stat(candidate); {
+		case err == nil:
+			return candidate, nil
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", err
 		}
 
 		parent := filepath.Dir(absDir)
 		if parent == absDir {
 			// Reached filesystem root.
-			return ""
+			return "", nil
 		}
 		absDir = parent
 	}

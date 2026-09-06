@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shoutcape/treeman/internal/fsutil"
 	"github.com/shoutcape/treeman/internal/git"
 )
 
@@ -140,17 +141,52 @@ func isSupportedManifest(name string) bool {
 }
 
 // DiscoverNestedModules finds supported package modules below dir, excluding
-// paths ignored by Git. Paths are relative to dir so callers can report
-// locations without exposing the full worktree path.
-func DiscoverNestedModules(dir string) ([]Module, error) {
+// paths ignored by Git and any excluded directory given. Paths are relative to
+// dir so callers can report locations without exposing the full worktree path.
+//
+// excluded is for directories a caller knows are not part of the project, such
+// as a configured worktree parent inside the repository. They are matched by
+// resolved path rather than by name, so excluding "build/worktrees" does not
+// also hide an unrelated "packages/worktrees" module.
+func DiscoverNestedModules(dir string, excluded ...string) ([]Module, error) {
 	ignoredPaths, err := git.IgnoredPaths(dir)
 	if err != nil {
 		return nil, err
 	}
-	return discoverNestedModules(dir, ignoredPaths)
+	excludedPaths, err := exclusionSet(dir, excluded)
+	if err != nil {
+		return nil, err
+	}
+	return discoverNestedModules(dir, ignoredPaths, excludedPaths)
 }
 
-func discoverNestedModules(dir string, ignoredPaths map[string]struct{}) ([]Module, error) {
+// exclusionSet translates canonical exclusions into the walk's path namespace
+// once. WalkDir does not follow directory symlinks, so direct lookup is enough
+// while walking and external exclusions can be discarded.
+func exclusionSet(root string, paths []string) (map[string]struct{}, error) {
+	canonicalRoot, err := fsutil.CanonicalPath(root)
+	if err != nil {
+		return nil, fmt.Errorf("deps: resolving discovery root %q: %w", root, err)
+	}
+	set := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		resolved, err := fsutil.CanonicalPath(path)
+		if err != nil {
+			return nil, fmt.Errorf("deps: resolving excluded directory %q: %w", path, err)
+		}
+		relative, err := filepath.Rel(canonicalRoot, resolved)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			continue
+		}
+		set[filepath.Clean(filepath.Join(root, relative))] = struct{}{}
+	}
+	return set, nil
+}
+
+func discoverNestedModules(dir string, ignoredPaths, excludedPaths map[string]struct{}) ([]Module, error) {
 	manifestsByDir := make(map[string]map[string]struct{})
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -162,6 +198,9 @@ func discoverNestedModules(dir string, ignoredPaths map[string]struct{}) ([]Modu
 					return filepath.SkipDir
 				}
 				if _, ignored := ignoredModuleDirs[entry.Name()]; ignored {
+					return filepath.SkipDir
+				}
+				if _, excluded := excludedPaths[path]; excluded {
 					return filepath.SkipDir
 				}
 			}

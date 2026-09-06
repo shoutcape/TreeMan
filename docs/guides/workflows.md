@@ -4,7 +4,7 @@
 
 1. Go to any worktree in the repository.
 2. Run `wt feature/name`.
-3. Work in `.worktrees/feature-name`.
+3. Work in `.worktrees/feature-name`, or in the parent selected by `worktree_dir`.
 4. Run `wts` to return to another worktree.
 
 TreeMan fetches the default branch before it creates the branch. It reads `refs/remotes/origin/HEAD` to find that branch. If that ref is absent, it looks for `main` or `master` on `origin`.

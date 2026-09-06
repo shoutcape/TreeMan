@@ -141,3 +141,36 @@ func TestDiscoverNestedModules(t *testing.T) {
 		{Path: "tools/script", Manifest: "pyproject.toml"},
 	}, modules)
 }
+
+func TestDiscoverNestedModulesExcludesOnlyConfiguredDirectory(t *testing.T) {
+	dir := t.TempDir()
+	output, err := exec.Command("git", "init", "--initial-branch=main", dir).CombinedOutput()
+	require.NoErrorf(t, err, "git init: %s", output)
+	excluded := filepath.Join(dir, "build", "worktrees")
+	for _, path := range []string{
+		filepath.Join(excluded, "old", "go.mod"),
+		filepath.Join(dir, "packages", "worktrees", "go.mod"),
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+	}
+
+	modules, err := deps.DiscoverNestedModules(dir, excluded)
+
+	require.NoError(t, err)
+	assert.Equal(t, []deps.Module{{Path: "packages/worktrees", Manifest: "go.mod"}}, modules)
+}
+
+func TestDiscoverNestedModulesIgnoresExternalExclusion(t *testing.T) {
+	dir := t.TempDir()
+	output, err := exec.Command("git", "init", "--initial-branch=main", dir).CombinedOutput()
+	require.NoErrorf(t, err, "git init: %s", output)
+	manifest := filepath.Join(dir, "packages", "app", "go.mod")
+	require.NoError(t, os.MkdirAll(filepath.Dir(manifest), 0o755))
+	require.NoError(t, os.WriteFile(manifest, nil, 0o644))
+
+	modules, err := deps.DiscoverNestedModules(dir, filepath.Join(t.TempDir(), "external", "trees"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []deps.Module{{Path: "packages/app", Manifest: "go.mod"}}, modules)
+}
