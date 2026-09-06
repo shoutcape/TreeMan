@@ -57,7 +57,15 @@ After creation, TreeMan performs these steps in order:
 4. Installs project dependencies when it detects a supported project.
 5. Runs configured post-create hooks.
 
-Shell integration changes the current shell directory to the new worktree. Setup failures are warnings. The worktree remains available. Use the related `--skip-*` flag to omit an optional setup action.
+If post-create hooks are configured, TreeMan asks for approval before it
+fetches or creates the worktree. Approval covers the exact ordered command
+strings and does not fingerprint script contents. Use `--trust-hooks` for one
+invocation, or `--skip-hooks` to skip hooks without using approval state.
+
+Shell integration changes the current shell directory to the new worktree.
+Setup failures are warnings after creation. The worktree remains available.
+Read [Hook Approval](docs/reference/hooks.md) for the consent rules and
+approval management commands.
 
 ### Supported Dependency Managers
 
@@ -83,6 +91,8 @@ Run `treeman preflight` first to report environment, dependency, database, and h
 ### Use Remote Branches
 
 Use `treeman branch` or `wtb` to add a remote branch worktree. With no query, TreeMan uses an interactive `fzf` picker. Give an exact remote branch name to skip the picker.
+
+Use `treeman benchmark branch <remote-branch>` or `treeman benchmark review <pr-number>` for creation benchmarks. These benchmarks never run project setup, read hook approval state, or execute hooks. The `delete` benchmark is different: it prepares each disposable worktree with normal setup and accepts the setup and hook-policy flags.
 
 ### Review Pull Requests and Merge Requests
 
@@ -133,6 +143,8 @@ Use `treeman list --json` for machine-readable worktree state and `treeman docto
 | `treeman shell`                     | None                             | Install and manage shell integration         |
 | `treeman doctor`                    | None                             | Check repository readiness and configuration |
 | `treeman preflight`                 | None                             | Report setup compatibility before creation   |
+| `treeman hooks approvals list`      | None                             | List saved post-create hook approvals        |
+| `treeman hooks approvals revoke <id>` | None                           | Revoke one exact hook approval ID             |
 | `treeman theme`                     | None                             | Select a terminal color theme                |
 | `treeman version`                   | None                             | Print build data                             |
 
@@ -173,6 +185,7 @@ https://github.com/user-attachments/assets/ce8a7196-e098-4f7d-a575-4f6bdf9899be
 - [Documentation index](docs/README.md)
 - [Workflows](docs/guides/workflows.md)
 - [Configuration](docs/reference/configuration.md)
+- [Hook approval](docs/reference/hooks.md)
 - [GitHub and GitLab](docs/integrations/github-gitlab.md)
 - [Agents](docs/integrations/agents.md)
 - [PostgreSQL branch databases](docs/integrations/postgresql.md)

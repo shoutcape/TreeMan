@@ -76,7 +76,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	// configuration that chooses it is the one setup will work from.
 	// Existing worktrees keep their path; a branch whose slug collides with
 	// another branch's worktree gets a suffixed path.
-	paths, err := prepareCreationPaths(mainRoot, branch)
+	paths, err := prepareApprovedCreationPaths(cmd, mainRoot, branch, "", setupOptions)
 	if err != nil {
 		return err
 	}

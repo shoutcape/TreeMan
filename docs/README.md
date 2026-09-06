@@ -9,6 +9,7 @@ TreeMan makes and manages Git worktrees. It uses a local branch for each worktre
 - [Use TreeMan workflows](guides/workflows.md)
 - [Use the command reference](reference/cli.md)
 - [Set configuration](reference/configuration.md)
+- [Understand hook approval](reference/hooks.md)
 
 ## Integrations
 
@@ -31,6 +32,10 @@ TreeMan makes and manages Git worktrees. It uses a local branch for each worktre
 - [Understand CI](development/ci.md)
 - [Run tests](development/testing.md)
 - [Make releases](development/releases.md)
+
+Command benchmarks are documented in [Testing](development/testing.md). Branch
+and review benchmarks measure creation only and never execute project hooks;
+only delete benchmarks run setup.
 
 ## Writing Controls
 

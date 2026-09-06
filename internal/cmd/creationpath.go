@@ -24,25 +24,26 @@ type creationPaths struct {
 	// worktree is created at whatever plan selects under the lock, which is
 	// this path unless another process took it in the meantime.
 	path string
+	// configPath is the absolute configuration file used for this snapshot.
+	configPath string
+	// hooks is the consent resolved for this creation's post-create hooks.
+	hooks hookApproval
 	// protected names the repository paths a worktree may not be placed on.
 	protected worktree.Protected
 	// config is the project configuration the whole flow works from.
 	config config.Config
 }
 
-// prepareCreationPaths resolves where a worktree for branch would go and
-// refuses the operation now if it cannot go there.
+// prepareCreationPathsIn resolves where a worktree for branch would go and
+// refuses the operation now if it cannot go there. An empty parentDir takes
+// the destination from project configuration; a caller that owns the
+// filesystem boundary, as benchmark sandboxes do, supplies its own. Project
+// configuration still supplies every non-location setup option.
 //
-// Creation flows call this before fetching or touching any ref. A destination
-// that is unusable, or a configuration that cannot be read, must not cost the
-// user a network round trip and must never leave a branch behind.
-func prepareCreationPaths(mainRoot, branch string) (creationPaths, error) {
-	return prepareCreationPathsIn(mainRoot, branch, "")
-}
-
-// prepareCreationPathsIn uses parentDir when the caller owns the filesystem
-// boundary, as benchmark sandboxes do. Project configuration still supplies
-// every non-location setup option.
+// Creation flows reach this through prepareApprovedCreationPaths, before
+// fetching or touching any ref. A destination that is unusable, or a
+// configuration that cannot be read, must not cost the user a network round
+// trip and must never leave a branch behind.
 func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, error) {
 	loaded := config.Load(mainRoot)
 	if loaded.Warning != "" {
@@ -66,10 +67,11 @@ func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, 
 	}
 
 	paths := creationPaths{
-		mainRoot:  mainRoot,
-		parentDir: parentDir,
-		protected: worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
-		config:    loaded.Config,
+		mainRoot:   mainRoot,
+		parentDir:  parentDir,
+		protected:  worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
+		config:     loaded.Config,
+		configPath: loaded.Path,
 	}
 
 	existing, err := git.WorktreeList()
@@ -89,7 +91,7 @@ func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, 
 // plan returns the destination selection Git runs under its worktree mutation
 // lock. It repeats the selection and the safety check against the worktrees
 // recorded at that moment, because the destination chosen by
-// prepareCreationPaths may have been taken since, and creates the parent
+// prepareCreationPathsIn may have been taken since, and creates the parent
 // directories only once the destination is known to be usable.
 func (p creationPaths) plan(branch string) git.WorktreePlan {
 	return func(existing []git.WorktreeEntry) (string, error) {
@@ -100,9 +102,29 @@ func (p creationPaths) plan(branch string) git.WorktreePlan {
 		if err := worktree.ValidateDestination(p.protected, path); err != nil {
 			return "", err
 		}
+		if err := p.hooks.checkDestination(path); err != nil {
+			return "", err
+		}
 		if err := worktree.EnsureParentDir(path); err != nil {
 			return "", err
 		}
 		return path, nil
 	}
+}
+
+// hookApproval is the resolved consent for this creation: the exact commands
+// authorized and the directory the user was shown when authorizing them. The
+// two travel together, because approval was given for that pair.
+type hookApproval struct {
+	commands []string
+	dir      string
+}
+
+// checkDestination fails when the mutation lock replans away from the
+// directory shown at approval time. A zero approval permits any destination.
+func (a hookApproval) checkDestination(path string) error {
+	if a.dir == "" || path == a.dir {
+		return nil
+	}
+	return fmt.Errorf("worktree destination changed after hook approval: approved %q, selected %q", a.dir, path)
 }

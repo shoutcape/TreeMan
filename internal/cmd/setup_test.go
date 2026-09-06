@@ -60,7 +60,7 @@ func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) 
 	} {
 		t.Run(newCommand.name, func(t *testing.T) {
 			cmd := newCommand.new()
-			for _, name := range []string{"skip-env", "skip-database", "skip-deps", "skip-hooks"} {
+			for _, name := range []string{"skip-env", "skip-database", "skip-deps", "skip-hooks", "trust-hooks"} {
 				flag := cmd.Flags().Lookup(name)
 				require.NotNilf(t, flag, "missing --%s", name)
 				assert.Equal(t, "false", flag.DefValue)
@@ -72,6 +72,31 @@ func TestCreationCommands_HaveOptionalSetupFlagsDisabledByDefault(t *testing.T) 
 				require.NoError(t, err)
 				assert.Truef(t, value, "--%s was not parsed", name)
 			}
+		})
+	}
+}
+
+// Granting consent for hooks and disabling them state opposite intents, so the
+// registry declares them mutually exclusive and every command that registers
+// the setup flags rejects the pair before it runs anything.
+func TestCreationCommands_RejectTrustingAndSkippingHooksTogether(t *testing.T) {
+	for _, newCommand := range []struct {
+		name string
+		new  func() *cobra.Command
+		args []string
+	}{
+		{"create", newCreateCmd, []string{"feature/test"}},
+		{"branch", newBranchCmd, nil},
+		{"review", newReviewCmd, nil},
+		{"benchmark", newBenchmarkCmd, []string{"delete"}},
+	} {
+		t.Run(newCommand.name, func(t *testing.T) {
+			cmd := newCommand.new()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs(append(append([]string(nil), newCommand.args...), "--trust-hooks", "--skip-hooks"))
+			require.EqualError(t, cmd.Execute(),
+				"if any flags in the group [skip-hooks trust-hooks] are set none of the others can be; [skip-hooks trust-hooks] were all set")
 		})
 	}
 }
@@ -150,8 +175,20 @@ func TestSetupStepsNameARegisteredSkipFlag(t *testing.T) {
 	cmd := &cobra.Command{}
 	addCreationSetupFlags(cmd, &creationSetupOptions{})
 
+	// A consent flag grants permission for a step rather than owning one, so
+	// only the flags that turn a step off have to pair up with the steps.
+	skipFlags := map[string]bool{}
+	for _, flag := range creationSetupFlags(&creationSetupOptions{}) {
+		if flag.conflictsWith == "" {
+			skipFlags[flag.name] = true
+			continue
+		}
+		assert.NotNilf(t, cmd.Flags().Lookup(flag.conflictsWith),
+			"--%s conflicts with unregistered flag --%s", flag.name, flag.conflictsWith)
+	}
 	for _, step := range (setupSummary{}).steps() {
 		assert.NotNilf(t, cmd.Flags().Lookup(step.skipFlag), "setup step %s names unregistered flag --%s", step.name, step.skipFlag)
+		assert.Truef(t, skipFlags[step.skipFlag], "setup step %s names --%s, which turns no step off", step.name, step.skipFlag)
 	}
-	assert.Len(t, (setupSummary{}).steps(), len(creationSetupFlagNames()))
+	assert.Len(t, (setupSummary{}).steps(), len(skipFlags))
 }

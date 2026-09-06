@@ -46,7 +46,7 @@ the new worktree instead.`,
 }
 
 func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions, execCommand string) error {
-	created, err := createReviewWorktree(cmd, prArg)
+	created, err := createReviewWorktree(cmd, prArg, setupOptions)
 	if err != nil || created.worktree.Path == "" {
 		return err
 	}
@@ -70,11 +70,11 @@ type reviewWorktreeCreation struct {
 	info     forge.PRInfo
 }
 
-func createReviewWorktree(cmd *cobra.Command, prArg string) (reviewWorktreeCreation, error) {
-	return createReviewWorktreeIn(cmd, prArg, "")
+func createReviewWorktree(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
+	return createReviewWorktreeIn(cmd, prArg, "", setupOptions)
 }
 
-func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string) (reviewWorktreeCreation, error) {
+func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
@@ -85,7 +85,6 @@ func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string) (review
 	if err != nil {
 		return reviewWorktreeCreation{}, err
 	}
-
 	// Resolve PR number — prompt via fzf if not provided.
 	var prNumber int
 	if prArg == "" {
@@ -118,7 +117,6 @@ func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string) (review
 	if err != nil {
 		return reviewWorktreeCreation{}, err
 	}
-
 	// Guard: branch must not already exist locally.
 	if git.BranchExists(info.Branch) {
 		existing, _ := git.FindWorktreeForBranch(info.Branch)
@@ -129,7 +127,7 @@ func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string) (review
 	}
 
 	// Settle the destination before fetching the PR/MR ref.
-	paths, err := prepareCreationPathsIn(mainRoot, info.Branch, parentDir)
+	paths, err := prepareApprovedCreationPaths(cmd, mainRoot, info.Branch, parentDir, setupOptions)
 	if err != nil {
 		return reviewWorktreeCreation{}, err
 	}

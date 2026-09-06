@@ -50,6 +50,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newPreflightCmd())
 	root.AddCommand(newThemeCmd())
+	root.AddCommand(newHooksCmd())
 	root.SetHelpFunc(printHelp)
 
 	return root

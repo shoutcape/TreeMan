@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/shoutcape/treeman/internal/fsutil"
 )
 
 const envFileName = ".env"
@@ -100,7 +102,7 @@ func RewriteEnvValue(dir, key, newValue string) error {
 	}
 
 	output := strings.Join(lines, "\n")
-	if err := writePrivateFile(envPath, []byte(output), info.Mode().Perm()); err != nil {
+	if err := fsutil.AtomicWriteFile(envPath, []byte(output), info.Mode().Perm()); err != nil {
 		return fmt.Errorf("writing %s: %w", envPath, err)
 	}
 

@@ -36,9 +36,27 @@ func TestBenchmarkValidatesTargetAndCounts(t *testing.T) {
 	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "branch-results", argument: "target"}, 0, 1), "benchmark target branch-results does not accept an argument")
 	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "review-results", argument: "target"}, 0, 1), "benchmark target review-results does not accept an argument")
 	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list", setupRequested: true}, 0, 1),
-		"benchmark target list runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks do not apply")
+		"benchmark target list runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks, --trust-hooks do not apply")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list", setup: creationSetupOptions{trustHooks: true}, setupRequested: true}, 0, 1),
+		"benchmark target list runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks, --trust-hooks do not apply")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list", setup: creationSetupOptions{skipHooks: true}, setupRequested: true}, 0, 1),
+		"benchmark target list runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks, --trust-hooks do not apply")
+	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "branch", argument: "feature/test", setupRequested: true}, 0, 1),
+		"benchmark target branch runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks, --trust-hooks do not apply")
 	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list"}, 0, 0), "benchmark runs must be at least 1")
 	require.EqualError(t, runBenchmark(cmd, benchmarkRequest{target: "list"}, -1, 1), "benchmark warmup cannot be negative")
+}
+
+func TestBenchmarkRejectsExplicitFalseSetupAndTrustFlags(t *testing.T) {
+	for _, name := range []string{"skip-env", "skip-database", "skip-deps", "skip-hooks", "trust-hooks"} {
+		t.Run(name, func(t *testing.T) {
+			cmd := newBenchmarkCmd()
+			cmd.SetArgs([]string{"list", "--" + name + "=false"})
+			err := cmd.Execute()
+			require.EqualError(t, err,
+				"benchmark target list runs no project setup, so --skip-env, --skip-database, --skip-deps, --skip-hooks, --trust-hooks do not apply")
+		})
+	}
 }
 
 func TestBenchmarkReportsResultCounts(t *testing.T) {
@@ -171,6 +189,7 @@ func TestBenchmarkReportsRunAndCleanupFailures(t *testing.T) {
 
 func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
 	repo := createRemoteRepoWithNestedModule(t)
+	configureBenchmarkHook(t, repo)
 	gitTest(t, repo, "checkout", "-b", "feature/benchmark-branch")
 	gitTest(t, repo, "push", "-u", "origin", "feature/benchmark-branch")
 	gitTest(t, repo, "checkout", "main")
@@ -180,6 +199,7 @@ func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
 	pathWithOnlyGit(t)
 
 	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "branch", argument: "feature/benchmark-branch"}, 1, 2))
+	assert.NoFileExists(t, os.Getenv("BENCHMARK_HOOK_LOG"))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/benchmark-branch")
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/remotes/origin/feature/benchmark-branch")
@@ -188,6 +208,7 @@ func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
 
 func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
 	repo := createRemoteRepoWithNestedModule(t)
+	configureBenchmarkHook(t, repo)
 	gitTest(t, repo, "checkout", "-b", "feature/benchmark-review")
 	gitTest(t, repo, "push", "-u", "origin", "feature/benchmark-review")
 	gitTest(t, repo, "push", "origin", "feature/benchmark-review:refs/pull/1/head")
@@ -201,12 +222,29 @@ func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
 	fetchHeadPath := filepath.Join(repo, ".git", "FETCH_HEAD")
 	require.NoError(t, os.WriteFile(fetchHeadPath, []byte("user state\n"), 0o644))
 	require.NoError(t, runBenchmark(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), benchmarkRequest{target: "review", argument: "1"}, 1, 2))
+	assert.NoFileExists(t, os.Getenv("BENCHMARK_HOOK_LOG"))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/review")
 	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-review"))
 	afterFetchHead, err := os.ReadFile(fetchHeadPath)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("user state\n"), afterFetchHead)
+}
+
+func configureBenchmarkHook(t *testing.T, repo string) {
+	t.Helper()
+	config := `[hooks]
+post_create = [` + fmt.Sprintf("%q", `printf hook >> "$BENCHMARK_HOOK_LOG"`) + `]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".treeman.toml"), []byte(config), 0o644))
+	gitTest(t, repo, "add", ".treeman.toml")
+	gitTest(t, repo, "commit", "-m", "configure benchmark hook")
+	gitTest(t, repo, "push", "origin", "main")
+	stateHome := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stateHome, "treeman"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(stateHome, "treeman", "hook-approvals.json"), []byte("{"), 0o600))
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("BENCHMARK_HOOK_LOG", filepath.Join(t.TempDir(), "hook.log"))
 }
 
 func TestBenchmarkReportsRunnerFailure(t *testing.T) {

@@ -22,6 +22,7 @@ type creationSetupOptions struct {
 	skipDatabase bool
 	skipDeps     bool
 	skipHooks    bool
+	trustHooks   bool
 }
 
 // setupCreatedWorktree performs the setup every newly created worktree gets.
@@ -40,32 +41,47 @@ func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, 
 		branch:        created.Branch,
 		worktreeDir:   paths.parentDir,
 		projectConfig: paths.config,
+		approvedHooks: paths.hooks.commands,
 		options:       options,
 	})
 }
 
-// creationSetupFlag is one flag that turns a single setup action off.
+// creationSetupFlag is one flag that adjusts creation setup policy.
 type creationSetupFlag struct {
 	name  string
 	usage string
 	value *bool
+	// conflictsWith names the flag whose intent this one contradicts. A flag
+	// that grants consent and the flag that disables the same action cannot
+	// both be set.
+	conflictsWith string
 }
 
-// creationSetupFlags declares those flags. Registration and the check for
-// whether a caller set any of them both come from this list, so a new setup
-// flag is one entry and nothing else.
+// creationSetupFlags declares those flags. Registration, the mutual exclusions
+// between them, and the check for whether a caller set any of them all come
+// from this list, so a new setup flag is one entry and nothing else.
 func creationSetupFlags(options *creationSetupOptions) []creationSetupFlag {
 	return []creationSetupFlag{
 		{name: "skip-env", usage: "Skip copying .env* files", value: &options.skipEnv},
 		{name: "skip-database", usage: "Skip branch database setup", value: &options.skipDatabase},
 		{name: "skip-deps", usage: "Skip dependency installation", value: &options.skipDeps},
 		{name: "skip-hooks", usage: "Skip post-create hooks", value: &options.skipHooks},
+		{name: "trust-hooks", usage: "Trust post-create hooks for this invocation",
+			value: &options.trustHooks, conflictsWith: "skip-hooks"},
 	}
 }
 
 func addCreationSetupFlags(cmd *cobra.Command, options *creationSetupOptions) {
-	for _, flag := range creationSetupFlags(options) {
+	flags := creationSetupFlags(options)
+	for _, flag := range flags {
 		cmd.Flags().BoolVar(flag.value, flag.name, false, flag.usage)
+	}
+	// Registered after every flag exists, because cobra resolves a group's
+	// members at declaration time.
+	for _, flag := range flags {
+		if flag.conflictsWith != "" {
+			cmd.MarkFlagsMutuallyExclusive(flag.conflictsWith, flag.name)
+		}
 	}
 }
 
@@ -78,8 +94,8 @@ func creationSetupFlagNames() []string {
 	return names
 }
 
-// creationSetupFlagsChanged reports whether the caller turned any setup action
-// off explicitly, as opposed to leaving every action enabled by default.
+// creationSetupFlagsChanged reports whether the caller supplied any setup flag,
+// including an explicit false value.
 func creationSetupFlagsChanged(cmd *cobra.Command) bool {
 	for _, name := range creationSetupFlagNames() {
 		if cmd.Flags().Changed(name) {
@@ -98,6 +114,7 @@ type worktreeSetup struct {
 	// reported as modules of the tree that contains them.
 	worktreeDir   string
 	projectConfig config.Config
+	approvedHooks []string
 	options       creationSetupOptions
 }
 
@@ -208,7 +225,7 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 
 	hooksStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipHooks {
-		if postCreateCmds := setup.projectConfig.PostCreateHooks(); len(postCreateCmds) > 0 {
+		if postCreateCmds := setup.approvedHooks; len(postCreateCmds) > 0 {
 			fmt.Fprintln(w, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Running %d post-create hook(s)...", len(postCreateCmds))))
 			hookResults := hooks.RunPostCreate(setup.worktreePath, postCreateCmds, w)
 			for _, r := range hookResults {

@@ -60,3 +60,33 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Branch database ownership and pending cleanup | `<git-common-dir>/treeman/databases/` |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
 | Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |
+
+## Hook Approval State
+
+TreeMan stores hook approvals outside repositories:
+
+```text
+$XDG_STATE_HOME/treeman/hook-approvals.json
+$XDG_STATE_HOME/treeman/hook-approvals.lock
+```
+
+When `XDG_STATE_HOME` is unset, TreeMan uses:
+
+```text
+$HOME/.local/state/treeman/hook-approvals.json
+$HOME/.local/state/treeman/hook-approvals.lock
+```
+
+`XDG_STATE_HOME` must be an absolute path. TreeMan creates the state directory
+with mode `0700` and state files with mode `0600`. Symlinked home or state
+parents are resolved to their canonical location, which must be outside the
+repository TreeMan is running in: neither its Git directory nor its working
+tree may contain the state directory. The TreeMan state directory cannot itself
+be a symlink; approval and lock files must be regular files, not symlinks,
+directories, or FIFOs. Missing state means that no approval exists. Malformed
+or unreadable state fails closed.
+
+Approval reads and writes use a stable lock. Writes use a private temporary
+file and an atomic replacement. TreeMan does not hold the lock while it asks
+for consent or runs hooks. `--trust-hooks` and `--skip-hooks` do not access
+this state.

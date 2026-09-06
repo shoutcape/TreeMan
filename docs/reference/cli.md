@@ -4,7 +4,7 @@ Run `treeman --help` for current command help. TreeMan sends status and warnings
 
 Shell integration uses that destination to change the current interactive shell directory. Native commands never change the caller directory. Read [How a destination reaches your shell](#how-a-destination-reaches-your-shell).
 
-`create`, `branch`, `review`, and `switch` accept `--exec` (`-x`). Read [Run a command in the worktree](#run-a-command-in-the-worktree).
+`create`, `branch`, `review`, and `switch` accept `--exec` (`-x`). Read [Run a command in the worktree](#run-a-command-in-the-worktree). Creation commands also apply [hook approval](hooks.md).
 
 ## Commands
 
@@ -54,7 +54,7 @@ TreeMan fails before it creates a worktree when `--exec` has no command.
 ## `create`
 
 ```text
-treeman create <branch-name> [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman create <branch-name> [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks] [--trust-hooks]
 ```
 
 Create a local branch from the fetched default branch. TreeMan reads `refs/remotes/origin/HEAD` to detect that branch. If that ref is absent, TreeMan looks for `main` or `master` on `origin`. The command fails when it finds neither name.
@@ -71,6 +71,11 @@ Use any `--skip-*` flag to omit its named optional setup action. TreeMan lists r
 
 Use `-x <command>` to run a command in the new worktree instead of printing its path. Read [Run a command in the worktree](#run-a-command-in-the-worktree).
 
+When `.treeman.toml` contains post-create hooks, TreeMan requests approval
+before fetch or worktree creation. `--trust-hooks` authorizes hooks only for
+this invocation. `--skip-hooks` skips hooks and approval state. `--yes` does
+not authorize hooks. Read [Hook Approval](hooks.md).
+
 ## `preflight`
 
 ```text
@@ -84,7 +89,7 @@ Without `--json`, the report is written only to stderr. With `--json`, see the [
 ## `branch`
 
 ```text
-treeman branch [query] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman branch [query] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks] [--trust-hooks]
 ```
 
 `branch` has alias `wtb`. With an exact branch name, it fetches the branch directly without `fzf` or a forge CLI. Otherwise, it gets all remote branches from the detected forge and uses `fzf`. For GitHub, TreeMan obtains ordered branch batches from paginated REST responses through a bounded concurrent window, and it fills the MR/PR column by asking each branch for its own open PR in concurrent batches. It streams rows into `fzf` as those batches land, after seeding the picker with a preview of the first branches, so results appear before the full list has been fetched. Asking per branch also keeps a fork's PR from being reported against a same-named branch in the repository. GitLab branch records are read from `glab` as NDJSON before being combined with MR results.
@@ -100,7 +105,7 @@ Use `-x <command>` to run a command in the new worktree instead of printing its 
 ## `review`
 
 ```text
-treeman review [pr-number] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman review [pr-number] [-x <command>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks] [--trust-hooks]
 ```
 
 `review` has aliases `wtpr` and `wtmr`. TreeMan detects GitHub or GitLab from `origin`.
@@ -175,16 +180,36 @@ List repository worktrees with branch, path, main, current, dirty, stale, and me
 ## `benchmark`
 
 ```text
-treeman benchmark [list | branch <remote-branch> | review <pr-number> | delete | branch-results | review-results] [--runs <count>] [--warmup <count>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks]
+treeman benchmark [list | branch <remote-branch> | review <pr-number> | delete | branch-results | review-results] [--runs <count>] [--warmup <count>] [--skip-env] [--skip-database] [--skip-deps] [--skip-hooks] [--trust-hooks]
 ```
 
-Measure execution time for a supported command. The default command is `list`. `branch` requires an exact remote branch name and measures the exact remote-branch lookup, fetch, and worktree creation. `review` requires an explicit GitHub PR or GitLab MR number and also measures forge resolution. Both skip project setup: environment files, dependencies, databases, and hooks. After every warmup and timed iteration, TreeMan force-removes the worktree and exact local branch it created.
+Measure execution time for a supported command. The default command is `list`. `branch` requires an exact remote branch name and measures the exact remote-branch lookup, fetch, and worktree creation. `review` requires an explicit GitHub PR or GitLab MR number and also measures forge resolution. Both skip project setup, including hook approval, state access, and hook execution. After every warmup and timed iteration, TreeMan force-removes the worktree and exact local branch it created.
 
 `delete` takes no branch argument. Before every warmup and measured iteration, TreeMan creates the fixed disposable branch `treeman-benchmark-delete` in a temporary clone and performs normal project setup, including environment copying, branch database creation, dependency installation, and hooks. That clone is made from the repository's own main worktree rather than from `origin`, so the target also runs in a repository with no remote, or none reachable, and needs no network round trip. Preparation is not timed. Timing starts immediately before direct, confirmed deletion and stops when deletion returns; worktree and branch verification is also outside the timer. Setup failures abort the benchmark instead of measuring an incomplete worktree, and name the flag that skips the failed step. Normal deletion safety checks remain enabled and database cleanup is included.
 
-The `--skip-*` flags turn individual setup actions off for `delete`, the same actions `treeman create` skips with the same flag names. Use them where a step cannot run on this machine, such as a dependency install that needs credentials or a database whose container is not running. Every other target runs no project setup and rejects the flags. `delete` reports the composition of each prepared worktree as `prepared: environment ..., dependencies ..., database ..., hooks ...`, and repeats it whenever it changes, because what a deletion costs is decided by what setup put in the worktree. The same line reports untracked setup output the project does not ignore: clearing it is what keeps the timed deletion the same non-forced deletion a user runs, and it leaves that deletion less to remove than the project itself would.
+The `--skip-env`, `--skip-database`, and `--skip-deps` flags turn individual setup actions off for `delete`, the same actions `treeman create` skips with the same flag names. Use them where a step cannot run on this machine, such as a dependency install that needs credentials or a database whose container is not running. List and picker-result targets reject all setup and hook-policy flags. `--trust-hooks` is invocation-only and applies only to delete preparation; it does not save approval state. `delete` reports the composition of each prepared worktree as `prepared: environment ..., dependencies ..., database ..., hooks ...`, and repeats it whenever it changes, because what a deletion costs is decided by what setup put in the worktree. The same line reports untracked setup output the project does not ignore: clearing it is what keeps the timed deletion the same non-forced deletion a user runs, and it leaves that deletion less to remove than the project itself would.
 
 `branch-results` and `review-results` measure the complete data payload used by interactive `wtb` and `wtmr`, respectively. The payload includes streamed forge batches or records, filtering and association where applicable, and picker-row rendering. They stop before launching `fzf`, make no repository changes, report the number of available results, and flag changes during timed runs. Both also report producer row-ready latency: the time from forge detection until the producer hands its first rendered row to the picker writer. This is not `fzf` paint latency. Warmup runs do not affect the results. TreeMan suppresses command output and reports mean, standard deviation, minimum, and maximum times.
+
+## `hooks approvals`
+
+```text
+treeman hooks approvals list
+treeman hooks approvals revoke <id>
+```
+
+List or revoke saved post-create hook approvals. These commands work outside a
+Git repository and do not load or execute project hooks.
+
+`list` prints each approval ID, repository identity, configuration path, hook
+phase, approval time, and ordered command list in deterministic order.
+
+`revoke` requires one exact approval ID and removes only that record. An
+unknown ID returns an error. It does not accept a prefix or perform a fuzzy
+match.
+
+Read [Hook Approval](hooks.md) for the fingerprint scope, state location, and
+security boundary.
 
 ## `clean`
 

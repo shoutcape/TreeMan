@@ -61,7 +61,15 @@ post_create = ["pnpm generate", "git status --short"]
 
 TreeMan runs each command in sequence in the new worktree. It uses `sh -c` on Unix and `cmd /C` on Windows.
 
-TreeMan attempts later hooks after a hook failure. Hook failures create warnings. Hooks can run arbitrary commands. Use only trusted project configuration.
+TreeMan requires approval before it fetches or creates a worktree with hooks.
+Approval includes the absolute configuration path, the hook phase, and the
+exact ordered command strings. It does not include the contents of scripts
+called by those strings. Hooks can run arbitrary commands. Use only trusted
+project configuration.
+
+Read [Hook Approval](hooks.md) for consent, invocation flags, and approval
+management. After approved execution, TreeMan attempts later hooks after a
+hook failure. Hook failures create warnings.
 
 ## Themes
 

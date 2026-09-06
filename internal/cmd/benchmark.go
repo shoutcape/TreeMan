@@ -51,6 +51,7 @@ func newBenchmarkCmd() *cobra.Command {
 }
 
 func runBenchmark(cmd *cobra.Command, request benchmarkRequest, warmup, runs int) (err error) {
+	request.consent = cmd
 	resolved, err := newBenchmarkTarget(request)
 	// Registered before the error check so a sandbox always gets removed, even
 	// if a future target starts returning one alongside an error.
@@ -81,6 +82,9 @@ type benchmarkRequest struct {
 	// explicitly, so a target that runs no setup rejects the flag instead of
 	// silently ignoring it.
 	setupRequested bool
+	// consent is the command whose streams ask for hook approval. Measured
+	// runs are silenced, so preparation must prompt on the original terminal.
+	consent *cobra.Command
 }
 
 // benchmarkSpec declares one benchmark target: how its argument is treated and
@@ -102,7 +106,7 @@ var benchmarkSpecs = []benchmarkSpec{
 	{name: "branch", argument: "an exact remote branch name", build: forArgument(newBranchBenchmarkRunner)},
 	{name: "review", argument: "a PR or MR number", build: forArgument(newReviewBenchmarkRunner)},
 	{name: "delete", runsSetup: true, build: func(request benchmarkRequest) (benchmarkRunner, benchmarkSandbox, error) {
-		return newDeleteBenchmarkRunner(request.setup)
+		return newDeleteBenchmarkRunner(request.setup, request.consent)
 	}},
 	{name: "branch-results", build: inCurrentRepository(resultCountRunner(branchPickerResults))},
 	{name: "review-results", build: inCurrentRepository(resultCountRunner(reviewPickerResults))},
@@ -388,7 +392,7 @@ func newBranchBenchmarkRunner(branch string) (benchmarkRunner, benchmarkSandbox,
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
 			err := sandbox.run(func() error {
-				created, err := createBranchWorktreeIn(runCmd, branch, sandbox.worktreeDir())
+				created, err := createBranchWorktreeIn(runCmd, branch, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
 				if created.worktree.Path != "" {
 					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
 				}
@@ -412,7 +416,7 @@ func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, benchmarkSandbox, 
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
 			err := sandbox.run(func() error {
-				created, err := createReviewWorktreeIn(runCmd, prArg, sandbox.worktreeDir())
+				created, err := createReviewWorktreeIn(runCmd, prArg, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
 				if created.worktree.Path != "" {
 					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
 				}
