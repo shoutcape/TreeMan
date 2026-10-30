@@ -62,7 +62,28 @@ func TestPrintSetupSummary_DatabaseSkippedIncludesConfigurationLink(t *testing.T
 		hooks: skippedStatus("skipped (no post-create hooks configured)"),
 	})
 
-	assert.Contains(t, ui.StripANSI(output.String()), "  ○  Database       Not configured. Configure database\n")
+	assert.Contains(t, output.String(), "  ○  Database       Not configured. Configure database ("+databaseDocsURL+")\n")
+	assert.NotContains(t, output.String(), "\x1b")
+}
+
+func TestPrintSetupSummary_NarrowPlainOutputKeepsConfigurationURLIntact(t *testing.T) {
+	var output bytes.Buffer
+
+	printSetupSummary(&output, ui.NewRenderer(&output, terminal.Capabilities{Width: 40}), setupSummary{
+		environment:  skippedStatus("skipped (no environment files found)"),
+		dependencies: skippedStatus("skipped"),
+		database: setupStatus{
+			text:    "Not configured. Configure database",
+			kind:    setupStatusSkipped,
+			linkURL: databaseDocsURL,
+		},
+		hooks: skippedStatus("skipped (no post-create hooks configured)"),
+	})
+
+	const fittedLabel = "Not configured. C..."
+	assert.Equal(t, 20, len(fittedLabel), "label must be fitted to Width 40 minus the 20 reserved columns")
+	assert.Contains(t, output.String(), "  ○  Database       "+fittedLabel+" ("+databaseDocsURL+")\n")
+	assert.NotContains(t, output.String(), "\x1b")
 }
 
 func TestPrintSetupSummary_DatabaseRequestedSkipDoesNotIncludeConfigurationLink(t *testing.T) {
@@ -78,6 +99,7 @@ func TestPrintSetupSummary_DatabaseRequestedSkipDoesNotIncludeConfigurationLink(
 	text := ui.StripANSI(output.String())
 	assert.Contains(t, text, "  ○  Database       skipped (requested)\n")
 	assert.NotContains(t, text, "Configure database")
+	assert.NotContains(t, text, databaseDocsURL)
 }
 
 func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {

@@ -354,6 +354,7 @@ func writeSetupStatus(w io.Writer, render ui.Renderer, name string, status setup
 	tone, symbol := setupStatusAppearance(status.kind)
 	text := render.Tone(tone, render.Fit(status.text, 20))
 	if status.linkURL != "" {
+		// Fit only the label. Plain output adds the URL, which must stay whole.
 		text = render.Link(render.Fit(status.text, 20), status.linkURL)
 	}
 	fmt.Fprintf(w, "  %s  %-14s %s\n", render.Tone(tone, symbol), name, text)
