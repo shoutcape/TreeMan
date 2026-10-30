@@ -394,7 +394,7 @@ The variable belongs to the one TreeMan the wrapper started. TreeMan removes it 
 
 Without the variable -- a bare run, a script, a pipe -- the destination goes to stdout, which is the original contract.
 
-Color and rich terminal UI are enabled only when the relevant output stream is a terminal. Redirected output is plain. Set `NO_COLOR` to disable color. Set `TERM=dumb` to disable color and interactive selection.
+Color and rich terminal UI are enabled only when the relevant output stream is a terminal. Redirected output is plain. Set `NO_COLOR` to disable color. Set `TERM=dumb` to disable color and interactive selection. In plain output, TreeMan shows links as `label (url)`.
 
 Interactive selection and confirmation require both stdin and stderr to be terminals. TreeMan disables them when `CI` is set. When a picker is unavailable, pass an exact branch, worktree path, PR or MR number, or direct deletion flags instead. Redirecting stdout does not prevent shell integration from receiving a selected path.
 

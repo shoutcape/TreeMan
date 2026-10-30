@@ -176,10 +176,11 @@ func (r Renderer) Marker(value string) string { return r.styles.marker.Render(va
 func (r Renderer) Path(value string) string   { return r.styles.path.Render(value) }
 func (r Renderer) PR(value string) string     { return r.styles.pr.Render(value) }
 
-// Link renders a concise clickable label only when the destination supports it.
+// Link renders a clickable label when the destination supports hyperlinks.
+// Otherwise it shows the URL after the label, so plain output keeps it.
 func (r Renderer) Link(label, url string) string {
 	if !r.capabilities.Hyperlinks {
-		return label
+		return label + " (" + url + ")"
 	}
 	return ansi.SetHyperlink(url) + r.styles.link.Render(label) + ansi.ResetHyperlink()
 }
