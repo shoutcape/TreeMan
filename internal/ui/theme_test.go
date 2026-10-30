@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
@@ -40,7 +41,7 @@ func TestRendererDoesNotEmitControlSequencesWithoutRichCapabilities(t *testing.T
 	rendered := renderer.Title("TreeMan") + " " + renderer.Link("docs", "https://example.com") + " " + renderer.Status(ToneSuccess, "✓", "ready")
 
 	assert.NotContains(t, rendered, "\x1b")
-	assert.Equal(t, "TreeMan docs ✓ ready", rendered)
+	assert.Equal(t, "TreeMan docs (https://example.com) ✓ ready", rendered)
 }
 
 func TestRendererHonorsNoColorAndDumbTerminalPolicy(t *testing.T) {
@@ -63,7 +64,7 @@ func TestRendererHonorsNoColorAndDumbTerminalPolicy(t *testing.T) {
 
 			assert.False(t, capabilities.Color)
 			assert.False(t, capabilities.Hyperlinks)
-			assert.Equal(t, "docs", rendered)
+			assert.Equal(t, "docs (https://example.com)", rendered)
 			assert.NotContains(t, rendered, "\x1b")
 		})
 	}
@@ -86,12 +87,26 @@ func TestTruncateTerminalText(t *testing.T) {
 	assert.Equal(t, "feature...", ansi.Truncate("feature/very-long-branch", 10, "..."))
 }
 
-func TestRenderLinkStripsToLabel(t *testing.T) {
+func TestRenderLinkShowsURLAfterLabelWithoutHyperlinks(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 
 	link := NewRenderer(&bytes.Buffer{}, terminal.Detect(&bytes.Buffer{}, &bytes.Buffer{})).Link("PostgreSQL setup guide", "https://example.com")
 	assert.NotContains(t, link, ansi.SetHyperlink("https://example.com"))
-	assert.Equal(t, "PostgreSQL setup guide", StripANSI(link))
+	assert.NotContains(t, link, "\x1b")
+	assert.Equal(t, "PostgreSQL setup guide (https://example.com)", link)
+}
+
+func TestRenderLinkUsesHyperlinkWithoutVisibleURLWhenSupported(t *testing.T) {
+	renderer := NewRenderer(&bytes.Buffer{}, terminal.Capabilities{Color: true, Hyperlinks: true})
+
+	link := renderer.Link("PostgreSQL setup guide", "https://example.com")
+
+	assert.True(t, strings.HasPrefix(link, ansi.SetHyperlink("https://example.com")))
+	assert.True(t, strings.HasSuffix(link, ansi.ResetHyperlink()))
+	visible := StripANSI(link)
+	assert.Equal(t, "PostgreSQL setup guide", visible)
+	assert.NotContains(t, visible, "https://example.com")
+	assert.NotContains(t, visible, "(")
 }
 
 func TestThemePreviewDoesNotChangeActiveTheme(t *testing.T) {
