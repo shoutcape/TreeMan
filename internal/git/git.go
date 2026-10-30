@@ -854,6 +854,126 @@ func createPlannedWorktree(dir string, plan WorktreePlan, branch, startPoint str
 	return created, err
 }
 
+// CreatePlannedWorktreeForExistingBranch attaches an existing local branch to
+// a new linked worktree, selecting the destination under the same lock
+// CreatePlannedWorktree uses. The branch is not created, so a failure removes
+// only the worktree it registered and never the branch.
+func CreatePlannedWorktreeForExistingBranch(plan WorktreePlan, branch string) (CreatedWorktree, error) {
+	var created CreatedWorktree
+	err := withWorktreeMutationLock("", func() error {
+		existing, err := worktreeListInDir("")
+		if err != nil {
+			return err
+		}
+		for _, entry := range existing {
+			if entry.Branch == branch {
+				return fmt.Errorf("branch %q is already checked out at worktree %q", branch, entry.Path)
+			}
+		}
+		path, err := plan(existing)
+		if err != nil {
+			return err
+		}
+		sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+		if err != nil {
+			return fmt.Errorf("could not resolve branch %q: %w", branch, err)
+		}
+
+		cmd := exec.Command("git", "worktree", "add", path, branch)
+		cmd.Env = append(cmd.Environ(), "HUSKY=0")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			var rollbackErr error
+			if entries, listErr := worktreeListInDir(""); listErr != nil {
+				rollbackErr = listErr
+			} else {
+				for _, entry := range entries {
+					if sameRemovalPath(entry.Path, path) && entry.Branch == branch {
+						if _, removeErr := run("worktree", "remove", "--force", path); removeErr != nil {
+							rollbackErr = fmt.Errorf("rolling back worktree %q: %w", path, removeErr)
+						}
+						break
+					}
+				}
+			}
+			msg := strings.TrimSpace(stderr.String())
+			if msg == "" {
+				msg = err.Error()
+			}
+			return errors.Join(fmt.Errorf("git worktree add: %s", msg), rollbackErr)
+		}
+		created = CreatedWorktree{Path: path, Branch: branch, SHA: sha}
+		return nil
+	})
+	return created, err
+}
+
+// PruneWorktrees removes registrations whose directories are gone.
+func PruneWorktrees() error {
+	_, err := run("worktree", "prune")
+	return err
+}
+
+// ResolveCommit returns the commit a revision names, and false when it names
+// none. Operational failures are errors, so a caller can fail closed.
+func ResolveCommit(rev string) (string, bool, error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", false, nil
+		}
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", false, fmt.Errorf("could not resolve %q: %s", rev, msg)
+		}
+		return "", false, fmt.Errorf("could not resolve %q: %w", rev, err)
+	}
+	return strings.TrimSpace(stdout.String()), true, nil
+}
+
+// IsAncestor reports whether ancestor is reachable from descendant. A commit
+// counts as its own ancestor.
+func IsAncestor(ancestor, descendant string) (bool, error) {
+	return commitIsAncestor(ancestor, descendant)
+}
+
+// BranchBirth describes the oldest entry in a local branch's reflog: the
+// commit the branch was created at and when. ok is false when the branch has
+// no reflog, which is the default in bare repositories.
+func BranchBirth(branch string) (sha string, unixTime int64, ok bool, err error) {
+	out, err := run("reflog", "show", "--date=unix", "--format=%H %gd", "refs/heads/"+branch, "--")
+	if err != nil {
+		if BranchExists(branch) {
+			// A branch without a reflog makes `git reflog show` fail on
+			// some Git versions; that is an absent history, not an error.
+			return "", 0, false, nil
+		}
+		return "", 0, false, err
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if last == "" {
+		return "", 0, false, nil
+	}
+	sha, selector, found := strings.Cut(last, " ")
+	if !found {
+		return "", 0, false, fmt.Errorf("unexpected reflog entry %q for branch %q", last, branch)
+	}
+	open := strings.LastIndex(selector, "@{")
+	if open < 0 || !strings.HasSuffix(selector, "}") {
+		return "", 0, false, fmt.Errorf("unexpected reflog selector %q for branch %q", selector, branch)
+	}
+	unixTime, err = strconv.ParseInt(selector[open+2:len(selector)-1], 10, 64)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("unexpected reflog time %q for branch %q: %w", selector, branch, err)
+	}
+	return sha, unixTime, true, nil
+}
+
 func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 	var errs []error
 	entries, err := worktreeListInDir(dir)
