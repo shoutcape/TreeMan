@@ -23,6 +23,7 @@ Shell integration uses that destination to change the current interactive shell 
 | `treeman doctor [--json]` | None | Check repository readiness and configuration |
 | `treeman preflight [--json]` | None | Report setup compatibility before creation |
 | `treeman theme` | None | Select a terminal color theme |
+| `treeman claude install` | None | Add TreeMan worktree hooks to Claude Code |
 | `treeman version` | None | Print build data |
 
 ## Run a Command in the Worktree
@@ -311,13 +312,33 @@ match.
 Read [Hook Approval](hooks.md) for the fingerprint scope, state location, and
 security boundary.
 
+## `claude`
+
+```text
+treeman claude install [--settings <path>] [--replace] [--dry-run]
+treeman claude worktree-create
+treeman claude worktree-remove
+```
+
+`install` adds `WorktreeCreate` and `WorktreeRemove` hooks to Claude Code user settings. The default file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when `CLAUDE_CONFIG_DIR` is set. The command keeps all other settings and their order, and it backs up the original file. A second run changes nothing. The command stops when the file has a different worktree hook, unless you use `--replace`. `--dry-run` shows the changes and writes nothing.
+
+Claude Code runs `worktree-create` and `worktree-remove`. Each command reads hook input JSON on stdin. `worktree-create` writes only the worktree path to stdout. Neither command asks a question.
+
+| Flag | Command | Purpose |
+| --- | --- | --- |
+| `--settings <path>` | `install` | Edit this settings file |
+| `--replace` | `install` | Replace other `WorktreeCreate` and `WorktreeRemove` hooks |
+| `--dry-run` | `install` | Show the changes without a write |
+
+Read [Claude Code worktrees](../integrations/agents.md#claude-code-worktrees) for names, ownership, and removal rules.
+
 ## `clean`
 
 ```text
 treeman clean [--dry-run] [--yes]
 ```
 
-`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the fetched `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. It does not remove detached worktrees or the default branch. A locked worktree is never offered: Git refuses to remove one and `--force` does not waive it, so `clean` reports the omission with the lock reason instead of promising a removal it would have to refuse. Every failed removal reports what it left behind, and `clean` acts on that report rather than on which Git resources survived. A candidate the removal refused without changing anything is reported, skipped, and the run continues to the rest and exits unsuccessfully. A failure to read repository-wide state stops the run instead, because every remaining candidate would fail the same way. A removal that already unregistered a worktree stops the run too, because the state it left behind needs attention before more deletions run. So does one that captured a worktree directory and could not restore it: Git still has the registration, but the directory is no longer at the registered path, so the run stops and names both locations. TreeMan removes worktrees and branches before batching drops of their recorded owned databases, and retries pending drops from earlier deletion runs. When any candidate has recorded database ownership, the preview abbreviates paths to their final two components, mentions databases, and adds a `DATABASE` column with `✓` for owned databases. Cleanup results include a `DATABASE` column only when at least one removed worktree has a recorded database. If it removes the current worktree, it reports the main worktree path so shell integration returns there safely. Use `--dry-run` to print candidates without deleting them. Use `--yes` or `-y` to skip confirmation.
+`clean` fetches the detected default branch, then removes linked worktrees only when all of these conditions are true: the worktree is not main, it has no changes, and its branch is merged into the fetched `origin/<default-branch>`. Branches merged via squash or rebase, whose remote branch was deleted after merge, also qualify when `gh` or `glab` reports a merged PR/MR targeting that default branch whose source branch and head commit equal the local branch and tip. This includes GitHub fork PRs. Without that confirmation, TreeMan retains the branch. It does not remove detached worktrees or the default branch. A locked worktree is never offered: Git refuses to remove one and `--force` does not waive it, so `clean` reports the omission with the lock reason instead of promising a removal it would have to refuse. Every failed removal reports what it left behind, and `clean` acts on that report rather than on which Git resources survived. A candidate the removal refused without changing anything is reported, skipped, and the run continues to the rest and exits unsuccessfully. A failure to read repository-wide state stops the run instead, because every remaining candidate would fail the same way. A removal that already unregistered a worktree stops the run too, because the state it left behind needs attention before more deletions run. So does one that captured a worktree directory and could not restore it: Git still has the registration, but the directory is no longer at the registered path, so the run stops and names both locations. TreeMan removes worktrees and branches before batching drops of their recorded owned databases, and retries pending drops from earlier deletion runs. When any candidate has recorded database ownership, the preview abbreviates paths to their final two components, mentions databases, and adds a `DATABASE` column with `✓` for owned databases. Cleanup results include a `DATABASE` column only when at least one removed worktree has a recorded database. If it removes the current worktree, it reports the main worktree path so shell integration returns there safely. `clean` and `delete` also update the [Claude Code worktree record](../integrations/agents.md#claude-code-worktrees) for each worktree and branch that they remove. Use `--dry-run` to print candidates without deleting them. Use `--yes` or `-y` to skip confirmation.
 
 ## `shell`
 

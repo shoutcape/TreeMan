@@ -147,6 +147,7 @@ Use `treeman list --json` for machine-readable worktree state and `treeman docto
 | `treeman hooks approvals list`      | None                             | List saved post-create hook approvals        |
 | `treeman hooks approvals revoke <id>` | None                           | Revoke one exact hook approval ID             |
 | `treeman theme`                     | None                             | Select a terminal color theme                |
+| `treeman claude install`            | None                             | Add TreeMan worktree hooks to Claude Code    |
 | `treeman version`                   | None                             | Print build data                             |
 
 Shell integration uses paths printed by native commands to change the current shell directory.
@@ -160,6 +161,8 @@ Install the TreeMan Agent Skill for OpenCode, Claude Code, Codex, and other supp
 ```bash
 npx skills add shoutcape/TreeMan --skill treeman -g -a opencode
 ```
+
+Run `treeman claude install` to let Claude Code make its worktrees with TreeMan. This includes worktrees for `claude --worktree` and for subagents.
 
 Read [Use TreeMan with agents](docs/integrations/agents.md) for installation and safety rules.
 
