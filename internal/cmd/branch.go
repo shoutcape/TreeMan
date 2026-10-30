@@ -64,6 +64,7 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
+	offerWarmStarts(cmd, created.paths.projectPaths, setupOptions.skipDeps)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
 	if pr, ok := created.prMap[created.worktree.Branch]; ok {

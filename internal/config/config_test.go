@@ -33,6 +33,32 @@ env_key = "DATABASE_URI"
 	assert.Equal(t, "DATABASE_URI", result.Config.Database.EnvKey)
 }
 
+func TestLoad_DepsReuse(t *testing.T) {
+	dir := t.TempDir()
+	content := `[deps]
+reuse = ["node_modules", "packages/api/node_modules"]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Empty(t, result.Warning)
+	assert.Equal(t, []string{"node_modules", "packages/api/node_modules"}, result.Config.ReusePaths())
+}
+
+func TestLoad_RejectsInvalidDepsReuse(t *testing.T) {
+	dir := t.TempDir()
+	content := `[deps]
+reuse = ["node_modules", "node_modules/cache"]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte(content), 0600))
+
+	result := Load(dir)
+
+	assert.Contains(t, result.Warning, "overlapping reuse paths")
+	assert.Equal(t, Config{}, result.Config)
+}
+
 func TestLoad_WorktreeDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("worktree_dir = \"../trees/{repo}\"\n"), 0o600))

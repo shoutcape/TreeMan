@@ -15,7 +15,8 @@ sequenceDiagram
     CLI->>Git: fetch origin default branch
     CLI->>Git: add linked worktree and branch
     CLI->>Setup: update ignore file and copy environment files
-    CLI->>Setup: load config, database, dependencies, and hooks
+    CLI->>Setup: load config, database, dependency reuse, dependencies, and hooks
+    CLI->>User: one-time warm-start offer (stderr, interactive only)
     CLI-->>Shell: destination path
     Shell->>Shell: cd to path
 ```
@@ -36,9 +37,12 @@ flowchart TD
     E --> F[Revalidate path, branch, and registration]
     F --> G[Environment files]
     G --> H[Database]
-    H --> I[Dependencies]
+    H --> R[Dependency reuse]
+    R --> I[Dependencies]
     I --> J[Hooks]
     J --> K[Summary]
+    K --> L[Release the setup lock]
+    L --> O[One-time warm-start offer]
     subgraph Gate [Gate: a failure here is an error]
         A
         B
@@ -50,14 +54,19 @@ flowchart TD
     subgraph Steps [Steps: a failure here is a warning]
         G
         H
+        R
         I
         J
     end
 ```
 
-TreeMan holds the lock across the environment, database, dependency, and hook
-steps. It resolves hook approval before the lock, therefore a consent prompt
-never waits with the lock held.
+TreeMan holds the lock across the environment, database, dependency reuse,
+dependency, and hook steps. It resolves hook approval before the lock, therefore
+a consent prompt never waits with the lock held. Dependency reuse copies every
+configured `deps.reuse` path from the main worktree before any installer runs.
+The warm-start offer runs only after the lock is released, so its prompt never
+waits with the lock held either. `create`, `branch`, and `review` run the same
+steps and the same offer after their summary.
 
 ## Remote Branch and Review
 

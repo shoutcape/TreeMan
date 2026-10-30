@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -68,7 +69,7 @@ func creationSetupFlags(options *creationSetupOptions) []creationSetupFlag {
 	return []creationSetupFlag{
 		{name: "skip-env", usage: "Skip copying .env* files", value: &options.skipEnv},
 		{name: "skip-database", usage: "Skip branch database setup", value: &options.skipDatabase},
-		{name: "skip-deps", usage: "Skip dependency installation", value: &options.skipDeps},
+		{name: "skip-deps", usage: "Skip dependency reuse and installation", value: &options.skipDeps},
 		{name: "skip-hooks", usage: "Skip post-create hooks", value: &options.skipHooks},
 		{name: "trust-hooks", usage: "Trust post-create hooks for this invocation",
 			value: &options.trustHooks, conflictsWith: "skip-hooks"},
@@ -164,9 +165,12 @@ func failedStatus(text string) setupStatus {
 type setupSummary struct {
 	environment      setupStatus
 	environmentTools []envrc.ToolStatus
-	dependencies     setupStatus
-	database         setupStatus
-	hooks            setupStatus
+	// reuse is reported only when the project configures [deps].reuse, so
+	// projects without warm starts keep their existing summary.
+	reuse        *setupStatus
+	dependencies setupStatus
+	database     setupStatus
+	hooks        setupStatus
 }
 
 // setupStep pairs one setup action with its reported result. Environment
@@ -183,12 +187,17 @@ type setupStep struct {
 // steps lists the setup actions in report order. Every reader of a summary
 // goes through this, so a new setup action only has to be added here.
 func (summary setupSummary) steps() []setupStep {
-	return []setupStep{
+	steps := []setupStep{
 		{name: "Environment", skipFlag: "skip-env", status: summary.environment, tools: summary.environmentTools},
-		{name: "Dependencies", skipFlag: "skip-deps", status: summary.dependencies},
-		{name: "Database", skipFlag: "skip-database", status: summary.database},
-		{name: "Hooks", skipFlag: "skip-hooks", status: summary.hooks},
 	}
+	if summary.reuse != nil {
+		steps = append(steps, setupStep{name: "Warm starts", skipFlag: "skip-deps", status: *summary.reuse})
+	}
+	return append(steps,
+		setupStep{name: "Dependencies", skipFlag: "skip-deps", status: summary.dependencies},
+		setupStep{name: "Database", skipFlag: "skip-database", status: summary.database},
+		setupStep{name: "Hooks", skipFlag: "skip-hooks", status: summary.hooks},
+	)
 }
 
 // failures describes every setup action that failed, using the lowercased step
@@ -223,8 +232,16 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 		databaseStatus = setupWorktreeDatabase(w, render, setup)
 	}
 
+	var reuseStatus *setupStatus
+	if len(setup.projectConfig.ReusePaths()) > 0 {
+		status := skippedStatus("skipped (requested)")
+		reuseStatus = &status
+	}
 	dependenciesStatus := skippedStatus("skipped (requested)")
 	if !setup.options.skipDeps {
+		if reuseStatus != nil {
+			*reuseStatus = setupReuse(w, render, setup)
+		}
 		dependenciesStatus = setupDependencies(w, render, setup.worktreePath)
 	}
 	reportNestedModules(w, render, setup.worktreePath, setup.worktreeDir)
@@ -237,10 +254,59 @@ func runWorktreeSetup(w io.Writer, render ui.Renderer, setup worktreeSetup) setu
 	return setupSummary{
 		environment:      environmentStatus,
 		environmentTools: environmentTools,
+		reuse:            reuseStatus,
 		dependencies:     dependenciesStatus,
 		database:         databaseStatus,
 		hooks:            hooksStatus,
 	}
+}
+
+// setupReuse copies every configured dependency directory before installer
+// detection. Reuse is an optimization, so an individual failure is reported
+// and never prevents the normal installer from running.
+func setupReuse(out io.Writer, render ui.Renderer, setup worktreeSetup) setupStatus {
+	if isMainWorktree(setup.mainRoot, setup.worktreePath) {
+		return skippedStatus("skipped (main worktree)")
+	}
+	var copied, skipped, failed int
+	for _, path := range setup.projectConfig.ReusePaths() {
+		result, err := deps.Reuse(setup.mainRoot, setup.worktreePath, path)
+		if err != nil {
+			failed++
+			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not reuse %s: %v", path, err)))
+			continue
+		}
+		switch result {
+		case deps.ReuseCopied:
+			copied++
+			fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Reused "+path+"."))
+		case deps.ReuseSourceMissing:
+			skipped++
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Skipped reuse "+path+": source missing."))
+		case deps.ReuseDestinationExists:
+			skipped++
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Skipped reuse "+path+": destination exists."))
+		}
+	}
+	text := fmt.Sprintf("completed: %d copied, %d skipped", copied, skipped)
+	if failed > 0 {
+		return failedStatus(fmt.Sprintf("%s, %d failed", text, failed))
+	}
+	if copied == 0 {
+		return skippedStatus(text)
+	}
+	return completedStatus(text)
+}
+
+// isMainWorktree reports whether setup targets the main worktree itself, where
+// reuse would copy a directory onto itself.
+func isMainWorktree(mainRoot, worktreePath string) bool {
+	main, err := filepath.EvalSymlinks(mainRoot)
+	if err != nil {
+		return false
+	}
+	target, err := filepath.EvalSymlinks(worktreePath)
+	return err == nil && filepath.Clean(main) == filepath.Clean(target)
 }
 
 // copyEnvironment copies the main worktree's .env* files under this run's

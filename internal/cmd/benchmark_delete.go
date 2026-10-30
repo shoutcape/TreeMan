@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/shoutcape/treeman/internal/database"
@@ -127,8 +128,10 @@ func describeDeletePreparation(summary setupSummary, cleared []string) string {
 func failedSetupFlags(summary setupSummary) []string {
 	var flags []string
 	for _, step := range summary.steps() {
-		if step.status.kind == setupStatusFailed {
-			flags = append(flags, "--"+step.skipFlag)
+		// Warm starts and dependencies share --skip-deps; name it once.
+		flag := "--" + step.skipFlag
+		if step.status.kind == setupStatusFailed && !slices.Contains(flags, flag) {
+			flags = append(flags, flag)
 		}
 	}
 	return flags

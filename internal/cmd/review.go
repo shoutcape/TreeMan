@@ -56,6 +56,7 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
 	fmt.Fprintln(out)
 	printSetupSummary(out, render, summary)
+	offerWarmStarts(cmd, created.paths.projectPaths, setupOptions.skipDeps)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Review worktree ready:"))
 	fmt.Fprintf(out, "  PR/MR:  %s\n", render.PR(fmt.Sprintf("#%d", created.info.Number)))
 	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(created.info.Title, 10)))

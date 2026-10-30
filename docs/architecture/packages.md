@@ -27,9 +27,9 @@
 | --- | --- |
 | `internal/git` | Git process calls and worktree data |
 | `internal/worktree` | Branch slugs, collision-free worktree paths, and ignore-file changes |
-| `internal/config` | Project and global TOML configuration |
+| `internal/config` | Project and global TOML configuration, plus the warm-start config writer; imports `internal/deps` to validate `deps.reuse` |
 | `internal/envfile` | Root-level `.env*` file copies |
-| `internal/deps` | Dependency detection from package metadata and lockfiles, plus command execution |
+| `internal/deps` | Dependency detection from package metadata and lockfiles, command execution, and `deps.reuse` path validation and contained directory copying |
 | `internal/hooks` | Post-create shell commands |
 | `internal/database` | PostgreSQL URI, environment rewrite, Docker, and cleanup |
 | `internal/forge` | GitHub and GitLab detection, CLI calls, REST calls, and GraphQL snapshots |
@@ -43,7 +43,7 @@
 | Type | Purpose |
 | --- | --- |
 | `git.WorktreeEntry` | Worktree path and branch data |
-| `config.Config` | Database and hook configuration |
+| `config.Config` | Database, hook, and dependency reuse configuration |
 | `database.ParsedURI` | PostgreSQL URI parts |
 | `database.SetupResult` | Database creation result |
 | `forge.PRInfo` | PR or MR data for selection and review |

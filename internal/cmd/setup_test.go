@@ -157,6 +157,79 @@ func TestRunWorktreeSetup_ReportsSourceEnvrcWhenCopySkipped(t *testing.T) {
 	})
 }
 
+func TestRunWorktreeSetup_ReusesBeforeInstaller(t *testing.T) {
+	mainRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	reusePath := filepath.Join(mainRoot, "node_modules")
+	require.NoError(t, os.MkdirAll(reusePath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(reusePath, "marker"), []byte("copied"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mainRoot, "package.json"), []byte(`{"name":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mainRoot, "package-lock.json"), []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "package-lock.json"), []byte("{}"), 0o644))
+
+	binDir := t.TempDir()
+	installerLog := filepath.Join(t.TempDir(), "installer.log")
+	installer := filepath.Join(binDir, "npm")
+	require.NoError(t, os.WriteFile(installer, []byte("#!/bin/sh\n[ -f node_modules/marker ] || exit 1\nprintf installer >> "+installerLog+"\n"), 0o755))
+	t.Setenv("PATH", binDir)
+
+	var output bytes.Buffer
+	summary := runWorktreeSetup(&output, ui.NewRenderer(&output, terminal.Capabilities{}), worktreeSetup{
+		mainRoot: mainRoot, worktreePath: worktreePath, projectConfig: config.Config{Deps: &config.DepsConfig{Reuse: []string{"node_modules"}}},
+		options: creationSetupOptions{skipEnv: true, skipDatabase: true, skipHooks: true},
+	})
+
+	assert.Equal(t, completedStatus("completed: installed with npm"), summary.dependencies)
+	assert.FileExists(t, filepath.Join(worktreePath, "node_modules", "marker"))
+	assert.Equal(t, "installer", readTestFile(t, installerLog))
+	require.NotNil(t, summary.reuse)
+	assert.Equal(t, completedStatus("completed: 1 copied, 0 skipped"), *summary.reuse)
+	text := ui.StripANSI(output.String())
+	assert.Contains(t, text, "Reused node_modules.")
+}
+
+func TestRunWorktreeSetup_SkipDepsSkipsReuseAndInstaller(t *testing.T) {
+	mainRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(mainRoot, "node_modules"), 0o755))
+
+	var output bytes.Buffer
+	summary := runWorktreeSetup(&output, ui.NewRenderer(&output, terminal.Capabilities{}), worktreeSetup{
+		mainRoot: mainRoot, worktreePath: worktreePath, projectConfig: config.Config{Deps: &config.DepsConfig{Reuse: []string{"node_modules"}}},
+		options: creationSetupOptions{skipEnv: true, skipDatabase: true, skipDeps: true, skipHooks: true},
+	})
+
+	assert.Equal(t, skippedStatus("skipped (requested)"), summary.dependencies)
+	require.NotNil(t, summary.reuse)
+	assert.Equal(t, skippedStatus("skipped (requested)"), *summary.reuse)
+	assert.NoDirExists(t, filepath.Join(worktreePath, "node_modules"))
+	assert.NotContains(t, ui.StripANSI(output.String()), "Reused node_modules")
+}
+
+func TestRunWorktreeSetup_ReuseFailureDoesNotBlockInstaller(t *testing.T) {
+	mainRoot := t.TempDir()
+	worktreePath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mainRoot, "package.json"), []byte(`{"name":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mainRoot, "package-lock.json"), []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "package-lock.json"), []byte("{}"), 0o644))
+	binDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "npm"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", binDir)
+
+	var output bytes.Buffer
+	summary := runWorktreeSetup(&output, ui.NewRenderer(&output, terminal.Capabilities{}), worktreeSetup{
+		mainRoot: mainRoot, worktreePath: worktreePath, projectConfig: config.Config{Deps: &config.DepsConfig{Reuse: []string{"missing", "../unsafe"}}},
+		options: creationSetupOptions{skipEnv: true, skipDatabase: true, skipHooks: true},
+	})
+
+	assert.Equal(t, completedStatus("completed: installed with npm"), summary.dependencies)
+	require.NotNil(t, summary.reuse)
+	assert.Equal(t, failedStatus("completed: 0 copied, 1 skipped, 1 failed"), *summary.reuse)
+	text := ui.StripANSI(output.String())
+	assert.Contains(t, text, "source missing")
+	assert.Contains(t, text, "could not reuse ../unsafe")
+}
+
 func TestReportNestedModules(t *testing.T) {
 	repo, _ := createTestWorktree(t, "feature/nested-modules")
 	module := filepath.Join(repo, "apps", "web", "package-lock.json")
