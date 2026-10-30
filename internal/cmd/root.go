@@ -52,6 +52,7 @@ Git worktrees -- keeping your branches isolated without juggling stashes.`,
 	root.AddCommand(newPreflightCmd())
 	root.AddCommand(newThemeCmd())
 	root.AddCommand(newHooksCmd())
+	root.AddCommand(newClaudeCmd())
 	root.SetHelpFunc(printHelp)
 
 	return root
@@ -81,6 +82,7 @@ func printOverview(cmd *cobra.Command) {
 		{use: "treeman doctor [--json]", short: "Check repository readiness and configuration"},
 		{use: "treeman preflight [--json]", short: "Report setup compatibility before creation"},
 		{use: "treeman theme", short: "Select a terminal color theme"},
+		{use: "treeman claude install", short: "Create Claude Code worktrees with TreeMan"},
 	}
 
 	fmt.Fprintf(out, "\n%s\n%s\n\n", render.Title("TREEMAN"), render.Muted("TreeMan manages isolated Git worktrees."))

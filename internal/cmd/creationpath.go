@@ -27,6 +27,16 @@ type creationPaths struct {
 	// hooks is the consent resolved for this creation's post-create hooks.
 	hooks   hookApproval
 	options creationSetupOptions
+	// hooksUnapproved says hooks are skipped because no saved approval
+	// matched them, rather than because the caller asked.
+	hooksUnapproved bool
+}
+
+func (p creationPaths) hooksSkippedText() string {
+	if p.hooksUnapproved {
+		return "skipped (not approved)"
+	}
+	return "skipped (requested)"
 }
 
 // projectPaths is what one project configuration says about a repository,

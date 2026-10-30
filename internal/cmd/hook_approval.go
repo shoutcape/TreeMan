@@ -8,6 +8,7 @@ import (
 
 	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/state"
+	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -32,12 +33,45 @@ func approveCreationHooks(cmd *cobra.Command, paths creationPaths, opts creation
 	if opts.skipHooks || len(commands) == 0 {
 		return paths, nil
 	}
+	if opts.savedApprovalOnly {
+		return approveSavedCreationHooks(cmd, paths, commands)
+	}
 	approved, err := approveHooks(cmd, paths.projectPaths, commands, opts.trustHooks,
 		fmt.Sprintf("Hooks run in the new worktree under %q", paths.parentDir))
 	if err != nil {
 		return paths, err
 	}
 	paths.hooks = approved
+	return paths, nil
+}
+
+// approveSavedCreationHooks authorizes hooks only from a saved approval. It
+// never prompts and never fails creation for missing consent: unapproved hooks
+// are skipped with a warning that says how to approve them.
+func approveSavedCreationHooks(cmd *cobra.Command, paths creationPaths, commands []string) (creationPaths, error) {
+	skip := func(reason string) (creationPaths, error) {
+		render := commandRenderer(cmd)
+		fmt.Fprintln(cmd.ErrOrStderr(), render.Status(ui.ToneWarning, "!", reason))
+		paths.options.skipHooks = true
+		paths.hooksUnapproved = true
+		return paths, nil
+	}
+	scope, err := hooks.NewApprovalScope(paths.protected.CommonDir, paths.configPath, hooks.PostCreatePhase, commands)
+	if err != nil {
+		return skip(fmt.Sprintf("skipping post-create hooks: %v", err))
+	}
+	store, err := state.NewHookApprovalStore(paths.protected.CommonDir)
+	if err != nil {
+		return skip(fmt.Sprintf("skipping post-create hooks: hook approval state: %v", err))
+	}
+	approved, err := store.Lookup(scope)
+	if err != nil {
+		return skip(fmt.Sprintf("skipping post-create hooks: hook approval state: %v", err))
+	}
+	if !approved {
+		return skip(fmt.Sprintf("skipping %d post-create hook(s): they have no saved approval; run `treeman setup --rerun-hooks` in a worktree of this repository to review and approve them", len(commands)))
+	}
+	paths.hooks = hookApproval{commands: slices.Clone(commands)}
 	return paths, nil
 }
 
