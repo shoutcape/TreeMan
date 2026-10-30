@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/shoutcape/treeman/internal/deps"
 )
 
 // ConfigFileName is the name of the config file searched for.
@@ -33,6 +34,10 @@ type Config struct {
 	// Nil when the [hooks] section is absent (no custom hooks).
 	Hooks *HooksConfig `toml:"hooks"`
 
+	// Deps configures dependency setup.
+	// Nil when the [deps] section is absent.
+	Deps *DepsConfig `toml:"deps"`
+
 	// UpdateGitignore controls whether TreeMan appends the worktree directory
 	// to the root .gitignore when creating a worktree. Defaults to false so
 	// that projects managing their own .gitignore are not modified without
@@ -44,6 +49,13 @@ type Config struct {
 	// The value is resolved by the worktree package, which owns the
 	// placeholder, tilde, and relative-path rules.
 	WorktreeDir string `toml:"worktree_dir"`
+}
+
+// DepsConfig configures dependency setup behavior.
+type DepsConfig struct {
+	// Reuse lists repository-relative directories to copy from the main
+	// worktree before dependency installation.
+	Reuse []string `toml:"reuse"`
 }
 
 // HooksConfig configures lifecycle hook commands.
@@ -88,6 +100,15 @@ func (c Config) PostCreateHooks() []string {
 		return nil
 	}
 	return c.Hooks.PostCreate
+}
+
+// ReusePaths returns the configured dependency directories to copy from the
+// main worktree before installation.
+func (c Config) ReusePaths() []string {
+	if c.Deps == nil {
+		return nil
+	}
+	return c.Deps.Reuse
 }
 
 // ShouldUpdateGitignore reports whether TreeMan should append the worktree
@@ -160,6 +181,12 @@ func Load(dir string) LoadResult {
 		return LoadResult{
 			Path:    path,
 			Warning: fmt.Sprintf("%s: [database].container cannot be whitespace", path),
+		}
+	}
+	if err := deps.ValidateReusePaths(cfg.ReusePaths()); err != nil {
+		return LoadResult{
+			Path:    path,
+			Warning: fmt.Sprintf("%s: [deps].reuse: %v", path, err),
 		}
 	}
 

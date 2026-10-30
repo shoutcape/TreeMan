@@ -100,6 +100,7 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	// Print result to stderr for the user.
 	fmt.Fprintln(out, "")
 	printSetupSummary(out, render, summary)
+	offerWarmStarts(cmd, paths.projectPaths, setupOptions.skipDeps)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))

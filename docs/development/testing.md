@@ -12,6 +12,39 @@ Tests cover command helpers, configuration, database logic, dependency detection
 
 ## Command Benchmarks
 
+### Warm-Start Benchmark
+
+Run the offline dependency benchmark from the repository root:
+
+```bash
+go test ./internal/deps -run '^$' -bench '^BenchmarkReuseSetup$' -benchtime=100x -count=3
+```
+
+`BenchmarkReuseSetup/cold-install` installs a deterministic synthetic tree of
+256 files (about 1 MiB) from a local fixture. `BenchmarkReuseSetup/reuse-plus-install`
+first calls the actual `Reuse` API to copy the equivalent tree from a simulated
+main worktree, then runs the same fixture installer. The timed reuse result
+includes the full copy. Fixture creation and cleanup are outside the timer.
+
+Example evidence from Linux amd64 on an Intel 13th Gen i5-13600KF, Go
+`go1.27.0-X:nodwarf5`, and the local filesystem on 2026-09-07:
+
+| Case | Three runs (ns/op) | Median |
+| --- | ---: | ---: |
+| Cold installation | 2,056,546; 1,998,711; 2,035,869 | 2.04 ms |
+| Reuse + same installer | 2,186,392; 2,096,700; 2,280,727 | 2.19 ms |
+
+In this run, reuse was about 7% slower when its copy time was included. This
+is useful evidence that reuse is not always faster, not a performance promise.
+
+This is an offline, reproducible comparison of filesystem work. The fixture
+installer is not npm, pnpm, Yarn, Go, or Cargo, so the result is not evidence of
+a real package-manager speedup. It also does not measure network access,
+package resolution, native compilation, lifecycle scripts, or shared caches.
+Record the complete command, machine, Go version, filesystem, and both reported
+times when comparing runs. Reuse may be slower when the installer already has
+an effective cache or when copied artifacts are invalid for the new worktree.
+
 Use the public command for a quick directional measurement.
 
 ```bash

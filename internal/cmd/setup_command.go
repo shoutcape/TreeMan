@@ -68,7 +68,7 @@ func addRerunSetupFlags(cmd *cobra.Command, options *rerunSetupOptions) {
 	cmd.Flags().BoolVar(&options.trustHooks, "trust-hooks", false, "Trust post-create hooks for this invocation")
 	cmd.Flags().BoolVar(&options.skipEnv, "skip-env", false, "Skip copying .env* files")
 	cmd.Flags().BoolVar(&options.skipDatabase, "skip-database", false, "Skip branch database setup")
-	cmd.Flags().BoolVar(&options.skipDeps, "skip-deps", false, "Skip dependency installation")
+	cmd.Flags().BoolVar(&options.skipDeps, "skip-deps", false, "Skip dependency reuse and installation")
 	cmd.Flags().BoolVar(&options.skipHooks, "skip-hooks", false, "Skip post-create hooks")
 
 	// Registered once every flag exists, because cobra resolves a group's
@@ -136,7 +136,7 @@ func runSetup(cmd *cobra.Command, query string, options rerunSetupOptions) error
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	return withSetupLock(target, func() error {
+	err = withSetupLock(target, func() error {
 		// The target was chosen before the lock. Confirm it still describes
 		// the same worktree before starting; external Git changes do not
 		// participate in TreeMan's setup lock.
@@ -161,6 +161,10 @@ func runSetup(cmd *cobra.Command, query string, options rerunSetupOptions) error
 		printSetupSummary(out, render, summary)
 		return nil
 	})
+	if err == nil {
+		offerWarmStarts(cmd, project, options.skipDeps)
+	}
+	return err
 }
 
 // approveSetupHooks resolves consent before the lock is taken, so a prompt

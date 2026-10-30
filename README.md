@@ -57,6 +57,46 @@ After creation, TreeMan performs these steps in order:
 4. Installs project dependencies when it detects a supported project.
 5. Runs configured post-create hooks.
 
+### Warm Dependency Starts
+
+Opt in to a one-time copy of selected dependency directories from the main
+worktree before the normal installer runs:
+
+```toml
+[deps]
+reuse = ["node_modules", "packages/api/node_modules"]
+```
+
+Each entry is an explicit repository-relative path. TreeMan copies it from the
+main worktree into the new worktree, then runs the same detected installer.
+The copy is independent: it uses regular files and directories, not a
+hardlink, reflink, or link to the main worktree. Existing destinations are
+never overwritten. Missing sources are skipped. `--skip-deps` skips both reuse
+and dependency installation.
+
+Configured paths must not be empty, absolute, duplicated, overlapping, or
+inside `.git`; configured path ancestors must not be symlinks. Nested `.git`
+directories inside a selected directory are copied as ordinary content. Relative
+symlinks inside a selected directory are copied only when their target remains
+inside that directory, including through symlink chains. Absolute, escaping,
+and unsafe links make that reuse attempt fail safely.
+
+Reuse is general-purpose and does not guarantee portable artifacts. Virtual
+environments can contain absolute paths, and native or compiled dependencies
+can depend on the operating system, compiler, or source paths. TreeMan does
+not sandbox install scripts, change package-manager caches, or automatically
+repair copied artifacts. It applies one repository-wide reuse list; it does
+not automatically infer paths or inherit them into nested modules. Nested
+modules are not installed automatically.
+
+For a Node project with root `node_modules` already present on main, TreeMan
+can offer to configure warm starts after setup. The interactive `[y/N]` offer
+appears once per repository on this machine, includes a documentation link,
+and only affects future setup. Declining leaves configuration unchanged.
+There is no offer in CI, noninteractive runs, with `--skip-deps`, or when reuse
+is already declared, including an explicit empty list. See the
+[configuration reference](docs/reference/configuration.md#one-time-warm-start-suggestion).
+
 If post-create hooks are configured, TreeMan asks for approval before it
 fetches or creates the worktree. Approval covers the exact ordered command
 strings and does not fingerprint script contents. Use `--trust-hooks` for one

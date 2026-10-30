@@ -82,6 +82,22 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Setup serialization for one worktree | `<git-common-dir>/treeman/setup/` |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
 | Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |
+| Warm-start suggestion already offered | `$XDG_STATE_HOME/treeman/warm-start-prompts/` or `$HOME/.local/state/treeman/warm-start-prompts/` |
+
+## Warm-Start Suggestion State
+
+Warm-start suggestions are remembered per user and machine, outside project
+configuration. Each marker is an empty `0600` file named by the SHA-256 hash of
+the canonical Git common-directory path. All linked worktrees share that
+identity; separate clones receive separate offers. Moving a repository to a new
+path can result in a new offer. The parent directory is created with mode `0700`.
+
+The marker is claimed before the interactive prompt, including when the user
+declines or the session ends. No marker is created for a noninteractive run,
+`--skip-deps`, an already-declared reuse setting, or a repository without an
+eligible candidate. If TreeMan cannot record the offer, it warns and does not
+prompt. Deleting these markers resets the corresponding one-time suggestions;
+it does not enable or disable configured reuse.
 
 ## Hook Approval State
 

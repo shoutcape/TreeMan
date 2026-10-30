@@ -74,3 +74,92 @@ func TestAtomicWriteFile_DirectorySyncFailureKeepsReplacementAndCleansTemporaryF
 	assert.Len(t, entries, 1)
 	assert.Equal(t, "state", entries[0].Name())
 }
+
+func TestAtomicReplaceFileRunsCheckAfterSyncBeforeRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	require.NoError(t, os.WriteFile(path, []byte("previous"), 0o600))
+	called := 0
+
+	err := AtomicReplaceFile(path, []byte("replacement"), 0o640, func() error {
+		called++
+		current, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("previous"), current, "rename must happen after the check")
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		require.Len(t, entries, 2, "temporary file holds the new contents")
+		for _, entry := range entries {
+			if entry.Name() == "state" {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			require.NoError(t, err)
+			assert.Equal(t, []byte("replacement"), data, "contents are written before the check")
+			info, err := entry.Info()
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, called)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("replacement"), data)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+func TestAtomicReplaceFileCheckErrorPreservesOriginalAndCleansTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	require.NoError(t, os.WriteFile(path, []byte("previous"), 0o600))
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	checkErr := fmt.Errorf("changed underneath")
+
+	err = AtomicReplaceFile(path, []byte("replacement"), 0o640, func() error { return checkErr })
+
+	require.ErrorIs(t, err, checkErr)
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, []byte("previous"), data)
+	after, statErr := os.Stat(path)
+	require.NoError(t, statErr)
+	assert.True(t, os.SameFile(before, after), "original file must not be replaced")
+	assert.Equal(t, os.FileMode(0o600), after.Mode().Perm())
+	entries, readErr := os.ReadDir(dir)
+	require.NoError(t, readErr)
+	assert.Len(t, entries, 1)
+	assert.Equal(t, "state", entries[0].Name())
+}
+
+func TestAtomicReplaceFileCheckErrorWhenTargetMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	checkErr := fmt.Errorf("refuse")
+
+	err := AtomicReplaceFile(path, []byte("replacement"), 0o640, func() error { return checkErr })
+
+	require.ErrorIs(t, err, checkErr)
+	assert.NoFileExists(t, path)
+	entries, readErr := os.ReadDir(dir)
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
+}
+
+func TestAtomicReplaceFileNilCheckReplaces(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state")
+	require.NoError(t, os.WriteFile(path, []byte("previous"), 0o600))
+	require.NoError(t, AtomicReplaceFile(path, []byte("replacement"), 0o644, nil))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("replacement"), data)
+}
