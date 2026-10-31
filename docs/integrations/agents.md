@@ -36,6 +36,90 @@ For a new feature, the agent runs `treeman create <branch>`. It reads the printe
 
 The skill does not permit deletion without an explicit user request. TreeMan verifies direct deletion targets and refuses dirty worktrees unless the command explicitly uses `--force`.
 
+## Claude Code Worktrees
+
+Claude Code makes worktrees for `claude --worktree`, the `EnterWorktree` tool, subagents with `isolation: "worktree"`, and background sessions. Without TreeMan, Claude Code uses plain Git worktrees under `.claude/worktrees/`. TreeMan can make these worktrees instead, with its paths, branch names, and setup.
+
+### Install the Claude Code Hooks
+
+1. Install TreeMan, and make sure that `treeman` is on `PATH`.
+2. Run this command:
+
+   ```bash
+   treeman claude install
+   ```
+
+3. Restart the Claude Code sessions that are open.
+
+The command adds `WorktreeCreate`, `WorktreeRemove`, and `PermissionRequest` hooks to `~/.claude/settings.json`. When `CLAUDE_CONFIG_DIR` is set, it uses `$CLAUDE_CONFIG_DIR/settings.json`. Use `--settings <path>` to edit a different file.
+
+The command keeps all other settings and their order. It copies the original file to `settings.json.treeman-backup-<time>` before it writes. A second run changes nothing. Use `--dry-run` to see the changes without a write.
+
+If the file has a different `WorktreeCreate` or `WorktreeRemove` hook, the command stops and shows that hook. Use `--replace` to replace it with the TreeMan hook. The `PermissionRequest` hook is added next to your other `PermissionRequest` hooks. It does not replace them.
+
+### Uninstall the Claude Code Hooks
+
+```bash
+treeman claude uninstall
+```
+
+The command removes only the TreeMan hooks. It keeps your other hooks and settings, and it keeps their order. It makes a backup before it writes, as `install` does. It accepts `--settings` and `--dry-run`. Restart the open Claude Code sessions after the command.
+
+### The Session Repository
+
+The create hook and the permission hook use the repository of the directory where the Claude Code session started. Claude Code gives this directory in `CLAUDE_PROJECT_DIR`. Thus, a `cd` during the session does not move worktree creation to a different repository. If `CLAUDE_PROJECT_DIR` is not set, TreeMan uses the `cwd` value from the hook input. The remove hook uses the repository of the worktree that it removes.
+
+### Enter TreeMan Worktrees
+
+Claude Code asks before a session enters a worktree outside `.claude/worktrees/`. All TreeMan worktrees are outside that directory. Without help, a background session waits at that question.
+
+The `treeman claude permission-request` hook approves an `EnterWorktree` call when both of these conditions are true:
+
+- The path is a linked worktree of the session repository. The main worktree is not approved.
+- The worktree is in the TreeMan worktree directory of the repository.
+
+For all other calls, the hook gives no answer, and Claude Code asks as usual. The hook never fails.
+
+### Worktree Names
+
+| Claude Code name | TreeMan result |
+| --- | --- |
+| `pr-<n>` | Worktree for PR or MR `<n>`, as `treeman review <n>` makes |
+| `auth-fix` | Branch `feature/auth-fix` |
+| `feature-auth-fix` | Branch `feature/auth-fix` |
+
+The worktree path follows the usual TreeMan rules, which include `worktree_dir`. For a bare repository, TreeMan never puts worktrees in the Git directory. It uses `.worktrees/` next to a `.git` file that points to the bare repository. Otherwise, it uses a `<name>-worktrees` directory next to the bare repository.
+
+### Create Behavior
+
+`treeman claude worktree-create` reads the hook input from Claude Code on stdin. It writes only the worktree path to stdout. It writes status and warnings to stderr.
+
+- When Claude Code asks for a name again, TreeMan returns the worktree that it made for that name.
+- When the branch exists without a worktree, TreeMan adds a worktree for that branch.
+- TreeMan never returns the main worktree. It never returns a worktree that it did not make for Claude Code. In these cases, the command fails with a message.
+- A new branch starts from the latest `origin/<default-branch>`. If the fetch fails, the branch starts from the local copy of `origin/<default-branch>`. If there is no `origin`, the branch starts from `HEAD`. TreeMan shows a warning in both cases.
+- TreeMan copies `.env*` files, installs dependencies, and sets up databases, as `treeman create` does.
+- Post-create hooks run only when a saved approval matches them. Otherwise, TreeMan skips them and shows a warning. To approve hooks, run `treeman setup --rerun-hooks` in a worktree of the repository.
+
+The command never asks a question. It turns off Git, SSH, and `gh` credential prompts. It keeps an SSH command that you configured.
+
+### Remove Behavior
+
+Claude Code can remove a worktree without a question to the user. Therefore, `treeman claude worktree-remove` is careful:
+
+- If TreeMan made the worktree for Claude Code, TreeMan removes it, also when it has changes.
+- TreeMan removes a different worktree only when it is clean. Otherwise, the command fails and keeps the worktree.
+- TreeMan deletes the branch only when TreeMan made the branch for Claude Code and the branch is merged into the default branch or into `HEAD` of the main worktree.
+- A squash merge or a rebase merge also counts. The branch counts as merged when it has changes and the default branch or `HEAD` already contains all of them. A branch with no changes, for example a branch with only empty commits, is kept unless its commits are in the default branch or `HEAD`. After criss-cross merges, when the branch and the default branch have more than one best common ancestor, TreeMan cannot tell what the branch changed, so it keeps the branch.
+- TreeMan keeps all other branches.
+
+TreeMan records the worktrees and branches that it makes for Claude Code in `<git-common-dir>/treeman/agent-worktrees.json`. `treeman delete` and `treeman clean` update this record. Thus, a new branch with the name of a deleted branch is never taken as a TreeMan branch.
+
+Claude Code does not remove subagent worktrees. Use `treeman clean` to remove them after their branches merge.
+
+> [!NOTE]
+> A branch that is deleted with `git branch -D` and made again is not a TreeMan branch. TreeMan compares the first entry in the branch reflog with its record. A bare repository has no branch reflogs by default. Therefore, `worktree-remove` keeps branches in bare repositories. Use `treeman clean` or `treeman delete` for them.
+
 ## Requirements
 
 Install TreeMan before you install the skill. Read [Install TreeMan](../installation.md).

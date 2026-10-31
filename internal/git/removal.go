@@ -118,6 +118,19 @@ type stagedWorktree struct {
 // renamed before identity and cleanliness are checked, so the checks apply to
 // the exact object that can later be unlinked.
 func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force bool) (RemoveWorktreeResult, error) {
+	return removeWorktree(mainRoot, path, branch, expectedSHA, force, false)
+}
+
+// RemoveWorktreeKeepingBranch removes one linked worktree exactly as
+// RemoveWorktreeAndBranch does -- same lock, staging, identity and cleanliness
+// checks -- but leaves its branch in place. A detached worktree is named with
+// an empty branch. expectedSHA, when given, still pins the branch tip, so a
+// caller that decided what to keep from one commit acts on that commit.
+func RemoveWorktreeKeepingBranch(mainRoot, path, branch, expectedSHA string, force bool) (RemoveWorktreeResult, error) {
+	return removeWorktree(mainRoot, path, branch, expectedSHA, force, true)
+}
+
+func removeWorktree(mainRoot, path, branch, expectedSHA string, force, keepBranch bool) (RemoveWorktreeResult, error) {
 	var result RemoveWorktreeResult
 	err := withWorktreeMutationLock(mainRoot, func() error {
 		commonDir, err := CommonDir(mainRoot)
@@ -139,7 +152,7 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 		}
 		result.CleanupError = errors.Join(retryTrashCleanup(trashRoot, jobs), unresolvedCaptureDiagnostic(jobs), reclaimOrphanedCleanupFiles(trashRoot))
 
-		entry, branchSHA, err := ValidateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA)
+		entry, branchSHA, err := validateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA, keepBranch)
 		if err != nil {
 			return candidateRefusal(err)
 		}
@@ -195,6 +208,10 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 			}
 		}
 
+		if keepBranch {
+			return nil
+		}
+
 		// Past this point the registration is gone, so every remaining failure
 		// leaves the branch behind rather than refusing the removal.
 		entries, err = worktreeListInDir(mainRoot)
@@ -236,6 +253,17 @@ func classifiedRemovalFailure(err error) error {
 // supply freshly read entries and call it under the repository mutation lock.
 // Directory identity and cleanliness are checked separately after staging.
 func ValidateWorktreeRemoval(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
+	return validateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA, false)
+}
+
+// ValidateWorktreeRemovalKeepingBranch is ValidateWorktreeRemoval for a
+// removal that leaves the branch in place. Such a removal may name a detached
+// worktree with an empty branch, which has no tip to resolve.
+func ValidateWorktreeRemovalKeepingBranch(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
+	return validateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA, true)
+}
+
+func validateWorktreeRemoval(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string, keepBranch bool) (WorktreeEntry, string, error) {
 	entry, err := registeredWorktreeAt(entries, path)
 	if err != nil {
 		return WorktreeEntry{}, "", err
@@ -253,6 +281,14 @@ func ValidateWorktreeRemoval(mainRoot string, entries []WorktreeEntry, path, bra
 			reason = ": " + entry.LockReason
 		}
 		return WorktreeEntry{}, "", fmt.Errorf("worktree %q is locked%s; run `git -C %q worktree unlock %q` first", entry.Path, reason, mainRoot, entry.Path)
+	}
+	if branch == "" {
+		// Only a removal that keeps the branch reaches here: there is no
+		// branch to resolve, pin, or find checked out elsewhere.
+		if !keepBranch {
+			return WorktreeEntry{}, "", fmt.Errorf("cannot remove worktree %q: it has no branch to delete", entry.Path)
+		}
+		return entry, "", nil
 	}
 	for _, other := range entries {
 		if other.Branch == branch && !sameRemovalPath(other.Path, entry.Path) {

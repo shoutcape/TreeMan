@@ -80,6 +80,7 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Branch databases | Docker PostgreSQL container |
 | Branch database ownership and pending cleanup | `<git-common-dir>/treeman/databases/` |
 | Setup serialization for one worktree | `<git-common-dir>/treeman/setup/` |
+| Worktrees and branches made for Claude Code | `<git-common-dir>/treeman/agent-worktrees.json` |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
 | Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |
 | Warm-start suggestion already offered | `$XDG_STATE_HOME/treeman/warm-start-prompts/` or `$HOME/.local/state/treeman/warm-start-prompts/` |
@@ -98,6 +99,25 @@ declines or the session ends. No marker is created for a noninteractive run,
 eligible candidate. If TreeMan cannot record the offer, it warns and does not
 prompt. Deleting these markers resets the corresponding one-time suggestions;
 it does not enable or disable configured reuse.
+
+## Claude Code Worktree State
+
+`treeman claude worktree-create` records each worktree that it makes in this file:
+
+```text
+<git-common-dir>/treeman/agent-worktrees.json
+<git-common-dir>/treeman/agent-worktrees.lock
+```
+
+Each record has the Claude Code worktree name, the branch, the worktree path, and the Claude Code session ID. It also tells if TreeMan made the branch, with the start commit and the time.
+
+`worktree-remove`, `delete`, and `clean` update the records:
+
+- When a branch is deleted, TreeMan removes all records for that branch.
+- When TreeMan removes a worktree and keeps the branch, the record stays without a worktree path. A new request for the same name adds a worktree for that branch again.
+- `worktree-create` removes records for branches that do not exist.
+
+TreeMan writes the file with mode `0600` and replaces it in one operation. A malformed file causes `worktree-create` and `worktree-remove` to fail.
 
 ## Hook Approval State
 

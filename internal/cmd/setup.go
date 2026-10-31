@@ -26,6 +26,11 @@ type creationSetupOptions struct {
 	skipDeps     bool
 	skipHooks    bool
 	trustHooks   bool
+	// savedApprovalOnly runs post-create hooks only when a saved approval
+	// matches them, and otherwise skips them with a warning. Agents create
+	// worktrees where no one can answer a prompt, and creation must not fail
+	// for want of consent. It is not a command-line flag.
+	savedApprovalOnly bool
 }
 
 // setupCreatedWorktree performs the setup every newly created worktree gets.
@@ -47,7 +52,7 @@ func setupCreatedWorktree(w io.Writer, render ui.Renderer, paths creationPaths, 
 		hooks:         paths.hooks,
 		options:       paths.options,
 		environment:   envReplace,
-		hooksSkipped:  "skipped (requested)",
+		hooksSkipped:  paths.hooksSkippedText(),
 	})
 }
 

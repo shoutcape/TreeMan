@@ -5,8 +5,10 @@ Use these terms with the specified meaning.
 | Term | Meaning |
 | --- | --- |
 | Agent Skill | Directory with instructions that extend an AI agent behavior |
+| bare repository | Git repository without a main worktree checkout, made by `git init --bare` or `git clone --bare` |
 | branch database | PostgreSQL database for one worktree branch |
 | branch slug | Branch name with `/` changed to `-` for a worktree path |
+| Claude Code hook | Command that Claude Code runs for an event, set in Claude Code `settings.json` |
 | default branch | Branch named by `refs/remotes/origin/HEAD`, or `main` or `master` found on `origin` |
 | formula | Ruby file that defines a Homebrew package |
 | global configuration | `config.toml` in the TreeMan user configuration directory |
@@ -15,6 +17,7 @@ Use these terms with the specified meaning.
 | main worktree | First worktree from `git worktree list --porcelain` |
 | post-create hook | Shell command that TreeMan runs after worktree creation |
 | project configuration | `.treeman.toml` found at or above the main worktree |
+| reflog | Git log of the changes to one reference, such as a branch |
 | remote branch | Branch returned by the GitHub or GitLab API |
 | shell integration | Managed Bash, Zsh, or Fish functions from `treeman shell install` |
 | slug suffix | Six hex characters computed from the full branch name, added to a branch slug that another branch uses |
