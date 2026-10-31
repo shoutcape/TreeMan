@@ -24,6 +24,7 @@ Shell integration uses that destination to change the current interactive shell 
 | `treeman preflight [--json]` | None | Report setup compatibility before creation |
 | `treeman theme` | None | Select a terminal color theme |
 | `treeman claude install` | None | Add TreeMan worktree hooks to Claude Code |
+| `treeman claude uninstall` | None | Remove TreeMan worktree hooks from Claude Code |
 | `treeman version` | None | Print build data |
 
 ## Run a Command in the Worktree
@@ -316,19 +317,23 @@ security boundary.
 
 ```text
 treeman claude install [--settings <path>] [--replace] [--dry-run]
+treeman claude uninstall [--settings <path>] [--dry-run]
 treeman claude worktree-create
 treeman claude worktree-remove
+treeman claude permission-request
 ```
 
-`install` adds `WorktreeCreate` and `WorktreeRemove` hooks to Claude Code user settings. The default file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when `CLAUDE_CONFIG_DIR` is set. The command keeps all other settings and their order, and it backs up the original file. A second run changes nothing. The command stops when the file has a different worktree hook, unless you use `--replace`. `--dry-run` shows the changes and writes nothing.
+`install` adds `WorktreeCreate`, `WorktreeRemove`, and `PermissionRequest` hooks to Claude Code user settings. The default file is `~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when `CLAUDE_CONFIG_DIR` is set. The command keeps all other settings and their order, and it backs up the original file. A second run changes nothing. The command stops when the file has a different worktree hook, unless you use `--replace`. The `PermissionRequest` hook is added next to other `PermissionRequest` hooks. `--dry-run` shows the changes and writes nothing.
 
-Claude Code runs `worktree-create` and `worktree-remove`. Each command reads hook input JSON on stdin. `worktree-create` writes only the worktree path to stdout. Neither command asks a question.
+`uninstall` removes only the TreeMan hooks. It keeps all other hooks and settings, and it backs up the original file.
+
+Claude Code runs `worktree-create`, `worktree-remove`, and `permission-request`. Each command reads hook input JSON on stdin. `worktree-create` and `permission-request` use the repository of `CLAUDE_PROJECT_DIR`. `worktree-remove` uses the repository of the worktree that it removes. `worktree-create` writes only the worktree path to stdout. `permission-request` approves `EnterWorktree` into a TreeMan worktree of that repository and gives no answer for other calls. No command asks a question.
 
 | Flag | Command | Purpose |
 | --- | --- | --- |
-| `--settings <path>` | `install` | Edit this settings file |
+| `--settings <path>` | `install`, `uninstall` | Edit this settings file |
 | `--replace` | `install` | Replace other `WorktreeCreate` and `WorktreeRemove` hooks |
-| `--dry-run` | `install` | Show the changes without a write |
+| `--dry-run` | `install`, `uninstall` | Show the changes without a write |
 
 Read [Claude Code worktrees](../integrations/agents.md#claude-code-worktrees) for names, ownership, and removal rules.
 

@@ -43,15 +43,19 @@ func newClaudeCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "claude",
 		Short: "Create Claude Code worktrees with TreeMan",
-		Long: `Integrate TreeMan with Claude Code's WorktreeCreate and WorktreeRemove hooks.
+		Long: `Integrate TreeMan with Claude Code's WorktreeCreate, WorktreeRemove, and
+PermissionRequest hooks.
 
 Run "treeman claude install" once to register the hooks in Claude Code's user
 settings. Claude Code then creates worktrees for --worktree, subagents, and
-background sessions with TreeMan's paths, branch naming, and setup.`,
+background sessions with TreeMan's paths, branch naming, and setup, and enters
+TreeMan worktrees without asking. "treeman claude uninstall" removes the hooks.`,
 	}
 	command.AddCommand(newClaudeWorktreeCreateCmd())
 	command.AddCommand(newClaudeWorktreeRemoveCmd())
+	command.AddCommand(newClaudePermissionRequestCmd())
 	command.AddCommand(newClaudeInstallCmd())
+	command.AddCommand(newClaudeUninstallCmd())
 	return command
 }
 
@@ -95,7 +99,8 @@ func newClaudeWorktreeRemoveCmd() *cobra.Command {
 A worktree TreeMan created for Claude Code is removed even with uncommitted
 changes; any other worktree is removed only when clean. The branch is deleted
 only when TreeMan created it for Claude Code and it is merged into the default
-branch or the main worktree's HEAD. Every other branch is kept.`,
+branch or the main worktree's HEAD, including by a squash or rebase merge.
+Every other branch is kept.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withClaudeHookOutput(cmd, func(io.Writer) error {
@@ -186,6 +191,20 @@ func preventPrompts() {
 	os.Setenv("GIT_SSH_COMMAND", sshCommand)
 }
 
+// claudeProjectDir is the directory a hook resolves its repository from:
+// CLAUDE_PROJECT_DIR, the directory the session started in, so a `cd` during
+// the session cannot point the hook at another repository. Without it, the
+// hook input's cwd is used, then the current directory.
+func claudeProjectDir(input claudeHookInput) string {
+	if dir := os.Getenv("CLAUDE_PROJECT_DIR"); dir != "" {
+		return dir
+	}
+	if input.Cwd != "" {
+		return input.Cwd
+	}
+	return "."
+}
+
 // claudeBranchName maps a Claude Code worktree name to a TreeMan branch.
 func claudeBranchName(name string) (string, error) {
 	slug := strings.TrimPrefix(name, "feature-")
@@ -270,11 +289,7 @@ func runClaudeWorktreeCreate(cmd *cobra.Command, input claudeHookInput) (string,
 	if input.Name == "" {
 		return "", fmt.Errorf("hook input has no worktree name")
 	}
-	dir := input.Cwd
-	if dir == "" {
-		dir = "."
-	}
-	repo, err := openClaudeRepository(dir, true)
+	repo, err := openClaudeRepository(claudeProjectDir(input), true)
 	if err != nil {
 		return "", err
 	}
@@ -621,9 +636,10 @@ func agentBranchOwned(record agentworktree.Record) bool {
 	return sha == record.CreatedSHA && born <= record.CreatedAt.Unix()
 }
 
-// agentBranchMerged reports whether tip is contained in the default branch,
-// local or on origin, or in the main worktree's HEAD. It reads only local
-// refs.
+// agentBranchMerged reports whether tip is merged into the default branch,
+// local or on origin, or into the main worktree's HEAD: either contained in
+// it, or merged by a squash or rebase so that merging it again would change
+// nothing. It reads only local refs.
 func agentBranchMerged(tip string) (bool, error) {
 	var targets []string
 	if branch, ok := git.LocalDefaultBranch(); ok {
@@ -643,6 +659,11 @@ func agentBranchMerged(tip string) (bool, error) {
 			return false, err
 		}
 		if merged {
+			return true, nil
+		}
+		// A failed content comparison, such as unrelated histories, only
+		// withholds the deletion: the branch is kept.
+		if same, err := git.ChangesMerged(sha, tip); err == nil && same {
 			return true, nil
 		}
 	}

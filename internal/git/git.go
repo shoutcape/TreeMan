@@ -941,6 +941,60 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	return commitIsAncestor(ancestor, descendant)
 }
 
+// ChangesMerged reports whether target already has every change tip makes:
+// tip changes something since it left target, and merging it into target
+// would leave target's files unchanged. That is true of a branch merged by a
+// squash or a rebase, whose commits target never contains.
+//
+// A tip that changes nothing, such as one with only empty commits, reports
+// false: there are no changes to find in target, so nothing shows it was
+// merged. A merge with conflicts adds something by definition, so it reports
+// false too. So does a history with more than one best common ancestor, as
+// after criss-cross merges: no single base shows what tip changed, and a
+// wrong one can hide work tip still holds.
+func ChangesMerged(target, tip string) (bool, error) {
+	bases, err := run("merge-base", "--all", target, tip)
+	if err != nil {
+		return false, fmt.Errorf("could not find where %q left %q: %w", tip, target, err)
+	}
+	baseList := strings.Fields(bases)
+	if len(baseList) != 1 {
+		return false, nil
+	}
+	base := baseList[0]
+	trees, err := run("rev-parse", base+"^{tree}", tip+"^{tree}", target+"^{tree}")
+	if err != nil {
+		return false, fmt.Errorf("could not read trees of %q and %q: %w", tip, target, err)
+	}
+	fields := strings.Fields(trees)
+	if len(fields) != 3 {
+		return false, fmt.Errorf("unexpected trees %q for %q and %q", trees, tip, target)
+	}
+	baseTree, tipTree, targetTree := fields[0], fields[1], fields[2]
+	if baseTree == tipTree {
+		return false, nil
+	}
+	// With a single best common ancestor, merge-tree picks the same base.
+	// Leaving --merge-base out keeps this working on Git 2.38 and 2.39.
+	cmd := exec.Command("git", "merge-tree", "--write-tree", "--no-messages", target, tip)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return false, nil
+		}
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return false, fmt.Errorf("could not merge %q into %q: %s", tip, target, msg)
+		}
+		return false, fmt.Errorf("could not merge %q into %q: %w", tip, target, err)
+	}
+	// With --no-messages and no conflicts, the first line is the merged tree.
+	mergedTree, _, _ := strings.Cut(strings.TrimSpace(stdout.String()), "\n")
+	return mergedTree == targetTree, nil
+}
+
 // BranchBirth describes the oldest entry in a local branch's reflog: the
 // commit the branch was created at and when. ok is false when the branch has
 // no reflog, which is the default in bare repositories.

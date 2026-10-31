@@ -45,6 +45,40 @@ func assertTreemanHooksInstalled(t *testing.T, settings []byte) {
 	assert.Equal(t, installedHook{Type: "command", Command: "treeman claude worktree-remove", Timeout: 60}, remove[0])
 }
 
+type installedGroup struct {
+	Matcher string          `json:"matcher"`
+	Hooks   []installedHook `json:"hooks"`
+}
+
+// hookGroups returns the matcher groups registered for event, in file order.
+func hookGroups(t *testing.T, settings []byte, event string) []installedGroup {
+	t.Helper()
+	var doc struct {
+		Hooks map[string][]installedGroup `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal(settings, &doc), "settings must stay valid JSON: %s", settings)
+	return doc.Hooks[event]
+}
+
+func isTreemanPermissionGroup(group installedGroup) bool {
+	return group.Matcher == "EnterWorktree" && len(group.Hooks) == 1 &&
+		group.Hooks[0].Type == "command" && group.Hooks[0].Command == "treeman claude permission-request"
+}
+
+// assertTreemanPermissionGroup requires exactly one TreeMan PermissionRequest
+// group, matched to EnterWorktree.
+func assertTreemanPermissionGroup(t *testing.T, settings []byte) {
+	t.Helper()
+	count := 0
+	for _, group := range hookGroups(t, settings, "PermissionRequest") {
+		if isTreemanPermissionGroup(group) {
+			count++
+			assert.Positive(t, group.Hooks[0].Timeout, "the hook has a timeout")
+		}
+	}
+	assert.Equal(t, 1, count, "exactly one TreeMan PermissionRequest group for EnterWorktree: %s", settings)
+}
+
 // topLevelKeys returns an object's keys in file order.
 func topLevelKeys(t *testing.T, data []byte) []string {
 	t.Helper()
@@ -77,8 +111,9 @@ func TestInstallClaudeHooksAddsBothEntriesToEmptySettings(t *testing.T) {
 	updated, changes, conflicts, err := installClaudeHooks([]byte("{}"), false)
 	require.NoError(t, err)
 	assert.Empty(t, conflicts)
-	assert.Len(t, changes, 2)
+	assert.Len(t, changes, 3, "WorktreeCreate, WorktreeRemove, and PermissionRequest are added")
 	assertTreemanHooksInstalled(t, updated)
+	assertTreemanPermissionGroup(t, updated)
 }
 
 func TestInstallClaudeHooksPreservesOtherSettingsAndOrder(t *testing.T) {
@@ -151,8 +186,9 @@ func TestInstallClaudeHooksReplacesForeignWorktreeHooksWithReplace(t *testing.T)
 	updated, changes, conflicts, err := installClaudeHooks(original, true)
 	require.NoError(t, err)
 	assert.Empty(t, conflicts)
-	assert.Len(t, changes, 2)
+	assert.Len(t, changes, 3, "two replacements and the added PermissionRequest group")
 	assertTreemanHooksInstalled(t, updated)
+	assertTreemanPermissionGroup(t, updated)
 	assert.NotContains(t, string(updated), "old-create")
 	assert.NotContains(t, string(updated), "old-remove")
 	assert.Contains(t, string(updated), `"Stop"`)

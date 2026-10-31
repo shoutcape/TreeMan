@@ -64,7 +64,7 @@ func isolateClaudeHookEnv(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
 	t.Setenv("GIT_COMMITTER_NAME", "TreeMan Test")
 	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
-	for _, key := range []string{"GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "GCM_INTERACTIVE", "GIT_SSH_COMMAND", "TREEMAN_CD_FILE"} {
+	for _, key := range []string{"GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "GCM_INTERACTIVE", "GIT_SSH_COMMAND", "TREEMAN_CD_FILE", "CLAUDE_PROJECT_DIR"} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
 	}
