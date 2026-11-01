@@ -24,17 +24,17 @@ type branchSources struct {
 }
 
 // githubBranchSources is what the picker runs against a real repository.
-func githubBranchSources() branchSources {
+func githubBranchSources(repo git.Repo) branchSources {
 	return branchSources{
-		localBranches: git.LocalBranchNames,
-		defaultBranch: branchPickerDefaultBranch,
+		localBranches: repo.LocalBranchNames,
+		defaultBranch: func() (string, error) { return branchPickerDefaultBranch(repo) },
 		branchPRs:     forge.StreamGitHubBranchPRs,
 	}
 }
 
 // pickGitHubBranch opens the picker before the branch list exists and feeds it
 // rows as they are enriched with their open PR.
-func pickGitHubBranch(cmd *cobra.Command, repoSlug, query string) (branchSelection, error) {
+func pickGitHubBranch(cmd *cobra.Command, repo git.Repo, repoSlug, query string) (branchSelection, error) {
 	if !canInteract(cmd) {
 		return branchSelection{}, fmt.Errorf("interactive selection is unavailable; pass an exact branch name")
 	}
@@ -46,7 +46,7 @@ func pickGitHubBranch(cmd *cobra.Command, repoSlug, query string) (branchSelecti
 	}
 
 	render := commandRenderer(cmd)
-	stream, err := newBranchStream(render, githubBranchSources())
+	stream, err := newBranchStream(render, githubBranchSources(repo))
 	if err != nil {
 		return branchSelection{}, err
 	}

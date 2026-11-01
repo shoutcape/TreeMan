@@ -40,7 +40,11 @@ func newCleanCmd() *cobra.Command {
 }
 
 func runClean(cmd *cobra.Command, dryRun, skipConfirm bool) error {
-	return runCleanWithClassifier(cmd, merge.NewClassifier(), dryRun, skipConfirm)
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return err
+	}
+	return runCleanWithClassifier(cmd, repo, merge.NewClassifier(repo), dryRun, skipConfirm)
 }
 
 type cleanCandidate struct {
@@ -61,9 +65,9 @@ type cleanResult struct {
 	cleanupStarted bool
 }
 
-func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
+func runCleanWithClassifier(cmd *cobra.Command, repo git.Repo, classifier merge.ClassifierFunc, dryRun, skipConfirm bool) error {
 	render := commandRenderer(cmd)
-	entries, err := git.WorktreeList()
+	entries, err := repo.WorktreeList()
 	if err != nil {
 		return err
 	}
@@ -81,11 +85,11 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	var defaultBranch string
 	preview := cleanSelection{}
 	if len(cleanEntries) > 0 {
-		defaultBranch, err = git.DetectDefaultBranch()
+		defaultBranch, err = repo.DetectDefaultBranch()
 		if err != nil {
 			return err
 		}
-		preview, err = classifyCleanCandidates(classifier, defaultBranch, cleanEntries)
+		preview, err = classifyCleanCandidates(repo, classifier, defaultBranch, cleanEntries)
 		if err != nil {
 			return err
 		}
@@ -102,7 +106,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	candidates := preview.candidates
 
 	// Remove the current worktree last so its process working directory remains valid.
-	currentRoot, err := git.CurrentWorktreeRoot()
+	currentRoot, err := repo.CurrentWorktreeRoot()
 	if err != nil {
 		return err
 	}
@@ -176,7 +180,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 		}
 	}
 	if len(candidates) > 0 {
-		revalidated, err := revalidateCleanCandidates(classifier, defaultBranch, mainRoot, candidates)
+		revalidated, err := revalidateCleanCandidates(repo, classifier, defaultBranch, candidates)
 		if err != nil {
 			return err
 		}
@@ -195,7 +199,7 @@ func runCleanWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc,
 	for _, candidate := range candidates {
 		// Candidates are verified merges: ancestors of the freshly fetched
 		// default branch or forge-confirmed squash/rebase merges.
-		cleanupOutcome, err := deleteVerifiedWorktree(cmd, candidate.entry.Path, candidate.entry.Branch, mainRoot, candidate.verifiedSHA, cleanupBatch)
+		cleanupOutcome, err := deleteVerifiedWorktree(cmd, candidate.entry.Path, candidate.entry.Branch, repo, candidate.verifiedSHA, cleanupBatch)
 		if refusedRemoval(err) {
 			// Nothing was removed for this candidate, so the remaining ones are
 			// still safe to process. Abandoning them would leave a batch at the
@@ -328,8 +332,9 @@ func renderCleanDatabaseStatus(render ui.Renderer, outcome databaseCleanupOutcom
 // revalidateCleanCandidates returns only unchanged preview candidates. A fresh
 // classification can remove authorization, but must never add a candidate or
 // replace the SHA shown to the user.
-func revalidateCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, mainRoot string, preview []cleanCandidate) (cleanSelection, error) {
-	entries, err := git.WorktreeList()
+func revalidateCleanCandidates(repo git.Repo, classifier merge.ClassifierFunc, defaultBranch string, preview []cleanCandidate) (cleanSelection, error) {
+	mainRoot := repo.MainRoot()
+	entries, err := repo.WorktreeList()
 	if err != nil {
 		return cleanSelection{}, err
 	}
@@ -356,7 +361,7 @@ func revalidateCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, m
 			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "dirty"))
 			continue
 		}
-		sha, err := git.BranchSHA(entry.Branch)
+		sha, err := repo.BranchSHA(entry.Branch)
 		if err != nil {
 			selection.diagnostics = append(selection.diagnostics, cleanOmittedDiagnostic(candidate, "no longer eligible"))
 			continue
@@ -372,7 +377,7 @@ func revalidateCleanCandidates(classifier merge.ClassifierFunc, defaultBranch, m
 		return selection, nil
 	}
 
-	classified, err := classifyCleanCandidates(classifier, defaultBranch, cleanCandidateEntries(eligible))
+	classified, err := classifyCleanCandidates(repo, classifier, defaultBranch, cleanCandidateEntries(eligible))
 	if err != nil {
 		return cleanSelection{}, err
 	}
@@ -446,7 +451,7 @@ func lockedDiagnostic(branch, reason string) merge.Diagnostic {
 	return merge.Diagnostic{Operation: fmt.Sprintf("skipping %q: locked", branch)}
 }
 
-func classifyCleanCandidates(classifier merge.ClassifierFunc, defaultBranch string, entries []git.WorktreeEntry) (cleanSelection, error) {
+func classifyCleanCandidates(repo git.Repo, classifier merge.ClassifierFunc, defaultBranch string, entries []git.WorktreeEntry) (cleanSelection, error) {
 	cleanEntries := make([]git.WorktreeEntry, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Branch != defaultBranch {
@@ -464,7 +469,7 @@ func classifyCleanCandidates(classifier merge.ClassifierFunc, defaultBranch stri
 	if err != nil {
 		return cleanSelection{}, err
 	}
-	if err := validateCleanCandidates(branches, result.Cleanable); err != nil {
+	if err := validateCleanCandidates(repo, branches, result.Cleanable); err != nil {
 		return cleanSelection{}, err
 	}
 	cleanable := make(map[string]merge.Candidate, len(result.Cleanable))
@@ -483,7 +488,7 @@ func classifyCleanCandidates(classifier merge.ClassifierFunc, defaultBranch stri
 
 // validateCleanCandidates ensures a classifier result cannot authorize deletion
 // without identifying the exact requested branch tip.
-func validateCleanCandidates(branches []string, candidates []merge.Candidate) error {
+func validateCleanCandidates(repo git.Repo, branches []string, candidates []merge.Candidate) error {
 	requested := make(map[string]struct{}, len(branches))
 	for _, branch := range branches {
 		requested[branch] = struct{}{}
@@ -493,7 +498,7 @@ func validateCleanCandidates(branches []string, candidates []merge.Candidate) er
 	for index, candidate := range candidates {
 		branchesToValidate[index] = candidate.Branch
 	}
-	tips, err := git.BranchSHAs(branchesToValidate)
+	tips, err := repo.BranchSHAs(branchesToValidate)
 	if err != nil {
 		return fmt.Errorf("could not resolve classifier branch tips: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -166,7 +165,7 @@ func withClaudeHookOutput(cmd *cobra.Command, fn func(stdout io.Writer) error) e
 // GIT_SSH names a program that Git runs in place of ssh, and GIT_SSH_COMMAND
 // would override it, so a user's GIT_SSH is left as it is. Only an OpenSSH
 // command is given BatchMode, because other programs do not take -o.
-func preventPrompts() {
+func preventPrompts(repo git.Repo) {
 	os.Setenv("GIT_TERMINAL_PROMPT", "0")
 	os.Setenv("GH_PROMPT_DISABLED", "1")
 	os.Setenv("GCM_INTERACTIVE", "never")
@@ -177,9 +176,7 @@ func preventPrompts() {
 	}
 	sshCommand := os.Getenv("GIT_SSH_COMMAND")
 	if sshCommand == "" {
-		if out, err := exec.Command("git", "config", "--get", "core.sshCommand").Output(); err == nil {
-			sshCommand = strings.TrimSpace(string(out))
-		}
+		sshCommand, _ = repo.ConfigValue("core.sshCommand")
 	}
 	if sshCommand == "" {
 		sshCommand = "ssh"
@@ -220,8 +217,7 @@ func claudeBranchName(name string) (string, error) {
 
 // claudeRepository is the repository a hook runs against.
 type claudeRepository struct {
-	mainRoot  string
-	commonDir string
+	git git.Repo
 	// parentDir overrides the configured worktree directory for bare
 	// repositories, whose default would be inside the Git directory.
 	parentDir string
@@ -229,23 +225,19 @@ type claudeRepository struct {
 }
 
 func openClaudeRepository(dir string, forCreation bool) (claudeRepository, error) {
-	if err := os.Chdir(dir); err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		return claudeRepository{}, fmt.Errorf("cannot enter %q: %w", dir, err)
 	}
-	if !git.IsInsideRepo() {
+	opened, err := git.Open(dir)
+	if errors.Is(err, git.ErrNotRepository) {
 		return claudeRepository{}, fmt.Errorf("%q is not inside a git repository", dir)
 	}
-	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
 		return claudeRepository{}, err
 	}
-	commonDir, err := git.CommonDir("")
-	if err != nil {
-		return claudeRepository{}, err
-	}
-	repo := claudeRepository{mainRoot: mainRoot, commonDir: commonDir, store: agentworktree.Open(commonDir)}
-	if forCreation && samePath(mainRoot, commonDir) {
-		repo.parentDir, err = bareWorktreeParent(mainRoot, commonDir)
+	repo := claudeRepository{git: opened, store: agentworktree.Open(opened.CommonDir())}
+	if forCreation && samePath(opened.MainRoot(), opened.CommonDir()) {
+		repo.parentDir, err = bareWorktreeParent(opened)
 		if err != nil {
 			return claudeRepository{}, err
 		}
@@ -258,8 +250,9 @@ func openClaudeRepository(dir string, forCreation bool) (claudeRepository, error
 // repository kept as `project/.bare` next to a `project/.git` file gets
 // `project/.worktrees`; any other gets a sibling `<name>-worktrees` directory
 // of its own.
-func bareWorktreeParent(mainRoot, commonDir string) (string, error) {
-	project, err := loadProjectPaths(mainRoot)
+func bareWorktreeParent(repo git.Repo) (string, error) {
+	commonDir := repo.CommonDir()
+	project, err := loadProjectPaths(repo)
 	if err != nil {
 		return "", err
 	}
@@ -293,7 +286,7 @@ func runClaudeWorktreeCreate(cmd *cobra.Command, input claudeHookInput) (string,
 	if err != nil {
 		return "", err
 	}
-	preventPrompts()
+	preventPrompts(repo.git)
 
 	if err := repo.dropRecordsForMissingBranches(); err != nil {
 		return "", err
@@ -327,7 +320,7 @@ func runClaudeWorktreeCreate(cmd *cobra.Command, input claudeHookInput) (string,
 		// A PR worktree removed earlier keeps its branch and a record of
 		// it. TreeMan review refuses an existing branch, so re-attach it.
 		if hasRecord && record.WorktreePath == "" {
-			if gone, err := git.BranchMissing(repo.mainRoot, record.Branch); err != nil {
+			if gone, err := repo.git.BranchMissing(record.Branch); err != nil {
 				return "", err
 			} else if !gone {
 				fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("re-attaching the local branch %s as it was; it may be behind the PR head, so pull it to update", record.Branch)))
@@ -337,7 +330,7 @@ func runClaudeWorktreeCreate(cmd *cobra.Command, input claudeHookInput) (string,
 		return repo.createReview(cmd, input, prMatch[1], options)
 	}
 
-	entries, err := git.WorktreeList()
+	entries, err := repo.git.WorktreeList()
 	if err != nil {
 		return "", err
 	}
@@ -345,13 +338,13 @@ func runClaudeWorktreeCreate(cmd *cobra.Command, input claudeHookInput) (string,
 		if entry.Branch != branch {
 			continue
 		}
-		if samePath(entry.Path, repo.mainRoot) {
+		if samePath(entry.Path, repo.git.MainRoot()) {
 			return "", fmt.Errorf("branch %q is checked out in the main worktree; pick another name", branch)
 		}
 		return "", fmt.Errorf("branch %q is already checked out at %q, which TreeMan did not create for this Claude Code worktree name; pick another name", branch, entry.Path)
 	}
 
-	if !git.BranchExists(branch) {
+	if !repo.git.BranchExists(branch) {
 		return repo.createBranch(cmd, input, branch, options)
 	}
 	owner := agentworktree.Record{}
@@ -384,7 +377,7 @@ func (repo claudeRepository) createBranch(cmd *cobra.Command, input claudeHookIn
 func (repo claudeRepository) attachBranch(cmd *cobra.Command, input claudeHookInput, branch string, owner agentworktree.Record, options creationSetupOptions) (string, error) {
 	return repo.provision(cmd, existingBranch(branch), options, func(git.CreatedWorktree) agentworktree.Record {
 		next := agentworktree.Record{Agent: claudeAgent, Name: input.Name, Branch: branch, CreatedAt: time.Now().UTC(), SessionID: input.SessionID}
-		if owner.Branch == branch && agentBranchOwned(owner) {
+		if owner.Branch == branch && agentBranchOwned(repo.git, owner) {
 			next.BranchCreated = true
 			next.CreatedSHA = owner.CreatedSHA
 			next.CreatedAt = owner.CreatedAt
@@ -414,7 +407,7 @@ func findClaudeRecord(records []agentworktree.Record, name, branch string) (agen
 // createReview checks out a PR or MR the way `treeman review` does. The
 // branch belongs to the PR, not to TreeMan, so only the worktree is recorded.
 func (repo claudeRepository) createReview(cmd *cobra.Command, input claudeHookInput, number string, options creationSetupOptions) (string, error) {
-	selected, err := selectReviewForWorktree(cmd, number)
+	selected, err := selectReviewForWorktree(cmd, repo.git, number)
 	if err != nil {
 		return "", err
 	}
@@ -432,7 +425,7 @@ func (repo claudeRepository) createReview(cmd *cobra.Command, input claudeHookIn
 // provision provisions a worktree for source in the repository.
 func (repo claudeRepository) provision(cmd *cobra.Command, source worktreeSource, options creationSetupOptions, record func(git.CreatedWorktree) agentworktree.Record) (string, error) {
 	return repo.provisionAndRecord(cmd, provisionRequest{
-		mainRoot:  repo.mainRoot,
+		repo:      repo.git,
 		parentDir: repo.parentDir,
 		source:    source,
 		options:   options,
@@ -473,21 +466,21 @@ func (repo claudeRepository) provisionAndRecord(cmd *cobra.Command, req provisio
 // on disk. A registration whose directory is gone is pruned so the name can
 // be created again.
 func (repo claudeRepository) reusableWorktree(record agentworktree.Record) (string, bool, error) {
-	entries, err := git.WorktreeList()
+	entries, err := repo.git.WorktreeList()
 	if err != nil {
 		return "", false, err
 	}
 	entry, err := worktreeEntryAt(entries, record.WorktreePath)
-	if err != nil || entry.Branch != record.Branch || samePath(entry.Path, repo.mainRoot) {
+	if err != nil || entry.Branch != record.Branch || samePath(entry.Path, repo.git.MainRoot()) {
 		return "", false, nil
 	}
 	if git.WorktreeDirectoryMissing(entry.Path) {
-		if err := git.PruneWorktrees(); err != nil {
+		if err := repo.git.PruneWorktrees(); err != nil {
 			return "", false, err
 		}
 		return "", false, nil
 	}
-	if err := git.EnsureHoldsWorktree(repo.mainRoot, entry.Path); err != nil {
+	if err := repo.git.EnsureHoldsWorktree(entry.Path); err != nil {
 		return "", false, nil
 	}
 	if !claudeWorktreeMarked(entry.Path, record.Name) {
@@ -542,7 +535,7 @@ func (repo claudeRepository) dropRecordsForMissingBranches() error {
 	// A branch that cannot be checked is kept: dropping a live record would
 	// disown a worktree TreeMan created.
 	missing := func(branch string) (bool, error) {
-		return git.BranchMissing(repo.mainRoot, branch)
+		return repo.git.BranchMissing(branch)
 	}
 	stale := false
 	for _, record := range records {
@@ -578,11 +571,11 @@ func (repo claudeRepository) dropRecordsForMissingBranches() error {
 // name starts a new reflog, so its oldest entry is not the creation TreeMan
 // recorded. A branch with no reflog -- the default in bare repositories --
 // cannot be told apart, and is not claimed.
-func agentBranchOwned(record agentworktree.Record) bool {
+func agentBranchOwned(repo git.Repo, record agentworktree.Record) bool {
 	if !record.BranchCreated || record.CreatedSHA == "" {
 		return false
 	}
-	sha, born, ok, err := git.BranchBirth(record.Branch)
+	sha, born, ok, err := repo.BranchBirth(record.Branch)
 	if err != nil || !ok {
 		return false
 	}
@@ -593,21 +586,21 @@ func agentBranchOwned(record agentworktree.Record) bool {
 // local or on origin, or into the main worktree's HEAD: either contained in
 // it, or merged by a squash or rebase so that merging it again would change
 // nothing. It reads only local refs.
-func agentBranchMerged(tip string) (bool, error) {
+func agentBranchMerged(repo git.Repo, tip string) (bool, error) {
 	var targets []string
-	if branch, ok := git.LocalDefaultBranch(); ok {
+	if branch, ok := repo.LocalDefaultBranch(); ok {
 		targets = append(targets, "refs/remotes/origin/"+branch, "refs/heads/"+branch)
 	}
 	targets = append(targets, "HEAD")
 	for _, target := range targets {
-		sha, ok, err := git.ResolveCommit(target)
+		sha, ok, err := repo.ResolveCommit(target)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
 			continue
 		}
-		merged, err := git.IsAncestor(tip, sha)
+		merged, err := repo.IsAncestor(tip, sha)
 		if err != nil {
 			return false, err
 		}
@@ -616,7 +609,7 @@ func agentBranchMerged(tip string) (bool, error) {
 		}
 		// A failed content comparison, such as unrelated histories, only
 		// withholds the deletion: the branch is kept.
-		if same, err := git.ChangesMerged(sha, tip); err == nil && same {
+		if same, err := repo.ChangesMerged(sha, tip); err == nil && same {
 			return true, nil
 		}
 	}
@@ -638,16 +631,17 @@ func runClaudeWorktreeRemove(cmd *cobra.Command, input claudeHookInput) error {
 	}
 	// Work from the main worktree: the worktree being removed is moved away
 	// while Git still has to run.
-	if err := os.Chdir(repo.mainRoot); err != nil {
-		return fmt.Errorf("cannot enter %q: %w", repo.mainRoot, err)
-	}
-	preventPrompts()
-
-	entry, err := findWorktree(input.WorktreePath)
+	repo.git, err = git.Open(repo.git.MainRoot())
 	if err != nil {
 		return err
 	}
-	if samePath(entry.Path, repo.mainRoot) {
+	preventPrompts(repo.git)
+
+	entry, err := findWorktree(repo.git, input.WorktreePath)
+	if err != nil {
+		return err
+	}
+	if samePath(entry.Path, repo.git.MainRoot()) {
 		return fmt.Errorf("refusing to remove the main worktree %q", entry.Path)
 	}
 	records, err := repo.store.List()
@@ -665,14 +659,14 @@ func runClaudeWorktreeRemove(cmd *cobra.Command, input claudeHookInput) error {
 	case entry.Branch == "":
 	case !recorded:
 		kept = "TreeMan did not create this worktree for Claude Code"
-	case !agentBranchOwned(record):
+	case !agentBranchOwned(repo.git, record):
 		kept = "TreeMan did not create this branch"
 	default:
-		tip, err = git.BranchSHA(entry.Branch)
+		tip, err = repo.git.BranchSHA(entry.Branch)
 		if err != nil {
 			return err
 		}
-		merged, err := agentBranchMerged(tip)
+		merged, err := agentBranchMerged(repo.git, tip)
 		if err != nil {
 			return err
 		}
@@ -680,10 +674,10 @@ func runClaudeWorktreeRemove(cmd *cobra.Command, input claudeHookInput) error {
 		// remote for it is network work this hook should not wait on. The
 		// main worktree's branch is the local answer planDeletion falls back
 		// to as well.
-		defaultBranch, known := git.LocalDefaultBranch()
+		defaultBranch, known := repo.git.LocalDefaultBranch()
 		if !known {
-			if entries, err := git.WorktreeList(); err == nil {
-				defaultBranch, known = mainWorktreeBranch(entries, repo.mainRoot)
+			if entries, err := repo.git.WorktreeList(); err == nil {
+				defaultBranch, known = mainWorktreeBranch(entries, repo.git.MainRoot())
 			}
 		}
 		switch {
@@ -698,14 +692,14 @@ func runClaudeWorktreeRemove(cmd *cobra.Command, input claudeHookInput) error {
 		}
 	}
 
-	plan, err := planDeletion(entry.Path, entry.Branch, repo.mainRoot, guards, tip)
+	plan, err := planDeletion(entry.Path, entry.Branch, repo.git, guards, tip)
 	if err != nil && !guards.keepBranch && recorded {
 		// Deleting the branch is the optional half. Remove the worktree and
 		// keep the branch rather than fail a removal Claude Code asked for.
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not delete branch %s: %s", entry.Branch, strings.SplitN(err.Error(), "\n", 2)[0])))
 		kept = "it could not be deleted"
 		guards = deletionGuards{force: true, keepBranch: true}
-		plan, err = planDeletion(entry.Path, entry.Branch, repo.mainRoot, guards, tip)
+		plan, err = planDeletion(entry.Path, entry.Branch, repo.git, guards, tip)
 	}
 	if err != nil {
 		if !recorded {

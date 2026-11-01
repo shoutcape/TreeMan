@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/spf13/cobra"
 
 	"github.com/shoutcape/treeman/internal/terminal"
@@ -21,7 +20,7 @@ import (
 // planDeletion and printDeleteConfirmation directly.
 func deleteForTest(t *testing.T, cmd *cobra.Command, dest, branch, mainRoot string, force bool) error {
 	t.Helper()
-	plan, err := planDeletion(dest, branch, mainRoot, deletionGuards{force: force}, "")
+	plan, err := planDeletion(dest, branch, openRepoForTest(t, mainRoot), deletionGuards{force: force}, "")
 	if err != nil {
 		return err
 	}
@@ -32,7 +31,7 @@ func deleteForTest(t *testing.T, cmd *cobra.Command, dest, branch, mainRoot stri
 // batch, the way `clean` gives it a shared one.
 func deleteVerifiedWorktreeForTest(t *testing.T, cmd *cobra.Command, dest, branch, mainRoot, expectedSHA string) error {
 	t.Helper()
-	_, err := deleteVerifiedWorktree(cmd, dest, branch, mainRoot, expectedSHA, newCleanupBatch())
+	_, err := deleteVerifiedWorktree(cmd, dest, branch, openRepoForTest(t, mainRoot), expectedSHA, newCleanupBatch())
 	return err
 }
 
@@ -201,10 +200,10 @@ func TestDeleteFallsBackToTheMainWorktreeBranchWithoutOrigin(t *testing.T) {
 func TestResolveDefaultBranchFallsBackToTheMainWorktree(t *testing.T) {
 	repo, _ := createTestWorktree(t, "feature/resolve")
 	chdirForTest(t, repo)
-	entries, err := git.WorktreeList()
+	entries, err := currentRepoForTest(t).WorktreeList()
 	require.NoError(t, err)
 
-	branch, err := resolveDefaultBranch(entries, repo)
+	branch, err := resolveDefaultBranch(openRepoForTest(t, repo), entries)
 	require.NoError(t, err)
 	assert.Equal(t, "main", branch)
 
@@ -213,7 +212,7 @@ func TestResolveDefaultBranchFallsBackToTheMainWorktree(t *testing.T) {
 	gitTest(t, repo, "update-ref", "-d", "refs/remotes/origin/HEAD")
 	gitTest(t, repo, "remote", "rename", "origin", "upstream")
 
-	branch, err = resolveDefaultBranch(entries, repo)
+	branch, err = resolveDefaultBranch(openRepoForTest(t, repo), entries)
 	require.NoError(t, err)
 	assert.Equal(t, "main", branch)
 }
@@ -227,7 +226,7 @@ func TestDeleteConfirmationReportsCommitsThatExistNowhereElse(t *testing.T) {
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "one")
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "two")
 
-	plan, err := planDeletion(worktree, "feature/counted", repo, deletionGuards{force: true}, "")
+	plan, err := planDeletion(worktree, "feature/counted", openRepoForTest(t, repo), deletionGuards{force: true}, "")
 	require.NoError(t, err)
 
 	var stderr bytes.Buffer
@@ -245,7 +244,7 @@ func TestDeleteConfirmationStaysQuietWhenNothingIsLost(t *testing.T) {
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "one")
 	gitTest(t, worktree, "push", "-u", "origin", "feature/pushed")
 
-	plan, err := planDeletion(worktree, "feature/pushed", repo, deletionGuards{}, "")
+	plan, err := planDeletion(worktree, "feature/pushed", openRepoForTest(t, repo), deletionGuards{}, "")
 	require.NoError(t, err)
 
 	var stderr bytes.Buffer
@@ -264,7 +263,7 @@ func TestDeleteConfirmationNamesDiscardedChanges(t *testing.T) {
 	gitTest(t, worktree, "push", "-u", "origin", "feature/forced-dirty")
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch.txt"), []byte("unsaved"), 0o644))
 
-	plan, err := planDeletion(worktree, "feature/forced-dirty", repo, deletionGuards{force: true}, "")
+	plan, err := planDeletion(worktree, "feature/forced-dirty", openRepoForTest(t, repo), deletionGuards{force: true}, "")
 	require.NoError(t, err)
 
 	var stderr bytes.Buffer
@@ -282,7 +281,7 @@ func TestPlanRefusesAnUnresolvableDefaultBranchBeforeAnyPrompt(t *testing.T) {
 	gitTest(t, repo, "remote", "remove", "origin")
 	gitTest(t, repo, "checkout", "--detach")
 
-	_, err := planDeletion(worktree, "feature/lonely", repo, deletionGuards{}, "")
+	_, err := planDeletion(worktree, "feature/lonely", openRepoForTest(t, repo), deletionGuards{}, "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "default branch could not be detected")
@@ -296,7 +295,7 @@ func TestReplanRefusesABranchThatMovedWhileThePromptWasOpen(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/moved-at-prompt")
 	chdirForTest(t, repo)
 	gitTest(t, worktree, "push", "-u", "origin", "feature/moved-at-prompt")
-	plan, err := planDeletion(worktree, "feature/moved-at-prompt", repo, deletionGuards{}, "")
+	plan, err := planDeletion(worktree, "feature/moved-at-prompt", openRepoForTest(t, repo), deletionGuards{}, "")
 	require.NoError(t, err)
 
 	gitTest(t, worktree, "commit", "--allow-empty", "-m", "committed while the prompt waited")

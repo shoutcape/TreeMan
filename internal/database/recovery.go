@@ -18,6 +18,8 @@ func (b *CleanupBatch) RetryPending(mainRoot string) ([]string, error) {
 	}
 	var pending []DatabaseRecord
 	var errs []error
+	// Opened only once a record needs a branch check.
+	var repo *git.Repo
 	for _, record := range records {
 		if record.Status == databaseStatusPendingCleanup {
 			pending = append(pending, record)
@@ -31,7 +33,15 @@ func (b *CleanupBatch) RetryPending(mainRoot string) ([]string, error) {
 		if !missing {
 			continue
 		}
-		branchMissing, err := git.BranchMissing(mainRoot, record.Branch)
+		if repo == nil {
+			opened, err := git.Open(mainRoot)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			repo = &opened
+		}
+		branchMissing, err := repo.BranchMissing(record.Branch)
 		if err != nil {
 			errs = append(errs, err)
 			continue

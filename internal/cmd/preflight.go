@@ -1,13 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/shoutcape/treeman/internal/config"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/deps"
 	"github.com/shoutcape/treeman/internal/envfile"
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/worktree"
 	"github.com/spf13/cobra"
@@ -35,15 +35,14 @@ func newPreflightCmd() *cobra.Command {
 }
 
 func runPreflight(cmd *cobra.Command, jsonOutput bool) error {
-	if !git.IsInsideRepo() {
-		err := fmt.Errorf("not inside a git repository")
+	repo, err := openCurrentRepo()
+	if errors.Is(err, errNotInRepository) {
 		return writePreflightSetupFailure(cmd, jsonOutput, "repository", err)
 	}
-
-	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
 		return writePreflightSetupFailure(cmd, jsonOutput, "worktree", err)
 	}
+	mainRoot := repo.MainRoot()
 	configResult := config.Load(mainRoot)
 	var worktreeDir string
 	if configResult.Warning == "" {

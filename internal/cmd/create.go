@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/shoutcape/treeman/internal/validate"
 	"github.com/spf13/cobra"
@@ -50,20 +49,15 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 	}
 
 	// Must be inside a git repo.
-	if !git.IsInsideRepo() {
-		return fmt.Errorf("not inside a git repository")
-	}
-
-	// Main worktree root.
-	mainRoot, err := git.MainWorktreeRoot()
+	repo, err := openCurrentRepo()
 	if err != nil {
 		return err
 	}
 
 	provisioned, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: mainRoot,
-		source:   newBranchFromDefault(branch, fetchStrict),
-		options:  setupOptions,
+		repo:    repo,
+		source:  newBranchFromDefault(branch, fetchStrict),
+		options: setupOptions,
 	})
 	if err != nil {
 		return err

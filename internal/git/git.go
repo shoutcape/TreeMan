@@ -41,26 +41,36 @@ type CreatedWorktree struct {
 	SHA    string
 }
 
-// run executes git with the given arguments, returning trimmed stdout.
+// run executes git in the repository's directory, returning trimmed stdout.
 // stderr is discarded unless the command fails, in which case it is included
 // in the returned error.
-func run(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
-		}
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-	}
-	return strings.TrimSpace(stdout.String()), nil
+func (r Repo) run(args ...string) (string, error) {
+	return runInDir(r.dir, args...)
 }
 
-// runInDir is like run but sets the working directory.
+// command prepares git to run in the repository's directory. For the zero
+// Repo the command fails to start, since an empty directory would silently
+// mean the process's current one.
+func (r Repo) command(args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.dir
+	if r.dir == "" {
+		cmd.Err = fmt.Errorf("git %s: no directory given", strings.Join(args, " "))
+	}
+	return cmd
+}
+
+// ConfigValue returns the value of a Git configuration key as the repository
+// sees it, and false when the key is unset or cannot be read.
+func (r Repo) ConfigValue(key string) (string, bool) {
+	value, err := r.run("config", "--get", key)
+	if err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+// runInDir executes git in dir, returning trimmed stdout.
 func runInDir(dir string, args ...string) (string, error) {
 	stdout, err := runInDirRaw(dir, args...)
 	if err != nil {
@@ -70,6 +80,10 @@ func runInDir(dir string, args ...string) (string, error) {
 }
 
 func runInDirRaw(dir string, args ...string) ([]byte, error) {
+	// An empty directory would silently mean the process's current one.
+	if dir == "" {
+		return nil, fmt.Errorf("git %s: no directory given", strings.Join(args, " "))
+	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
@@ -104,17 +118,10 @@ func IgnoredPaths(dir string) (map[string]struct{}, error) {
 	return paths, nil
 }
 
-// IsInsideRepo reports whether the current working directory is inside a git
-// repository.
-func IsInsideRepo() bool {
-	_, err := run("rev-parse", "--git-dir")
-	return err == nil
-}
-
-// MainWorktreeRoot returns the absolute path of the main (first) worktree.
-// This works correctly even when called from inside a linked worktree.
-func MainWorktreeRoot() (string, error) {
-	out, err := run("worktree", "list", "--porcelain")
+// mainWorktreeRoot returns the absolute path of the main (first) worktree.
+// This works correctly even when dir is inside a linked worktree.
+func mainWorktreeRoot(dir string) (string, error) {
+	out, err := runInDir(dir, "worktree", "list", "--porcelain")
 	if err != nil {
 		return "", fmt.Errorf("could not list worktrees: %w", err)
 	}
@@ -128,9 +135,9 @@ func MainWorktreeRoot() (string, error) {
 }
 
 // CurrentWorktreeRoot returns the root of the worktree that contains the
-// current directory.
-func CurrentWorktreeRoot() (string, error) {
-	root, err := run("rev-parse", "--show-toplevel")
+// repository's directory.
+func (r Repo) CurrentWorktreeRoot() (string, error) {
+	root, err := r.run("rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("could not determine current worktree root: %w", err)
 	}
@@ -140,14 +147,14 @@ func CurrentWorktreeRoot() (string, error) {
 // DetectDefaultBranch returns the branch named by origin/HEAD. It prefers the
 // fast path (local origin/HEAD ref) and falls back to querying origin for main
 // or master when that ref is unavailable.
-func DetectDefaultBranch() (string, error) {
+func (r Repo) DetectDefaultBranch() (string, error) {
 	// Fast path: read local symbolic-ref for origin/HEAD.
-	if branch, ok := LocalDefaultBranch(); ok {
+	if branch, ok := r.LocalDefaultBranch(); ok {
 		return branch, nil
 	}
 
 	// Slow path: ask origin directly.
-	refs, err := run("ls-remote", "--heads", "origin", "main", "master")
+	refs, err := r.run("ls-remote", "--heads", "origin", "main", "master")
 	if err != nil {
 		return "", fmt.Errorf("could not detect default branch: %w", err)
 	}
@@ -167,8 +174,8 @@ func DetectDefaultBranch() (string, error) {
 // fetch creates it too, so this answers in almost every repository. Callers
 // that must not stall -- anything decorating a prompt -- use this rather than
 // DetectDefaultBranch, whose fallback asks the remote.
-func LocalDefaultBranch() (string, bool) {
-	originHead, err := run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+func (r Repo) LocalDefaultBranch() (string, bool) {
+	originHead, err := r.run("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
 	if err != nil {
 		return "", false
 	}
@@ -177,14 +184,21 @@ func LocalDefaultBranch() (string, bool) {
 }
 
 // BranchExists reports whether a local branch with the given name exists.
-func BranchExists(branch string) bool {
-	_, err := run("show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+func (r Repo) BranchExists(branch string) bool {
+	_, err := r.run("show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil
 }
 
 // BranchMissing reports whether the exact local branch ref is absent. Unlike
 // BranchExists, operational failures are returned so callers can fail closed.
-func BranchMissing(dir, branch string) (bool, error) {
+func (r Repo) BranchMissing(branch string) (bool, error) {
+	return branchMissing(r.dir, branch)
+}
+
+func branchMissing(dir, branch string) (bool, error) {
+	if dir == "" {
+		return false, fmt.Errorf("could not check branch %q: no directory given", branch)
+	}
 	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
@@ -196,12 +210,12 @@ func BranchMissing(dir, branch string) (bool, error) {
 	return false, nil
 }
 
-// HasCommits reports whether HEAD in dir resolves to a commit. An initialised
+// HasCommits reports whether HEAD resolves to a commit. An initialised
 // repository that has none can still be cloned, but there is nothing in it to
 // check out or branch from.
-func HasCommits(dir string) (bool, error) {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
-	cmd.Dir = dir
+func (r Repo) HasCommits() (bool, error) {
+	dir := r.dir
+	cmd := r.command("rev-parse", "--verify", "--quiet", "HEAD^{commit}")
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
@@ -213,8 +227,8 @@ func HasCommits(dir string) (bool, error) {
 }
 
 // BranchSHA returns the commit SHA at the tip of the given local branch.
-func BranchSHA(branch string) (string, error) {
-	sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+func (r Repo) BranchSHA(branch string) (string, error) {
+	sha, err := r.run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("could not resolve branch %q: %w", branch, err)
 	}
@@ -223,7 +237,7 @@ func BranchSHA(branch string) (string, error) {
 
 // BranchSHAs returns local tips for the requested branches in one Git process.
 // Branches absent from the result no longer resolve to local commits.
-func BranchSHAs(branches []string) (map[string]string, error) {
+func (r Repo) BranchSHAs(branches []string) (map[string]string, error) {
 	if len(branches) == 0 {
 		return map[string]string{}, nil
 	}
@@ -231,7 +245,7 @@ func BranchSHAs(branches []string) (map[string]string, error) {
 	for _, branch := range branches {
 		args = append(args, "refs/heads/"+branch)
 	}
-	out, err := run(args...)
+	out, err := r.run(args...)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve local branch tips: %w", err)
 	}
@@ -247,8 +261,8 @@ func BranchSHAs(branches []string) (map[string]string, error) {
 
 // RemoteTrackingBranchSHA returns the locally stored origin/<branch> commit
 // SHA. exists is false when no tracking ref has been fetched yet.
-func RemoteTrackingBranchSHA(branch string) (sha string, exists bool, err error) {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch+"^{commit}")
+func (r Repo) RemoteTrackingBranchSHA(branch string) (sha string, exists bool, err error) {
+	cmd := r.command("rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch+"^{commit}")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -266,14 +280,14 @@ func RemoteTrackingBranchSHA(branch string) (sha string, exists bool, err error)
 }
 
 // RemoteBranchExists reports whether origin has a branch with the exact name.
-func RemoteBranchExists(branch string) bool {
-	_, err := run("ls-remote", "--exit-code", "--heads", "origin", branch)
+func (r Repo) RemoteBranchExists(branch string) bool {
+	_, err := r.run("ls-remote", "--exit-code", "--heads", "origin", branch)
 	return err == nil
 }
 
 // Fetch runs `git fetch origin <refspec>`.
-func Fetch(refspec string) error {
-	_, err := run("fetch", "origin", refspec)
+func (r Repo) Fetch(refspec string) error {
+	_, err := r.run("fetch", "origin", refspec)
 	return err
 }
 
@@ -281,13 +295,13 @@ var fetchRefSequence atomic.Uint64
 
 // FetchCommit fetches a ref through a unique temporary ref and returns its
 // immutable commit SHA without relying on process-global FETCH_HEAD state.
-func FetchCommit(refspec string) (string, error) {
+func (r Repo) FetchCommit(refspec string) (string, error) {
 	temporaryRef := fmt.Sprintf("refs/treeman/fetch/%d-%d", os.Getpid(), fetchRefSequence.Add(1))
-	if _, err := run("fetch", "--no-write-fetch-head", "origin", "+"+refspec+":"+temporaryRef); err != nil {
+	if _, err := r.run("fetch", "--no-write-fetch-head", "origin", "+"+refspec+":"+temporaryRef); err != nil {
 		return "", err
 	}
-	sha, resolveErr := run("rev-parse", "--verify", temporaryRef+"^{commit}")
-	_, cleanupErr := run("update-ref", "-d", temporaryRef)
+	sha, resolveErr := r.run("rev-parse", "--verify", temporaryRef+"^{commit}")
+	_, cleanupErr := r.run("update-ref", "-d", temporaryRef)
 	if resolveErr != nil {
 		resolveErr = fmt.Errorf("could not resolve fetched ref %q: %w", refspec, resolveErr)
 	}
@@ -328,7 +342,7 @@ func CheckOutHead(dir string) error {
 // that populated the worktree itself can see how much of that output the
 // project does not ignore.
 func DiscardWorktreeChanges(path string) ([]string, error) {
-	removed, err := UntrackedPaths(path)
+	removed, err := untrackedPaths(path)
 	if err != nil {
 		return nil, err
 	}
@@ -341,10 +355,10 @@ func DiscardWorktreeChanges(path string) ([]string, error) {
 	return removed, nil
 }
 
-// UntrackedPaths returns the paths in dir that Git neither tracks nor ignores,
+// untrackedPaths returns the paths in dir that Git neither tracks nor ignores,
 // relative to dir. A wholly untracked directory collapses to one path, the
 // same way the clean that removes it treats the subtree.
-func UntrackedPaths(dir string) ([]string, error) {
+func untrackedPaths(dir string) ([]string, error) {
 	output, err := runInDirRaw(dir, "ls-files", "--others", "--exclude-standard", "--directory", "-z")
 	if err != nil {
 		return nil, fmt.Errorf("could not list untracked paths in %q: %w", dir, err)
@@ -360,21 +374,10 @@ func UntrackedPaths(dir string) ([]string, error) {
 }
 
 // FetchRemoteBranch fetches an origin branch into its remote-tracking ref.
-func FetchRemoteBranch(branch string) error {
+func (r Repo) FetchRemoteBranch(branch string) error {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
-	_, err := run("fetch", "origin", refspec)
+	_, err := r.run("fetch", "origin", refspec)
 	return err
-}
-
-// WorktreeAdd creates a new branch and linked worktree.
-func WorktreeAdd(path, branch, startPoint string) error {
-	_, err := CreateWorktree(path, branch, startPoint)
-	return err
-}
-
-// CreateWorktree creates a branch and linked worktree as one owned resource.
-func CreateWorktree(path, branch, startPoint string) (CreatedWorktree, error) {
-	return createWorktree("", path, branch, startPoint)
 }
 
 // WorktreePlan chooses the destination of a new worktree from the worktrees
@@ -390,14 +393,14 @@ type WorktreePlan func(existing []WorktreeEntry) (string, error)
 // destination in between, and the second process would either fail late or
 // take a directory the first is populating. Running the plan under the lock
 // makes selection and creation one decision.
-func CreatePlannedWorktree(plan WorktreePlan, branch, startPoint string) (CreatedWorktree, error) {
-	return createPlannedWorktree("", plan, branch, startPoint)
+func (r Repo) CreatePlannedWorktree(plan WorktreePlan, branch, startPoint string) (CreatedWorktree, error) {
+	return createPlannedWorktree(r.dir, plan, branch, startPoint)
 }
 
 // WorktreeList returns the list of all worktrees, parsed from
 // `git worktree list --porcelain`.
-func WorktreeList() ([]WorktreeEntry, error) {
-	return worktreeListInDir("")
+func (r Repo) WorktreeList() ([]WorktreeEntry, error) {
+	return worktreeListInDir(r.dir)
 }
 
 func worktreeListInDir(dir string) ([]WorktreeEntry, error) {
@@ -411,7 +414,7 @@ func worktreeListInDir(dir string) ([]WorktreeEntry, error) {
 // RemoteHeads queries origin for the given branch names in a single ls-remote
 // call and returns their branch name -> commit SHA snapshot. Branches absent
 // from the map do not exist on origin at the time of the query.
-func RemoteHeads(branches []string) (map[string]string, error) {
+func (r Repo) RemoteHeads(branches []string) (map[string]string, error) {
 	if len(branches) == 0 {
 		return map[string]string{}, nil
 	}
@@ -419,7 +422,7 @@ func RemoteHeads(branches []string) (map[string]string, error) {
 	for _, b := range branches {
 		args = append(args, "refs/heads/"+b)
 	}
-	out, err := run(args...)
+	out, err := r.run(args...)
 	if err != nil {
 		return nil, fmt.Errorf("could not query remote branches: %w", err)
 	}
@@ -439,8 +442,8 @@ func RemoteHeads(branches []string) (map[string]string, error) {
 
 // MergedBranches returns the observed SHA for local branches that are
 // ancestors of target.
-func MergedBranches(target string) (map[string]string, error) {
-	out, err := run("branch", "--merged", target, "--format=%(refname:short)%09%(objectname)")
+func (r Repo) MergedBranches(target string) (map[string]string, error) {
+	out, err := r.run("branch", "--merged", target, "--format=%(refname:short)%09%(objectname)")
 	if err != nil {
 		return nil, fmt.Errorf("could not list branches merged into %q: %w", target, err)
 	}
@@ -487,13 +490,13 @@ func parseWorktreePorcelain(out string) []WorktreeEntry {
 	return entries
 }
 
-// SetUpstreamInDir sets the upstream tracking branch for the given local branch
-// to origin/<branch>. dir must be the worktree directory so git resolves
-// the correct branch.
+// SetUpstream sets the upstream tracking branch for the given local branch to
+// origin/<branch>. worktreePath must be the worktree that checks out branch so
+// git resolves the correct branch.
 //
 //	git branch --set-upstream-to=origin/<branch> <branch>
-func SetUpstreamInDir(dir, branch string) error {
-	_, err := runInDir(dir, "branch", "--set-upstream-to=origin/"+branch, branch)
+func SetUpstream(worktreePath, branch string) error {
+	_, err := runInDir(worktreePath, "branch", "--set-upstream-to=origin/"+branch, branch)
 	if err != nil {
 		return fmt.Errorf("could not set upstream for %q: %w", branch, err)
 	}
@@ -555,9 +558,9 @@ func InspectWorktrees(entries []WorktreeEntry) ([]InspectedWorktree, error) {
 }
 
 // AnyCommitIsAncestor reports whether any ancestor is reachable from
-// descendant in the current repository. It streams the descendant history and
+// descendant in the repository. It streams the descendant history and
 // stops at the first matching commit.
-func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
+func (r Repo) AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
 	if len(ancestors) == 0 {
 		return false, nil
 	}
@@ -566,7 +569,7 @@ func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
 		wanted[ancestor] = struct{}{}
 	}
 
-	cmd := exec.Command("git", "rev-list", descendant)
+	cmd := r.command("rev-list", descendant)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return false, fmt.Errorf("could not read history for %q: %w", descendant, err)
@@ -612,12 +615,12 @@ func AnyCommitIsAncestor(ancestors []string, descendant string) (bool, error) {
 // repository that cannot name one locally is tolerated instead of refused:
 // --ignore-missing drops the unreadable half and the remaining count is the
 // conservative answer.
-func UnpushedCommitCount(dir, branch, defaultBranch string) (int, error) {
+func (r Repo) UnpushedCommitCount(branch, defaultBranch string) (int, error) {
 	args := []string{"rev-list", "--count", "--ignore-missing", branch, "--not", "--remotes"}
 	if defaultBranch != "" {
 		args = append(args, defaultBranch)
 	}
-	out, err := runInDir(dir, args...)
+	out, err := r.run(args...)
 	if err != nil {
 		return 0, fmt.Errorf("could not count unpushed commits on %q: %w", branch, err)
 	}
@@ -631,8 +634,10 @@ func UnpushedCommitCount(dir, branch, defaultBranch string) (int, error) {
 // RemoveCreatedWorktree removes a worktree and its unchanged branch while
 // holding the repository mutation lock for the complete operation. It is
 // idempotent: a worktree or branch that is already gone leaves nothing to do
-// rather than failing.
-func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
+// rather than failing. Git runs from the main worktree, which the removed
+// worktree can never be.
+func (r Repo) RemoveCreatedWorktree(created CreatedWorktree) error {
+	dir := r.mainRoot
 	return withWorktreeMutationLock(dir, func() error {
 		var errs []error
 		entries, err := worktreeListInDir(dir)
@@ -672,7 +677,7 @@ func RemoveCreatedWorktree(dir string, created CreatedWorktree) error {
 		// A caller may be cleaning up after an operation that already removed
 		// the branch. There is nothing left to compare-and-delete, so the
 		// absent ref is the state being asked for, not a failure.
-		missing, err := BranchMissing(dir, created.Branch)
+		missing, err := branchMissing(dir, created.Branch)
 		if err != nil {
 			return errors.Join(append(errs, err)...)
 		}
@@ -709,7 +714,8 @@ func withWorktreeMutationLock(dir string, operation func() error) error {
 	return operation()
 }
 
-// CommonDir returns the absolute Git common directory shared by all worktrees.
+// CommonDir returns the absolute Git common directory shared by all worktrees
+// of the repository that contains dir.
 func CommonDir(dir string) (string, error) {
 	commonDir, err := runInDir(dir, "rev-parse", "--git-common-dir")
 	if err != nil {
@@ -718,14 +724,7 @@ func CommonDir(dir string) (string, error) {
 	if filepath.IsAbs(commonDir) {
 		return filepath.Clean(commonDir), nil
 	}
-	base := dir
-	if base == "" {
-		base, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("could not determine current directory: %w", err)
-		}
-	}
-	absolute, err := filepath.Abs(filepath.Join(base, commonDir))
+	absolute, err := filepath.Abs(filepath.Join(dir, commonDir))
 	if err != nil {
 		return "", fmt.Errorf("could not normalize Git common directory: %w", err)
 	}
@@ -767,11 +766,11 @@ func WorktreeID(dir string) (string, error) {
 // If the environment variable _TREEMAN_REMOTE_URL is set it is returned
 // directly without querying git. This lets the smoke test inject a fake URL
 // against a local bare repository.
-func OriginRemoteURL() (string, error) {
+func (r Repo) OriginRemoteURL() (string, error) {
 	if override := os.Getenv("_TREEMAN_REMOTE_URL"); override != "" {
 		return override, nil
 	}
-	url, err := run("remote", "get-url", "origin")
+	url, err := r.run("remote", "get-url", "origin")
 	if err != nil {
 		return "", fmt.Errorf("could not read origin remote URL")
 	}
@@ -780,8 +779,8 @@ func OriginRemoteURL() (string, error) {
 
 // FindWorktreeForBranch returns the worktree path for a given branch, or an
 // empty string if no worktree is checked out for that branch.
-func FindWorktreeForBranch(branch string) (string, error) {
-	entries, err := WorktreeList()
+func (r Repo) FindWorktreeForBranch(branch string) (string, error) {
+	entries, err := r.WorktreeList()
 	if err != nil {
 		return "", err
 	}
@@ -791,27 +790,6 @@ func FindWorktreeForBranch(branch string) (string, error) {
 		}
 	}
 	return "", nil
-}
-
-// WorktreeAddExisting creates a local branch and linked worktree from an
-// existing remote branch.
-func WorktreeAddExisting(path, branch string) error {
-	_, err := CreateWorktreeFromRemote(path, branch)
-	return err
-}
-
-// CreateWorktreeFromRemote creates a worktree from origin/branch.
-func CreateWorktreeFromRemote(path, branch string) (CreatedWorktree, error) {
-	return createWorktree("", path, branch, "origin/"+branch)
-}
-
-func worktreeAdd(dir, path, branch, startPoint string) error {
-	_, err := createWorktree(dir, path, branch, startPoint)
-	return err
-}
-
-func createWorktree(dir, path, branch, startPoint string) (CreatedWorktree, error) {
-	return createPlannedWorktree(dir, func([]WorktreeEntry) (string, error) { return path, nil }, branch, startPoint)
 }
 
 func createPlannedWorktree(dir string, plan WorktreePlan, branch, startPoint string) (CreatedWorktree, error) {
@@ -858,10 +836,10 @@ func createPlannedWorktree(dir string, plan WorktreePlan, branch, startPoint str
 // a new linked worktree, selecting the destination under the same lock
 // CreatePlannedWorktree uses. The branch is not created, so a failure removes
 // only the worktree it registered and never the branch.
-func CreatePlannedWorktreeForExistingBranch(plan WorktreePlan, branch string) (CreatedWorktree, error) {
+func (r Repo) CreatePlannedWorktreeForExistingBranch(plan WorktreePlan, branch string) (CreatedWorktree, error) {
 	var created CreatedWorktree
-	err := withWorktreeMutationLock("", func() error {
-		existing, err := worktreeListInDir("")
+	err := withWorktreeMutationLock(r.dir, func() error {
+		existing, err := worktreeListInDir(r.dir)
 		if err != nil {
 			return err
 		}
@@ -874,23 +852,23 @@ func CreatePlannedWorktreeForExistingBranch(plan WorktreePlan, branch string) (C
 		if err != nil {
 			return err
 		}
-		sha, err := run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+		sha, err := r.run("rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
 		if err != nil {
 			return fmt.Errorf("could not resolve branch %q: %w", branch, err)
 		}
 
-		cmd := exec.Command("git", "worktree", "add", path, branch)
+		cmd := r.command("worktree", "add", path, branch)
 		cmd.Env = append(cmd.Environ(), "HUSKY=0")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
 			var rollbackErr error
-			if entries, listErr := worktreeListInDir(""); listErr != nil {
+			if entries, listErr := worktreeListInDir(r.dir); listErr != nil {
 				rollbackErr = listErr
 			} else {
 				for _, entry := range entries {
 					if sameRemovalPath(entry.Path, path) && entry.Branch == branch {
-						if _, removeErr := run("worktree", "remove", "--force", path); removeErr != nil {
+						if _, removeErr := r.run("worktree", "remove", "--force", path); removeErr != nil {
 							rollbackErr = fmt.Errorf("rolling back worktree %q: %w", path, removeErr)
 						}
 						break
@@ -910,15 +888,15 @@ func CreatePlannedWorktreeForExistingBranch(plan WorktreePlan, branch string) (C
 }
 
 // PruneWorktrees removes registrations whose directories are gone.
-func PruneWorktrees() error {
-	_, err := run("worktree", "prune")
+func (r Repo) PruneWorktrees() error {
+	_, err := r.run("worktree", "prune")
 	return err
 }
 
 // ResolveCommit returns the commit a revision names, and false when it names
 // none. Operational failures are errors, so a caller can fail closed.
-func ResolveCommit(rev string) (string, bool, error) {
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
+func (r Repo) ResolveCommit(rev string) (string, bool, error) {
+	cmd := r.command("rev-parse", "--verify", "--quiet", rev+"^{commit}")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -937,8 +915,8 @@ func ResolveCommit(rev string) (string, bool, error) {
 
 // IsAncestor reports whether ancestor is reachable from descendant. A commit
 // counts as its own ancestor.
-func IsAncestor(ancestor, descendant string) (bool, error) {
-	return commitIsAncestor(ancestor, descendant)
+func (r Repo) IsAncestor(ancestor, descendant string) (bool, error) {
+	return commitIsAncestor(r.dir, ancestor, descendant)
 }
 
 // ChangesMerged reports whether target already has every change tip makes:
@@ -952,8 +930,8 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 // false too. So does a history with more than one best common ancestor, as
 // after criss-cross merges: no single base shows what tip changed, and a
 // wrong one can hide work tip still holds.
-func ChangesMerged(target, tip string) (bool, error) {
-	bases, err := run("merge-base", "--all", target, tip)
+func (r Repo) ChangesMerged(target, tip string) (bool, error) {
+	bases, err := r.run("merge-base", "--all", target, tip)
 	if err != nil {
 		return false, fmt.Errorf("could not find where %q left %q: %w", tip, target, err)
 	}
@@ -962,7 +940,7 @@ func ChangesMerged(target, tip string) (bool, error) {
 		return false, nil
 	}
 	base := baseList[0]
-	trees, err := run("rev-parse", base+"^{tree}", tip+"^{tree}", target+"^{tree}")
+	trees, err := r.run("rev-parse", base+"^{tree}", tip+"^{tree}", target+"^{tree}")
 	if err != nil {
 		return false, fmt.Errorf("could not read trees of %q and %q: %w", tip, target, err)
 	}
@@ -976,7 +954,7 @@ func ChangesMerged(target, tip string) (bool, error) {
 	}
 	// With a single best common ancestor, merge-tree picks the same base.
 	// Leaving --merge-base out keeps this working on Git 2.38 and 2.39.
-	cmd := exec.Command("git", "merge-tree", "--write-tree", "--no-messages", target, tip)
+	cmd := r.command("merge-tree", "--write-tree", "--no-messages", target, tip)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -998,10 +976,10 @@ func ChangesMerged(target, tip string) (bool, error) {
 // BranchBirth describes the oldest entry in a local branch's reflog: the
 // commit the branch was created at and when. ok is false when the branch has
 // no reflog, which is the default in bare repositories.
-func BranchBirth(branch string) (sha string, unixTime int64, ok bool, err error) {
-	out, err := run("reflog", "show", "--date=unix", "--format=%H %gd", "refs/heads/"+branch, "--")
+func (r Repo) BranchBirth(branch string) (sha string, unixTime int64, ok bool, err error) {
+	out, err := r.run("reflog", "show", "--date=unix", "--format=%H %gd", "refs/heads/"+branch, "--")
 	if err != nil {
-		if BranchExists(branch) {
+		if r.BranchExists(branch) {
 			// A branch without a reflog makes `git reflog show` fail on
 			// some Git versions; that is an absent history, not an error.
 			return "", 0, false, nil
@@ -1063,8 +1041,8 @@ func rollbackWorktreeCreation(dir, path, branch, sha string) error {
 // LocalBranchNames returns the name of every local branch. Unlike BranchSHAs
 // it needs no candidate list, so a caller that is still streaming remote
 // branches can filter them without knowing the full set up front.
-func LocalBranchNames() (map[string]struct{}, error) {
-	out, err := run("for-each-ref", "--format=%(refname:short)", "refs/heads/")
+func (r Repo) LocalBranchNames() (map[string]struct{}, error) {
+	out, err := r.run("for-each-ref", "--format=%(refname:short)", "refs/heads/")
 	if err != nil {
 		return nil, fmt.Errorf("could not list local branches: %w", err)
 	}
@@ -1087,7 +1065,11 @@ func LocalBranchNames() (map[string]struct{}, error) {
 // Heads absent from the local object store are skipped rather than fetched.
 // Missing history is not evidence of a merge, so skipping can only withhold
 // cleanup, never authorize it.
-func CommitIsAncestorOfAny(commit string, heads []string) (bool, error) {
+func (r Repo) CommitIsAncestorOfAny(commit string, heads []string) (bool, error) {
+	// The zero Repo would otherwise skip every head and answer false.
+	if r.dir == "" {
+		return false, fmt.Errorf("could not compare %q: no repository given", commit)
+	}
 	if commit == "" || len(heads) == 0 {
 		return false, nil
 	}
@@ -1095,10 +1077,10 @@ func CommitIsAncestorOfAny(commit string, heads []string) (bool, error) {
 		if head == "" || head == commit {
 			continue
 		}
-		if !commitExists(head) {
+		if !commitExists(r.dir, head) {
 			continue
 		}
-		contained, err := commitIsAncestor(commit, head)
+		contained, err := commitIsAncestor(r.dir, commit, head)
 		if err != nil {
 			return false, err
 		}
@@ -1110,15 +1092,25 @@ func CommitIsAncestorOfAny(commit string, heads []string) (bool, error) {
 }
 
 // commitExists reports whether the object is present locally and is a commit.
-func commitExists(commit string) bool {
-	return exec.Command("git", "cat-file", "-e", commit+"^{commit}").Run() == nil
+func commitExists(dir, commit string) bool {
+	if dir == "" {
+		return false
+	}
+	cmd := exec.Command("git", "cat-file", "-e", commit+"^{commit}")
+	cmd.Dir = dir
+	return cmd.Run() == nil
 }
 
 // commitIsAncestor reports whether ancestor is reachable from descendant.
 // `git merge-base --is-ancestor` reports the answer through its exit status,
 // so exit code 1 is a negative result and every other failure is an error.
-func commitIsAncestor(ancestor, descendant string) (bool, error) {
+func commitIsAncestor(dir, ancestor, descendant string) (bool, error) {
+	// An empty directory would silently mean the process's current one.
+	if dir == "" {
+		return false, fmt.Errorf("could not compare %q with %q: no directory given", ancestor, descendant)
+	}
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = dir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()

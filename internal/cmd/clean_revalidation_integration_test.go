@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,10 +16,10 @@ func TestCleanRevalidationReportsDirtyPreviewCandidate(t *testing.T) {
 	candidate := previewCleanCandidate(t, repo, worktree)
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "dirty"), []byte("keep\n"), 0o644))
 
-	selection, err := revalidateCleanCandidates(merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+	selection, err := revalidateCleanCandidates(openRepoForTest(t, repo), merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
 		t.Fatal("dirty preview candidate must not be classified")
 		return merge.Result{}, nil
-	}), "main", repo, []cleanCandidate{candidate})
+	}), "main", []cleanCandidate{candidate})
 
 	require.NoError(t, err)
 	assert.Empty(t, selection.candidates)
@@ -34,10 +33,10 @@ func TestCleanRevalidationReportsChangedPreviewTip(t *testing.T) {
 	gitTest(t, repo, "commit", "--allow-empty", "-m", "move feature")
 	gitTest(t, repo, "update-ref", "refs/heads/feature", "refs/heads/main")
 
-	selection, err := revalidateCleanCandidates(merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+	selection, err := revalidateCleanCandidates(openRepoForTest(t, repo), merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
 		t.Fatal("changed preview candidate must not be classified")
 		return merge.Result{}, nil
-	}), "main", repo, []cleanCandidate{candidate})
+	}), "main", []cleanCandidate{candidate})
 
 	require.NoError(t, err)
 	assert.Empty(t, selection.candidates)
@@ -50,10 +49,10 @@ func TestCleanRevalidationReportsIneligiblePreviewCandidate(t *testing.T) {
 	candidate := previewCleanCandidate(t, repo, worktree)
 	runGitInDir(t, repo, "worktree", "remove", worktree)
 
-	selection, err := revalidateCleanCandidates(merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+	selection, err := revalidateCleanCandidates(openRepoForTest(t, repo), merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
 		t.Fatal("ineligible preview candidate must not be classified")
 		return merge.Result{}, nil
-	}), "main", repo, []cleanCandidate{candidate})
+	}), "main", []cleanCandidate{candidate})
 
 	require.NoError(t, err)
 	assert.Empty(t, selection.candidates)
@@ -66,10 +65,10 @@ func TestCleanRevalidationSilentlySkipsStalePreviewCandidate(t *testing.T) {
 	candidate := previewCleanCandidate(t, repo, worktree)
 	require.NoError(t, os.RemoveAll(worktree))
 
-	selection, err := revalidateCleanCandidates(merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+	selection, err := revalidateCleanCandidates(openRepoForTest(t, repo), merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
 		t.Fatal("stale preview candidate must not be classified")
 		return merge.Result{}, nil
-	}), "main", repo, []cleanCandidate{candidate})
+	}), "main", []cleanCandidate{candidate})
 
 	require.NoError(t, err)
 	assert.Empty(t, selection.candidates)
@@ -81,7 +80,7 @@ func TestCleanCandidateDiscoveryExcludesStaleWorktree(t *testing.T) {
 	changeToDir(t, repo)
 	require.NoError(t, os.RemoveAll(worktree))
 
-	entries, err := git.WorktreeList()
+	entries, err := openRepoForTest(t, repo).WorktreeList()
 	require.NoError(t, err)
 	cleanEntries, diagnostics, err := cleanLinkedWorktreeEntries(repo, entries)
 
@@ -95,11 +94,11 @@ func TestCleanRevalidationKeepsOnlyStillEligiblePreviewPairs(t *testing.T) {
 	changeToDir(t, repo)
 	candidate := previewCleanCandidate(t, repo, worktree)
 
-	selection, err := revalidateCleanCandidates(merge.ClassifierFunc(func(defaultBranch string, branches []string) (merge.Result, error) {
+	selection, err := revalidateCleanCandidates(openRepoForTest(t, repo), merge.ClassifierFunc(func(defaultBranch string, branches []string) (merge.Result, error) {
 		assert.Equal(t, "main", defaultBranch)
 		assert.Equal(t, []string{"feature"}, branches)
 		return merge.Result{}, nil
-	}), "main", repo, []cleanCandidate{candidate})
+	}), "main", []cleanCandidate{candidate})
 
 	require.NoError(t, err)
 	assert.Empty(t, selection.candidates)
@@ -111,18 +110,19 @@ func TestCleanRevalidationRejectsMalformedClassifierResults(t *testing.T) {
 	changeToDir(t, repo)
 	candidate := previewCleanCandidate(t, repo, worktree)
 
-	_, err := revalidateCleanCandidates(merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
+	_, err := revalidateCleanCandidates(openRepoForTest(t, repo), merge.ClassifierFunc(func(string, []string) (merge.Result, error) {
 		return merge.Result{Cleanable: []merge.Candidate{{Branch: "other", SHA: "abc123"}}}, nil
-	}), "main", repo, []cleanCandidate{candidate})
+	}), "main", []cleanCandidate{candidate})
 
 	require.EqualError(t, err, `classifier returned unknown cleanable branch "other"`)
 }
 
 func previewCleanCandidate(t *testing.T, repo, worktree string) cleanCandidate {
 	t.Helper()
-	entry, err := findWorktree(worktree)
+	gitRepo := openRepoForTest(t, repo)
+	entry, err := findWorktree(gitRepo, worktree)
 	require.NoError(t, err)
-	sha, err := git.BranchSHA(entry.Branch)
+	sha, err := gitRepo.BranchSHA(entry.Branch)
 	require.NoError(t, err)
 	return cleanCandidate{entry: entry, verifiedSHA: sha}
 }

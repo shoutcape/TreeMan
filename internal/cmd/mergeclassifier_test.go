@@ -3,7 +3,6 @@ package cmd
 import (
 	"testing"
 
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/merge"
 )
 
@@ -13,7 +12,7 @@ func stubForgeVerifier(t *testing.T, headSHAs []string, verifyErr error) merge.C
 	return merge.ClassifierFunc(func(_ string, branches []string) (merge.Result, error) {
 		cleanable := make([]merge.Candidate, 0, len(branches))
 		for _, branch := range branches {
-			sha, err := git.BranchSHA(branch)
+			sha, err := currentRepoForTest(t).BranchSHA(branch)
 			if err != nil {
 				return merge.Result{}, err
 			}

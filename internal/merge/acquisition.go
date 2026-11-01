@@ -64,19 +64,21 @@ type acquirer struct {
 	forge forgeAcquirer
 }
 
-func productionAcquirer() acquirer {
+// productionAcquirer observes repo. The forge CLI still runs in the process's
+// current directory.
+func productionAcquirer(repo git.Repo) acquirer {
 	return acquirer{
 		git: gitAcquirer{
-			branchSHAs:        git.BranchSHAs,
-			remoteHeads:       git.RemoteHeads,
-			remoteTrackingSHA: git.RemoteTrackingBranchSHA,
-			fetch:             git.Fetch,
-			mergedBranches:    git.MergedBranches,
-			anyAncestor:       git.AnyCommitIsAncestor,
-			containedInAny:    git.CommitIsAncestorOfAny,
+			branchSHAs:        repo.BranchSHAs,
+			remoteHeads:       repo.RemoteHeads,
+			remoteTrackingSHA: repo.RemoteTrackingBranchSHA,
+			fetch:             repo.Fetch,
+			mergedBranches:    repo.MergedBranches,
+			anyAncestor:       repo.AnyCommitIsAncestor,
+			containedInAny:    repo.CommitIsAncestorOfAny,
 		},
 		forge: forgeAcquirer{
-			originRemoteURL:   git.OriginRemoteURL,
+			originRemoteURL:   repo.OriginRemoteURL,
 			resolveForge:      forge.ResolveFromRemote,
 			lookPath:          exec.LookPath,
 			githubSnapshot:    forge.GitHubCompleteSnapshot,
@@ -86,8 +88,9 @@ func productionAcquirer() acquirer {
 	}
 }
 
-func NewClassifier() ClassifierFunc {
-	return productionAcquirer().Classify
+// NewClassifier classifies branches of repo.
+func NewClassifier(repo git.Repo) ClassifierFunc {
+	return productionAcquirer(repo).Classify
 }
 
 // Classify snapshots exact local branch tips, acquires fresh merge evidence,

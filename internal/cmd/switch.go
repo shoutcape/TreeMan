@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -64,7 +63,11 @@ func runSwitch(cmd *cobra.Command, query, execCommand string) error {
 func selectWorktree(cmd *cobra.Command, query string, launching bool) (string, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	entries, err := git.WorktreeList()
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return "", fmt.Errorf("not in a git repository or no worktrees found")
+	}
+	entries, err := repo.WorktreeList()
 	if err != nil {
 		return "", fmt.Errorf("not in a git repository or no worktrees found")
 	}

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -84,8 +86,16 @@ func (r *benchmarkConsentReader) Read(p []byte) (int, error) {
 	for _, text := range []string{"Repository:", "Config:", "Phase:", "post_create", "Hooks run in the new worktree under ", "PREPARATION_LOG", "Approve and save this exact scope for future use? [y/N]"} {
 		require.Contains(r.t, r.output.String(), text, "consent must be visible before reading input")
 	}
-	assert.False(r.t, git.BranchExists(deleteBenchmarkBranch), "approval must precede branch creation")
-	entries, err := git.WorktreeList()
+	// The sandbox is the repository the consent names; the benchmark no
+	// longer changes directory into it.
+	match := regexp.MustCompile(`Repository: ("[^\n]*")`).FindStringSubmatch(r.output.String())
+	require.Len(r.t, match, 2, "consent must name the repository")
+	sandboxRoot, err := strconv.Unquote(match[1])
+	require.NoError(r.t, err)
+	sandbox, err := git.Open(sandboxRoot)
+	require.NoError(r.t, err)
+	assert.False(r.t, sandbox.BranchExists(deleteBenchmarkBranch), "approval must precede branch creation")
+	entries, err := sandbox.WorktreeList()
 	require.NoError(r.t, err)
 	require.Len(r.t, entries, 1, "approval must precede worktree creation")
 	if r.answer == "" {
@@ -237,12 +247,12 @@ func TestDeleteBenchmarkCleansUpDeletionFailure(t *testing.T) {
 
 	previousRemove := removeWorktreeAndBranch
 	failedOnce := false
-	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (git.RemoveWorktreeResult, error) {
+	removeWorktreeAndBranch = func(repo git.Repo, path, branch, expectedSHA string, force bool) (git.RemoveWorktreeResult, error) {
 		if !failedOnce {
 			failedOnce = true
 			return git.RemoveWorktreeResult{}, errors.New("injected removal failure")
 		}
-		return previousRemove(mainRoot, path, branch, expectedSHA, force)
+		return previousRemove(repo, path, branch, expectedSHA, force)
 	}
 	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
 

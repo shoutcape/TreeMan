@@ -93,9 +93,9 @@ func TestProvisionNewBranchFromDefaultStartsFromLatestOrigin(t *testing.T) {
 	cmd, _, _ := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
-		source:   newBranchFromDefault("feature/fresh", fetchStrict),
-		options:  noSetup(),
+		repo:    openRepoForTest(t, repo),
+		source:  newBranchFromDefault("feature/fresh", fetchStrict),
+		options: noSetup(),
 	})
 	require.NoError(t, err)
 
@@ -113,9 +113,9 @@ func TestProvisionStrictFetchFailureCreatesNothing(t *testing.T) {
 	cmd, _, _ := provisionCommand()
 
 	_, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
-		source:   newBranchFromDefault("feature/strict", fetchStrict),
-		options:  noSetup(),
+		repo:    openRepoForTest(t, repo),
+		source:  newBranchFromDefault("feature/strict", fetchStrict),
+		options: noSetup(),
 	})
 
 	require.Error(t, err)
@@ -136,9 +136,9 @@ func TestProvisionFallbackFetchFailureStartsFromCachedOrigin(t *testing.T) {
 	cmd, _, stderr := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
-		source:   newBranchFromDefault("feature/cached", fetchFallBackToCached),
-		options:  noSetup(),
+		repo:    openRepoForTest(t, repo),
+		source:  newBranchFromDefault("feature/cached", fetchFallBackToCached),
+		options: noSetup(),
 	})
 	require.NoError(t, err)
 
@@ -154,9 +154,9 @@ func TestProvisionFallbackWithoutOriginStartsFromHEAD(t *testing.T) {
 	cmd, _, stderr := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
-		source:   newBranchFromDefault("feature/from-head", fetchFallBackToCached),
-		options:  noSetup(),
+		repo:    openRepoForTest(t, repo),
+		source:  newBranchFromDefault("feature/from-head", fetchFallBackToCached),
+		options: noSetup(),
 	})
 	require.NoError(t, err)
 
@@ -172,9 +172,9 @@ func TestProvisionFallbackWithNoCommitsFails(t *testing.T) {
 	cmd, _, _ := provisionCommand()
 
 	_, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
-		source:   newBranchFromDefault("feature/nothing", fetchFallBackToCached),
-		options:  noSetup(),
+		repo:    openRepoForTest(t, repo),
+		source:  newBranchFromDefault("feature/nothing", fetchFallBackToCached),
+		options: noSetup(),
 	})
 
 	require.Error(t, err)
@@ -206,7 +206,7 @@ func TestProvisionRefusesExistingLocalBranchBeforeConsentAndFetch(t *testing.T) 
 			options.skipHooks = false
 			cmd, _, stderr := provisionCommand()
 
-			_, err := provisionWorktree(cmd, provisionRequest{mainRoot: repo, source: source(branch), options: options})
+			_, err := provisionWorktree(cmd, provisionRequest{repo: openRepoForTest(t, repo), source: source(branch), options: options})
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), branch)
@@ -237,7 +237,7 @@ func TestProvisionRefusalNamesTheExistingWorktree(t *testing.T) {
 			gitTest(t, repo, "worktree", "add", "-b", branch, existing)
 			cmd, _, stderr := provisionCommand()
 
-			_, err := provisionWorktree(cmd, provisionRequest{mainRoot: repo, source: source(branch), options: noSetup()})
+			_, err := provisionWorktree(cmd, provisionRequest{repo: openRepoForTest(t, repo), source: source(branch), options: noSetup()})
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), existing, "the refusal names the branch's worktree")
@@ -276,7 +276,7 @@ func TestProvisionUnusableDestinationFetchesNothing(t *testing.T) {
 	cmd, _, stderr := provisionCommand()
 
 	_, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot:  repo,
+		repo:      openRepoForTest(t, repo),
 		parentDir: notADir,
 		source:    trackRemoteBranch(branch),
 		options:   noSetup(),
@@ -297,7 +297,7 @@ func TestProvisionRefusedConsentFetchesNothing(t *testing.T) {
 	options.skipHooks = false
 
 	_, err := provisionWorktree(interactiveApprovalCommand("n\n"), provisionRequest{
-		mainRoot: repo, source: trackRemoteBranch(branch), options: options,
+		repo: openRepoForTest(t, repo), source: trackRemoteBranch(branch), options: options,
 	})
 
 	require.ErrorContains(t, err, "hook approval refused")
@@ -313,7 +313,7 @@ func TestProvisionTrackRemoteBranchSetsUpstream(t *testing.T) {
 	sha := pushFromOtherClone(t, origin, branch, "")
 	cmd, _, _ := provisionCommand()
 
-	got, err := provisionWorktree(cmd, provisionRequest{mainRoot: repo, source: trackRemoteBranch(branch), options: noSetup()})
+	got, err := provisionWorktree(cmd, provisionRequest{repo: openRepoForTest(t, repo), source: trackRemoteBranch(branch), options: noSetup()})
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(repo, ".worktrees", "feature-remote"), got.worktree.Path)
@@ -332,7 +332,7 @@ func TestProvisionPullRequestHeadTracksOriginBranch(t *testing.T) {
 	cmd, _, _ := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo, source: pullRequestHead(branch, 7, "refs/pull/7/head"), options: noSetup(),
+		repo: openRepoForTest(t, repo), source: pullRequestHead(branch, 7, "refs/pull/7/head"), options: noSetup(),
 	})
 	require.NoError(t, err)
 
@@ -349,7 +349,7 @@ func TestProvisionPullRequestHeadFromForkWarnsWithoutUpstream(t *testing.T) {
 	cmd, _, stderr := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo, source: pullRequestHead(branch, 9, "refs/pull/9/head"), options: noSetup(),
+		repo: openRepoForTest(t, repo), source: pullRequestHead(branch, 9, "refs/pull/9/head"), options: noSetup(),
 	})
 	require.NoError(t, err, "a fork PR whose branch is not on origin still gets a worktree")
 
@@ -364,7 +364,7 @@ func TestProvisionPullRequestHeadFetchFailureCreatesNothing(t *testing.T) {
 	cmd, _, _ := provisionCommand()
 
 	_, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo, source: pullRequestHead("feature/no-pr", 404, "refs/pull/404/head"), options: noSetup(),
+		repo: openRepoForTest(t, repo), source: pullRequestHead("feature/no-pr", 404, "refs/pull/404/head"), options: noSetup(),
 	})
 
 	require.Error(t, err)
@@ -380,7 +380,7 @@ func TestProvisionExistingBranchAttachesWithoutFetching(t *testing.T) {
 	breakOrigin(t, repo) // any fetch would fail
 	cmd, _, stderr := provisionCommand()
 
-	got, err := provisionWorktree(cmd, provisionRequest{mainRoot: repo, source: existingBranch(branch), options: noSetup()})
+	got, err := provisionWorktree(cmd, provisionRequest{repo: openRepoForTest(t, repo), source: existingBranch(branch), options: noSetup()})
 	require.NoError(t, err)
 
 	assert.Equal(t, sha, revParse(t, got.worktree.Path, "HEAD"))
@@ -401,9 +401,9 @@ func TestProvisionAfterAddRunsAfterAddAndBeforeSetup(t *testing.T) {
 	var seen git.CreatedWorktree
 	var dirExisted, hookHadRun bool
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
-		source:   newBranchFromDefault("feature/after-add", fetchStrict),
-		options:  options,
+		repo:    openRepoForTest(t, repo),
+		source:  newBranchFromDefault("feature/after-add", fetchStrict),
+		options: options,
 		afterAdd: func(created git.CreatedWorktree) error {
 			seen = created
 			_, statErr := os.Stat(created.Path)
@@ -430,7 +430,7 @@ func TestProvisionAfterAddErrorIsAWarning(t *testing.T) {
 	cmd, _, stderr := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo,
+		repo:     openRepoForTest(t, repo),
 		source:   newBranchFromDefault("feature/after-add-fails", fetchStrict),
 		options:  options,
 		afterAdd: func(git.CreatedWorktree) error { return errors.New("could not record ownership") },
@@ -466,14 +466,14 @@ func TestProvisionSkipsSetupWhenTheLockIsHeld(t *testing.T) {
 	var provisionErr error
 	require.NoError(t, withSetupLock(held, func() error {
 		got, provisionErr = provisionWorktree(cmd, provisionRequest{
-			mainRoot: repo, source: newBranchFromDefault(branch, fetchStrict), options: options,
+			repo: openRepoForTest(t, repo), source: newBranchFromDefault(branch, fetchStrict), options: options,
 		})
 		return nil
 	}))
 
 	require.NoError(t, provisionErr, "a held lock does not fail creation")
 	require.Equal(t, path, got.worktree.Path)
-	created, err := resolveSetupTarget(path)
+	created, err := resolveSetupTarget(currentRepoForTest(t), path)
 	require.NoError(t, err)
 	require.Equal(t, held.worktreeID, created.worktreeID, "the test must hold the created worktree's lock")
 	assert.True(t, got.setupSkipped)
@@ -488,31 +488,31 @@ func TestProvisionReleasesTheSetupLock(t *testing.T) {
 	cmd, _, _ := provisionCommand()
 
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo, source: newBranchFromDefault("feature/released", fetchStrict), options: noSetup(),
+		repo: openRepoForTest(t, repo), source: newBranchFromDefault("feature/released", fetchStrict), options: noSetup(),
 	})
 	require.NoError(t, err)
 	require.False(t, got.setupSkipped)
 
-	target, err := resolveSetupTarget(got.worktree.Path)
+	target, err := resolveSetupTarget(currentRepoForTest(t), got.worktree.Path)
 	require.NoError(t, err)
 	assert.NoError(t, withSetupLock(target, func() error { return nil }), "setup releases the lock when it finishes")
 	// And `treeman setup` can run afterwards.
-	assert.NoError(t, reprovisionWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), target, quietSetup()))
+	assert.NoError(t, reprovisionWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), currentRepoForTest(t), target, quietSetup()))
 }
 
 func TestReprovisionRefusesWhileTheLockIsHeld(t *testing.T) {
 	repo, _ := provisionRepo(t)
 	cmd, _, _ := provisionCommand()
 	got, err := provisionWorktree(cmd, provisionRequest{
-		mainRoot: repo, source: newBranchFromDefault("feature/rerun", fetchStrict), options: noSetup(),
+		repo: openRepoForTest(t, repo), source: newBranchFromDefault("feature/rerun", fetchStrict), options: noSetup(),
 	})
 	require.NoError(t, err)
-	target, err := resolveSetupTarget(got.worktree.Path)
+	target, err := resolveSetupTarget(currentRepoForTest(t), got.worktree.Path)
 	require.NoError(t, err)
 
 	var inner error
 	require.NoError(t, withSetupLock(target, func() error {
-		inner = reprovisionWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), target, quietSetup())
+		inner = reprovisionWorktree(commandWithOutput(&bytes.Buffer{}, &bytes.Buffer{}), currentRepoForTest(t), target, quietSetup())
 		return nil
 	}))
 
@@ -538,7 +538,7 @@ func TestProvisionOffersWarmStartsOnlyWhenPromptsCanBeAnswered(t *testing.T) {
 			options := creationSetupOptions{skipEnv: true, skipDatabase: true, skipHooks: true, savedApprovalOnly: agent}
 
 			_, err := provisionWorktree(cmd, provisionRequest{
-				mainRoot: repo, source: newBranchFromDefault("feature/warm", fetchFallBackToCached), options: options,
+				repo: openRepoForTest(t, repo), source: newBranchFromDefault("feature/warm", fetchFallBackToCached), options: options,
 			})
 			require.NoError(t, err)
 
@@ -564,7 +564,7 @@ func TestAddWorktreeDoesNotRunSetup(t *testing.T) {
 	cmd, _, stderr := provisionCommand()
 
 	added, err := addWorktree(cmd, provisionRequest{
-		mainRoot: repo, source: newBranchFromDefault("feature/add-only", fetchStrict), options: options,
+		repo: openRepoForTest(t, repo), source: newBranchFromDefault("feature/add-only", fetchStrict), options: options,
 	})
 	require.NoError(t, err)
 

@@ -84,7 +84,7 @@ func existingBranch(branch string) worktreeSource {
 
 // provisionRequest describes one worktree to provision.
 type provisionRequest struct {
-	mainRoot string
+	repo git.Repo
 	// parentDir overrides the configured worktree directory; empty uses
 	// project configuration.
 	parentDir string
@@ -180,14 +180,10 @@ func provisionWorktree(cmd *cobra.Command, req provisionRequest) (provisionedWor
 // reprovisionWorktree runs setup again in an existing worktree, for
 // `treeman setup`. It never creates, removes, or switches a worktree or a
 // branch.
-func reprovisionWorktree(cmd *cobra.Command, target setupTarget, options rerunSetupOptions) error {
-	mainRoot, err := git.MainWorktreeRoot()
-	if err != nil {
-		return err
-	}
+func reprovisionWorktree(cmd *cobra.Command, repo git.Repo, target setupTarget, options rerunSetupOptions) error {
 	// From the main worktree, never the selected branch: a branch may have
 	// edited its own copy of the configuration.
-	project, err := loadProjectPaths(mainRoot)
+	project, err := loadProjectPaths(repo)
 	if err != nil {
 		return err
 	}
@@ -202,7 +198,7 @@ func reprovisionWorktree(cmd *cobra.Command, target setupTarget, options rerunSe
 		// The target was chosen before the lock. Confirm it still describes
 		// the same worktree before starting; external Git changes do not
 		// participate in TreeMan's setup lock.
-		if err := revalidateSetupTarget(target); err != nil {
+		if err := revalidateSetupTarget(repo, target); err != nil {
 			return err
 		}
 		policy := envPreserve
@@ -232,6 +228,7 @@ func reprovisionWorktree(cmd *cobra.Command, target setupTarget, options rerunSe
 // addWorktree runs provisioning up to the add: guard, consent and destination,
 // fetch, add, and tracking. Benchmarks time this part on its own.
 func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error) {
+	repo := req.repo
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	source := req.source
@@ -245,12 +242,12 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 	var defaultBranch string
 	if source.kind == sourceNewFromDefault && source.fetch == fetchStrict {
 		var err error
-		if defaultBranch, err = git.DetectDefaultBranch(); err != nil {
+		if defaultBranch, err = repo.DetectDefaultBranch(); err != nil {
 			return addedWorktree{}, err
 		}
 	}
 
-	if err := source.guard(); err != nil {
+	if err := source.guard(repo); err != nil {
 		return addedWorktree{}, err
 	}
 
@@ -259,7 +256,7 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 	// configuration that chooses it is the one setup will work from.
 	// Existing worktrees keep their path; a branch whose slug collides with
 	// another branch's worktree gets a suffixed path.
-	paths, err := prepareApprovedCreationPaths(cmd, req.mainRoot, branch, req.parentDir, req.options)
+	paths, err := prepareApprovedCreationPaths(cmd, repo, branch, req.parentDir, req.options)
 	if err != nil {
 		return addedWorktree{}, err
 	}
@@ -270,51 +267,51 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 		startPoint := "origin/" + defaultBranch
 		if source.fetch == fetchStrict {
 			progress(fmt.Sprintf("Fetching latest %s from origin...", defaultBranch))
-			if err := git.Fetch(defaultBranch); err != nil {
+			if err := repo.Fetch(defaultBranch); err != nil {
 				return addedWorktree{}, err
 			}
-		} else if startPoint, err = fallbackStartPoint(progress, warn); err != nil {
+		} else if startPoint, err = fallbackStartPoint(repo, progress, warn); err != nil {
 			return addedWorktree{}, err
 		}
 		progress(fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch))
-		created, err = git.CreatePlannedWorktree(paths.plan(branch), branch, startPoint)
+		created, err = repo.CreatePlannedWorktree(paths.plan(branch), branch, startPoint)
 
 	case sourceTrackRemote:
 		progress(fmt.Sprintf("Fetching branch %s from origin...", branch))
-		if err := git.FetchRemoteBranch(branch); err != nil {
+		if err := repo.FetchRemoteBranch(branch); err != nil {
 			return addedWorktree{}, fmt.Errorf("failed to fetch branch %q: %w", branch, err)
 		}
 		progress(fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch))
-		created, err = git.CreatePlannedWorktree(paths.plan(branch), branch, "origin/"+branch)
+		created, err = repo.CreatePlannedWorktree(paths.plan(branch), branch, "origin/"+branch)
 		if err == nil {
 			// Set upstream so git pull/push work.
-			if err := git.SetUpstreamInDir(created.Path, branch); err != nil {
+			if err := git.SetUpstream(created.Path, branch); err != nil {
 				warn(fmt.Sprintf("could not set upstream for %q: %v", branch, err))
 			}
 		}
 
 	case sourcePullRequestHead:
 		progress(fmt.Sprintf("Fetching PR/MR #%d from origin...", source.number))
-		sha, fetchErr := git.FetchCommit(source.fetchRef)
+		sha, fetchErr := repo.FetchCommit(source.fetchRef)
 		if fetchErr != nil {
 			return addedWorktree{}, fetchErr
 		}
 		progress(fmt.Sprintf("Creating review worktree at %s (branch: %s)...", paths.path, branch))
-		created, err = git.CreatePlannedWorktree(paths.plan(branch), branch, sha)
+		created, err = repo.CreatePlannedWorktree(paths.plan(branch), branch, sha)
 		if err == nil {
 			// Fetch the branch by name so origin/<branch> exists, then set
 			// upstream so git pull/push work without explicit remote args.
 			// Non-fatal: fork PRs may not have the branch on origin.
-			if err := git.Fetch(branch); err != nil {
+			if err := repo.Fetch(branch); err != nil {
 				warn(fmt.Sprintf("could not fetch branch %q (upstream not set): %v", branch, err))
-			} else if err := git.SetUpstreamInDir(created.Path, branch); err != nil {
+			} else if err := git.SetUpstream(created.Path, branch); err != nil {
 				warn(fmt.Sprintf("could not set upstream for %q: %v", branch, err))
 			}
 		}
 
 	case sourceExisting:
 		progress(fmt.Sprintf("Attaching existing branch %s at %s...", branch, paths.path))
-		created, err = git.CreatePlannedWorktreeForExistingBranch(paths.plan(branch), branch)
+		created, err = repo.CreatePlannedWorktreeForExistingBranch(paths.plan(branch), branch)
 
 	default:
 		return addedWorktree{}, fmt.Errorf("unknown worktree source %d", source.kind)
@@ -327,11 +324,11 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 
 // guard refuses a source whose branch would be created over a local branch.
 // It runs before consent and fetch, so the refusal costs nothing.
-func (s worktreeSource) guard() error {
-	if s.kind == sourceExisting || !git.BranchExists(s.branch) {
+func (s worktreeSource) guard(repo git.Repo) error {
+	if s.kind == sourceExisting || !repo.BranchExists(s.branch) {
 		return nil
 	}
-	if existing, _ := git.FindWorktreeForBranch(s.branch); existing != "" {
+	if existing, _ := repo.FindWorktreeForBranch(s.branch); existing != "" {
 		return fmt.Errorf("branch %q already has a worktree at %q", s.branch, existing)
 	}
 	if s.kind == sourcePullRequestHead {
@@ -342,11 +339,11 @@ func (s worktreeSource) guard() error {
 
 // fallbackStartPoint finds a start point for fetchFallBackToCached: the
 // freshly fetched origin default branch, else the cached one, else HEAD.
-func fallbackStartPoint(progress, warn func(string)) (string, error) {
-	defaultBranch, known := git.LocalDefaultBranch()
+func fallbackStartPoint(repo git.Repo, progress, warn func(string)) (string, error) {
+	defaultBranch, known := repo.LocalDefaultBranch()
 	if !known {
-		if _, err := git.OriginRemoteURL(); err == nil {
-			if branch, err := git.DetectDefaultBranch(); err == nil {
+		if _, err := repo.OriginRemoteURL(); err == nil {
+			if branch, err := repo.DetectDefaultBranch(); err == nil {
 				defaultBranch, known = branch, true
 			} else {
 				warn(fmt.Sprintf("could not detect the default branch: %v", err))
@@ -355,8 +352,8 @@ func fallbackStartPoint(progress, warn func(string)) (string, error) {
 	}
 	if known {
 		progress(fmt.Sprintf("Fetching latest %s from origin...", defaultBranch))
-		fetchErr := git.Fetch(defaultBranch)
-		_, cached, err := git.RemoteTrackingBranchSHA(defaultBranch)
+		fetchErr := repo.Fetch(defaultBranch)
+		_, cached, err := repo.RemoteTrackingBranchSHA(defaultBranch)
 		if err != nil {
 			return "", err
 		}
@@ -371,7 +368,7 @@ func fallbackStartPoint(progress, warn func(string)) (string, error) {
 			warn(fmt.Sprintf("could not fetch %s: %v", defaultBranch, fetchErr))
 		}
 	}
-	if _, ok, err := git.ResolveCommit("HEAD"); err != nil {
+	if _, ok, err := repo.ResolveCommit("HEAD"); err != nil {
 		return "", err
 	} else if !ok {
 		return "", fmt.Errorf("the repository has no commits to start a branch from")

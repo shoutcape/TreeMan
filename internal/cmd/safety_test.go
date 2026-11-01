@@ -173,7 +173,7 @@ func TestRunDeleteDirect_ReportsWorktreeRemovalFailure(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/remove-failure")
 	chdirForTest(t, repo)
 	restoreRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+	removeWorktreeAndBranch = func(gitpkg.Repo, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
 		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeCandidate, Err: assert.AnError}
 	}
 	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
@@ -212,9 +212,9 @@ func TestRemovalRefusalsMatchPreflight(t *testing.T) {
 				path = filepath.Join(repo, "unknown")
 			}
 
-			_, preflightErr := planDeletion(path, branch, repo, deletionGuards{force: true}, sha)
+			_, preflightErr := planDeletion(path, branch, openRepoForTest(t, repo), deletionGuards{force: true}, sha)
 			require.Error(t, preflightErr)
-			result, removalErr := gitpkg.RemoveWorktreeAndBranch(repo, path, branch, sha, true)
+			result, removalErr := openRepoForTest(t, repo).RemoveWorktreeAndBranch(path, branch, sha, true)
 			require.EqualError(t, removalErr, preflightErr.Error())
 			assert.False(t, result.WorktreeUnregistered)
 			assert.False(t, result.BranchDeleted)
@@ -229,7 +229,7 @@ func TestDeletionExecutionRevalidatesAfterPlanning(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			repo, worktree := createTestWorktree(t, "feature/guard")
 			chdirForTest(t, repo)
-			plan, err := planDeletion(worktree, "feature/guard", repo, deletionGuards{force: true}, "")
+			plan, err := planDeletion(worktree, "feature/guard", openRepoForTest(t, repo), deletionGuards{force: true}, "")
 			require.NoError(t, err)
 			var want string
 			switch change {
@@ -268,7 +268,7 @@ func TestRunDeleteDirectReportsPendingFileCleanup(t *testing.T) {
 			repo, worktree := createTestWorktree(t, "feature/pending")
 			chdirForTest(t, repo)
 			previousRemove := removeWorktreeAndBranch
-			removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+			removeWorktreeAndBranch = func(gitpkg.Repo, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
 				return gitpkg.RemoveWorktreeResult{
 					WorktreeUnregistered: true,
 					BranchDeleted:        true,
@@ -307,7 +307,7 @@ func TestRunDeleteDirect_ReportsACaptureThatCouldNotBeRestored(t *testing.T) {
 	chdirForTest(t, repo)
 	capture := filepath.Join(t.TempDir(), "worktree-job", "worktree")
 	restoreRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+	removeWorktreeAndBranch = func(gitpkg.Repo, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
 		return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{
 			Scope:   gitpkg.RemovalScopeCaptureRetained,
 			Capture: capture,
@@ -338,8 +338,8 @@ func TestRunDeleteDirect_ReportsBranchDeletionFailure(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/branch-failure")
 	chdirForTest(t, repo)
 	restoreRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
-		gitTest(t, mainRoot, "worktree", "remove", "--force", path)
+	removeWorktreeAndBranch = func(gitRepo gitpkg.Repo, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+		gitTest(t, gitRepo.MainRoot(), "worktree", "remove", "--force", path)
 		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 	}
 	t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
@@ -365,7 +365,7 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		newCleanupBatch = func() databaseCleanupBatch { return &recordingCleanupSession{events: &events} }
 		t.Cleanup(func() { newCleanupBatch = restoreBatch })
 		restoreRemove := removeWorktreeAndBranch
-		removeWorktreeAndBranch = func(string, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
+		removeWorktreeAndBranch = func(gitpkg.Repo, string, string, string, bool) (gitpkg.RemoveWorktreeResult, error) {
 			events = append(events, "branch")
 			return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 		}
@@ -385,9 +385,9 @@ func TestDeleteWorktreeAtSHAFlushesOnlyAfterBranchDeletion(t *testing.T) {
 		newCleanupBatch = func() databaseCleanupBatch { return &recordingCleanupSession{events: &events} }
 		t.Cleanup(func() { newCleanupBatch = restoreBatch })
 		restoreRemove := removeWorktreeAndBranch
-		removeWorktreeAndBranch = func(dir, path, branch, sha string, force bool) (gitpkg.RemoveWorktreeResult, error) {
+		removeWorktreeAndBranch = func(gitRepo gitpkg.Repo, path, branch, sha string, force bool) (gitpkg.RemoveWorktreeResult, error) {
 			events = append(events, "branch")
-			return restoreRemove(dir, path, branch, sha, force)
+			return restoreRemove(gitRepo, path, branch, sha, force)
 		}
 		t.Cleanup(func() { removeWorktreeAndBranch = restoreRemove })
 
@@ -441,8 +441,8 @@ func TestDeleteVerifiedWorktreePreservesBranchOnCompareAndDeleteMismatch(t *test
 	chdirForTest(t, repo)
 
 	originalRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
-		gitTest(t, mainRoot, "worktree", "remove", "--force", path)
+	removeWorktreeAndBranch = func(gitRepo gitpkg.Repo, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+		gitTest(t, gitRepo.MainRoot(), "worktree", "remove", "--force", path)
 		gitTest(t, repo, "update-ref", "refs/heads/feature/verified", movedSHA)
 		return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 	}
@@ -473,8 +473,8 @@ func TestRunDeleteDirect_PreservesBranchMovedDuringDeletion(t *testing.T) {
 			chdirForTest(t, repo)
 
 			originalRemove := removeWorktreeAndBranch
-			removeWorktreeAndBranch = func(mainRoot, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
-				gitTest(t, mainRoot, "worktree", "remove", "--force", path)
+			removeWorktreeAndBranch = func(gitRepo gitpkg.Repo, path, _ string, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+				gitTest(t, gitRepo.MainRoot(), "worktree", "remove", "--force", path)
 				gitTest(t, repo, "update-ref", "refs/heads/feature/moved", replacementSHA)
 				return gitpkg.RemoveWorktreeResult{WorktreeUnregistered: true}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeBranchRetained, Err: assert.AnError}
 			}
@@ -588,21 +588,23 @@ func TestRunList_OutsideRepository(t *testing.T) {
 	err := runList(&cobra.Command{}, true)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "could not list worktrees")
+	assert.ErrorIs(t, err, errNotInRepository)
 }
 
 func TestRepositoryReadFailureIsNotAPerCandidateRefusal(t *testing.T) {
 	repo, worktree := createTestWorktree(t, "feature/guard")
 	chdirForTest(t, repo)
 
-	_, refusal := planDeletion(worktree, "other", repo, deletionGuards{}, "")
+	gitRepo := openRepoForTest(t, repo)
+	_, refusal := planDeletion(worktree, "other", gitRepo, deletionGuards{}, "")
 	require.Error(t, refusal)
 	assert.True(t, refusedRemoval(removalRefused{refusal}), "a decision about one worktree lets a batch skip it")
 
 	// Reading the worktree list is repository-wide: the next candidate would
 	// fail identically, so a batch must stop rather than blame each worktree.
-	chdirForTest(t, t.TempDir())
-	_, unavailable := planDeletion(worktree, "feature/guard", repo, deletionGuards{}, "")
+	// The Repo is explicit, so the repository itself is made unreadable.
+	require.NoError(t, os.Rename(filepath.Join(repo, ".git"), filepath.Join(repo, ".git-unreadable")))
+	_, unavailable := planDeletion(worktree, "feature/guard", gitRepo, deletionGuards{}, "")
 	require.Error(t, unavailable)
 	assert.False(t, refusedRemoval(removalRefused{unavailable}))
 }

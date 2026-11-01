@@ -843,3 +843,33 @@ func TestClaudeWorktreeCreateBinaryPrintsOnlyThePath(t *testing.T) {
 	missing.Stdin = strings.NewReader(`{"worktree_path":"` + filepath.Join(canonicalTestDir(t), "gone") + `"}`)
 	assert.NoError(t, missing.Run())
 }
+
+// The hooks name their repository explicitly, so running one from inside
+// another repository neither changes the process's directory nor touches the
+// repository the process happens to be in.
+func TestClaudeHooksDoNotChangeTheWorkingDirectory(t *testing.T) {
+	repo, _ := claudeRepoWithOrigin(t)
+	bystander := filepath.Join(canonicalTestDir(t), "bystander")
+	gitTest(t, filepath.Dir(bystander), "init", "-b", "main", bystander)
+	gitTest(t, bystander, "commit", "--allow-empty", "-m", "bystander")
+	chdirForTest(t, bystander)
+	before, err := os.Getwd()
+	require.NoError(t, err)
+
+	path := mustClaudeCreate(t, "stay-put", repo)
+
+	after, err := os.Getwd()
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "worktree-create must not change the working directory")
+	assert.True(t, hasBranch(repo, "feature/stay-put"))
+	assert.False(t, hasBranch(bystander, "feature/stay-put"), "the hook acts on its own repository, not the current one")
+
+	result := claudeRemove(t, path)
+	require.NoErrorf(t, result.err, "worktree-remove failed: %s", result.stderr)
+
+	after, err = os.Getwd()
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "worktree-remove must not change the working directory")
+	assert.NoDirExists(t, path)
+	assert.Contains(t, gitTestOutput(t, bystander, "log", "--format=%s", "-1"), "bystander")
+}

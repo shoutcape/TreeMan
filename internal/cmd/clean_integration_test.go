@@ -107,7 +107,7 @@ func TestCleanReportsDatabaseCleanupOutcome(t *testing.T) {
 				return merge.Result{Cleanable: []merge.Candidate{{Branch: branches[0], SHA: gitRevParse(t, repo, "refs/heads/feature")}}}, nil
 			})
 
-			require.NoError(t, runCleanWithClassifier(command, classifier, false, true))
+			require.NoError(t, runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true))
 			output := ui.StripANSI(stderr.String())
 			for _, expected := range test.expected {
 				assert.Contains(t, output, expected)
@@ -125,8 +125,8 @@ func TestCleanReportsPendingFileCleanup(t *testing.T) {
 	repo, worktree := createMergedCleanWorktree(t)
 	changeToDir(t, repo)
 	previousRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
-		result, err := previousRemove(mainRoot, path, branch, expectedSHA, force)
+	removeWorktreeAndBranch = func(repo gitpkg.Repo, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
+		result, err := previousRemove(repo, path, branch, expectedSHA, force)
 		result.CleanupJob = t.TempDir()
 		result.CleanupError = assert.AnError
 		return result, err
@@ -167,7 +167,7 @@ func TestCleanRendersResultsByTreebranch(t *testing.T) {
 		return merge.Result{Cleanable: cleanable}, nil
 	})
 
-	require.NoError(t, runCleanWithClassifier(command, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true))
 	output := ui.StripANSI(stderr.String())
 	assert.Contains(t, output, "Cleanup results")
 	assert.Contains(t, output, "TREEBRANCH  WORKTREE  BRANCH")
@@ -200,7 +200,7 @@ func TestCleanSkipsDirtyMergedWorktreeBeforeClassification(t *testing.T) {
 		return merge.Result{}, nil
 	})
 
-	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, currentRepoForTest(t), classifier, false, true))
 	assert.DirExists(t, worktree)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
 }
@@ -223,7 +223,7 @@ func TestCleanClassifiesOnlyCleanWorktrees(t *testing.T) {
 		return merge.Result{Cleanable: []merge.Candidate{{Branch: "clean", SHA: sha}}}, nil
 	})
 
-	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, currentRepoForTest(t), classifier, false, true))
 	assert.Equal(t, 2, calls)
 	assert.DirExists(t, dirtyWorktree)
 	assert.NoDirExists(t, cleanWorktree)
@@ -307,7 +307,7 @@ func TestCleanDeletesOnlyRevalidatedCandidates(t *testing.T) {
 		return merge.Result{Cleanable: []merge.Candidate{{Branch: branches[0], SHA: sha}}}, nil
 	})
 
-	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, currentRepoForTest(t), classifier, false, true))
 	assert.Equal(t, 2, calls)
 	assert.DirExists(t, worktree)
 	runGitInDir(t, repo, "show-ref", "--verify", "--quiet", "refs/heads/feature")
@@ -320,7 +320,7 @@ func TestCleanRejectsCleanableBranchWithoutSHA(t *testing.T) {
 		return merge.Result{Cleanable: []merge.Candidate{{Branch: branches[0]}}}, nil
 	})
 
-	err := runCleanWithClassifier(&cobra.Command{}, classifier, false, true)
+	err := runCleanWithClassifier(&cobra.Command{}, currentRepoForTest(t), classifier, false, true)
 
 	require.EqualError(t, err, "classifier returned cleanable branch \"feature\" without a SHA")
 	assert.DirExists(t, worktree)
@@ -334,7 +334,7 @@ func TestCleanRejectsUnknownCleanableBranch(t *testing.T) {
 		return merge.Result{Cleanable: []merge.Candidate{{Branch: "other", SHA: "abc123"}}}, nil
 	})
 
-	err := runCleanWithClassifier(&cobra.Command{}, classifier, false, true)
+	err := runCleanWithClassifier(&cobra.Command{}, currentRepoForTest(t), classifier, false, true)
 
 	require.EqualError(t, err, "classifier returned unknown cleanable branch \"other\"")
 	assert.DirExists(t, worktree)
@@ -546,7 +546,7 @@ func TestCleanRemovesForgeVerifiedSquashMergedWorktree(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, currentRepoForTest(t), classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.True(t, os.IsNotExist(err), "forge-verified squash-merged worktree should have been removed")
@@ -604,7 +604,7 @@ func TestCleanVerifiesEachRemoteGoneBranch(t *testing.T) {
 	})
 	changeToDir(t, repo)
 
-	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(&cobra.Command{}, currentRepoForTest(t), classifier, false, true))
 	assert.Equal(t, int32(4), lookupCalls.Load())
 	assert.NoDirExists(t, featureWorktree)
 	assert.NoDirExists(t, secondWorktree)
@@ -619,7 +619,7 @@ func TestCleanRetainsRemoteGoneWhenForgeReportsUnmerged(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(stderr)
-	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, currentRepoForTest(t), classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "remote-gone branch without confirmed merge should be retained")
@@ -643,7 +643,7 @@ func TestCleanRetainsSquashMergedBranchWithPostMergeCommits(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, currentRepoForTest(t), classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "branch with post-merge commits must be retained")
@@ -670,7 +670,7 @@ func TestCleanRetainsReusedBranchName(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, runCleanWithClassifier(cmd, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(cmd, currentRepoForTest(t), classifier, false, true))
 
 	_, err := os.Stat(worktree)
 	require.NoError(t, err, "reused branch name must be retained")
@@ -686,7 +686,7 @@ func TestCleanSurfacesVerificationWarningOnce(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(stderr)
-	require.NoError(t, runCleanWithClassifier(cmd, classifier, true, true))
+	require.NoError(t, runCleanWithClassifier(cmd, currentRepoForTest(t), classifier, true, true))
 
 	cleanOutput := ui.StripANSI(stderr.String())
 	assert.Contains(t, cleanOutput, "merge verification failed")
@@ -916,7 +916,7 @@ func TestCleanSkipsLockedWorktreeWithoutClassifying(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	require.NoError(t, runCleanWithClassifier(command, classifier, false, true))
+	require.NoError(t, runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true))
 
 	output := ui.StripANSI(stderr.String())
 	assert.Contains(t, output, `skipping "feature": locked: release freeze`)

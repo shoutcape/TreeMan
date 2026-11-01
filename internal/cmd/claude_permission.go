@@ -88,7 +88,7 @@ func isTreemanWorktreeOf(projectDir, path string) (bool, error) {
 	}
 	parentDir := repo.parentDir
 	if parentDir == "" {
-		project, err := loadProjectPaths(repo.mainRoot)
+		project, err := loadProjectPaths(repo.git)
 		if err != nil {
 			return false, err
 		}
@@ -98,12 +98,12 @@ func isTreemanWorktreeOf(projectDir, path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	entries, err := git.WorktreeList()
+	entries, err := repo.git.WorktreeList()
 	if err != nil {
 		return false, err
 	}
 	for _, entry := range entries {
-		if !samePath(entry.Path, path) || samePath(entry.Path, repo.mainRoot) {
+		if !samePath(entry.Path, path) || samePath(entry.Path, repo.git.MainRoot()) {
 			continue
 		}
 		if git.WorktreeDirectoryMissing(entry.Path) {
