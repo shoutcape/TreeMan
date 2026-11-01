@@ -38,11 +38,15 @@ func newListCmd() *cobra.Command {
 }
 
 func runList(cmd *cobra.Command, jsonOutput bool) error {
-	return runListWithClassifier(cmd, merge.NewClassifier(), jsonOutput)
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return err
+	}
+	return runListWithClassifier(cmd, repo, merge.NewClassifier(repo), jsonOutput)
 }
 
-func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, jsonOutput bool) error {
-	entries, err := git.WorktreeList()
+func runListWithClassifier(cmd *cobra.Command, repo git.Repo, classifier merge.ClassifierFunc, jsonOutput bool) error {
+	entries, err := repo.WorktreeList()
 	if err != nil {
 		return err
 	}
@@ -54,13 +58,13 @@ func runListWithClassifier(cmd *cobra.Command, classifier merge.ClassifierFunc, 
 	if err != nil {
 		return err
 	}
-	currentRoot, err := git.CurrentWorktreeRoot()
+	currentRoot, err := repo.CurrentWorktreeRoot()
 	if err != nil {
 		return err
 	}
 	defaultBranch := ""
 	verified := map[string]string{}
-	if defaultBranch, err = git.DetectDefaultBranch(); err == nil {
+	if defaultBranch, err = repo.DetectDefaultBranch(); err == nil {
 		var branchNames []string
 		for _, worktree := range inspected {
 			entry := worktree.Entry

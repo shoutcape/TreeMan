@@ -44,6 +44,8 @@ func (p creationPaths) hooksSkippedText() string {
 // it, and both read it from the main worktree: a branch may have edited its
 // own copy of the configuration, and setup must not follow that copy.
 type projectPaths struct {
+	// repo is the repository the configuration belongs to.
+	repo git.Repo
 	// mainRoot is the main worktree root every relative path resolves from.
 	mainRoot string
 	// parentDir is the effective absolute directory new worktrees are made in.
@@ -62,7 +64,8 @@ type projectPaths struct {
 // it. An unusable configuration file is an error rather than a warning: it may
 // place worktrees somewhere other than the default, and carrying on with the
 // default would quietly ignore what the project asked for.
-func loadProjectPaths(mainRoot string) (projectPaths, error) {
+func loadProjectPaths(repo git.Repo) (projectPaths, error) {
+	mainRoot := repo.MainRoot()
 	loaded := config.Load(mainRoot)
 	if loaded.Warning != "" {
 		return projectPaths{}, fmt.Errorf("cannot read project configuration: %s", loaded.Warning)
@@ -71,15 +74,12 @@ func loadProjectPaths(mainRoot string) (projectPaths, error) {
 	if err != nil {
 		return projectPaths{}, err
 	}
-	commonDir, err := git.CommonDir("")
-	if err != nil {
-		return projectPaths{}, err
-	}
 	return projectPaths{
+		repo:       repo,
 		mainRoot:   mainRoot,
 		parentDir:  parentDir,
 		configPath: loaded.Path,
-		protected:  worktree.Protected{MainRoot: mainRoot, CommonDir: commonDir},
+		protected:  worktree.Protected{MainRoot: mainRoot, CommonDir: repo.CommonDir()},
 		config:     loaded.Config,
 	}, nil
 }
@@ -94,8 +94,8 @@ func loadProjectPaths(mainRoot string) (projectPaths, error) {
 // fetching or touching any ref. A destination that is unusable, or a
 // configuration that cannot be read, must not cost the user a network round
 // trip and must never leave a branch behind.
-func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, error) {
-	project, err := loadProjectPaths(mainRoot)
+func prepareCreationPathsIn(repo git.Repo, branch, parentDir string) (creationPaths, error) {
+	project, err := loadProjectPaths(repo)
 	if err != nil {
 		return creationPaths{}, err
 	}
@@ -104,7 +104,7 @@ func prepareCreationPathsIn(mainRoot, branch, parentDir string) (creationPaths, 
 	}
 	paths := creationPaths{projectPaths: project}
 
-	existing, err := git.WorktreeList()
+	existing, err := repo.WorktreeList()
 	if err != nil {
 		return creationPaths{}, err
 	}

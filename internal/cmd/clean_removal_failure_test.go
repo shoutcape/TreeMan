@@ -44,11 +44,11 @@ func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
 	repo, refusedWorktree, removableWorktree, classifier := twoCleanCandidates(t)
 
 	previousRemove := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(mainRoot, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
+	removeWorktreeAndBranch = func(repo gitpkg.Repo, path, branch, expectedSHA string, force bool) (gitpkg.RemoveWorktreeResult, error) {
 		if branch == "feature" {
 			return gitpkg.RemoveWorktreeResult{}, &gitpkg.RemovalError{Scope: gitpkg.RemovalScopeCandidate, Err: assert.AnError}
 		}
-		return previousRemove(mainRoot, path, branch, expectedSHA, force)
+		return previousRemove(repo, path, branch, expectedSHA, force)
 	}
 	t.Cleanup(func() { removeWorktreeAndBranch = previousRemove })
 
@@ -56,7 +56,7 @@ func TestCleanContinuesAfterARefusedRemoval(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	err := runCleanWithClassifier(command, classifier, false, true)
+	err := runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1 worktree(s) could not be removed: feature")
@@ -89,7 +89,7 @@ func TestCleanStopsWhenACaptureCouldNotBeRestored(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	err := runCleanWithClassifier(command, classifier, false, true)
+	err := runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
@@ -113,7 +113,7 @@ func TestCleanStopsOnARepositoryWideRemovalFailure(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	err := runCleanWithClassifier(command, classifier, false, true)
+	err := runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
@@ -133,7 +133,7 @@ func TestCleanStopsOnAnUnclassifiedRemovalFailure(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	err := runCleanWithClassifier(command, classifier, false, true)
+	err := runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
@@ -155,7 +155,7 @@ func TestCleanStopsOnAnUnrecognizedRemovalScope(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetErr(stderr)
 
-	err := runCleanWithClassifier(command, classifier, false, true)
+	err := runCleanWithClassifier(command, currentRepoForTest(t), classifier, false, true)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
@@ -172,7 +172,7 @@ func attemptedRemovals(t *testing.T, removal func(branch string) (gitpkg.RemoveW
 	t.Helper()
 	attempted := []string{}
 	previous := removeWorktreeAndBranch
-	removeWorktreeAndBranch = func(_, _, branch, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
+	removeWorktreeAndBranch = func(_ gitpkg.Repo, _, branch, _ string, _ bool) (gitpkg.RemoveWorktreeResult, error) {
 		attempted = append(attempted, branch)
 		return removal(branch)
 	}

@@ -35,8 +35,8 @@ func newDeleteBenchmarkRunner(setup creationSetupOptions, consent *cobra.Command
 			return nil, err
 		}
 		return func() (benchmarkMeasurement, error) {
-			err := sandbox.run(func() error {
-				return runDeleteDirect(runCmd, created.Path, created.Branch, true, false)
+			err := sandbox.run(func(repo git.Repo) error {
+				return deleteDirectIn(runCmd, repo, created.Path, created.Branch, true, false)
 			})
 			return benchmarkMeasurement{
 				preparation: preparation,
@@ -55,18 +55,18 @@ func newDeleteBenchmarkRunner(setup creationSetupOptions, consent *cobra.Command
 func prepareDeleteBenchmarkWorktree(cmd *cobra.Command, sandbox benchmarkSandbox, setup creationSetupOptions) (git.CreatedWorktree, string, error) {
 	var created git.CreatedWorktree
 	preparation := ""
-	err := sandbox.run(func() error {
-		defaultBranch, err := git.DetectDefaultBranch()
+	err := sandbox.run(func(repo git.Repo) error {
+		defaultBranch, err := repo.DetectDefaultBranch()
 		if err != nil {
 			return err
 		}
 		// The fixture goes through production path validation but stays under
 		// the sandbox, which owns every disposable benchmark artifact.
-		paths, err := prepareApprovedCreationPaths(cmd, sandbox.repo, deleteBenchmarkBranch, sandbox.worktreeDir(), setup)
+		paths, err := prepareApprovedCreationPaths(cmd, repo, deleteBenchmarkBranch, sandbox.worktreeDir(), setup)
 		if err != nil {
 			return err
 		}
-		created, err = git.CreatePlannedWorktree(paths.plan(deleteBenchmarkBranch), deleteBenchmarkBranch, "origin/"+defaultBranch)
+		created, err = repo.CreatePlannedWorktree(paths.plan(deleteBenchmarkBranch), deleteBenchmarkBranch, "origin/"+defaultBranch)
 		if err != nil {
 			return err
 		}
@@ -145,7 +145,7 @@ func cleanupDeleteBenchmarkIteration(sandbox benchmarkSandbox, created git.Creat
 	// RemoveCreatedWorktree deletes the branch at the SHA captured when it was
 	// created, reports anything it could not remove, and treats artifacts the
 	// timed deletion already removed as nothing left to do.
-	gitErr := git.RemoveCreatedWorktree(sandbox.repo, created)
+	gitErr := sandbox.run(func(repo git.Repo) error { return repo.RemoveCreatedWorktree(created) })
 	// Drop the iteration's branch database. RetryPending finds it now that the
 	// worktree and branch are gone, whether the timed deletion recorded the
 	// drop as pending or never got that far.

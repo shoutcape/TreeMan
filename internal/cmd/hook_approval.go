@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/hooks"
 	"github.com/shoutcape/treeman/internal/state"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -19,8 +20,8 @@ import (
 // Every creation flow enters here rather than pairing the two calls itself. A
 // creationPaths whose consent was never resolved would run no hooks at all and
 // report success, so it must not be possible to hold one.
-func prepareApprovedCreationPaths(cmd *cobra.Command, mainRoot, branch, parentDir string, opts creationSetupOptions) (creationPaths, error) {
-	paths, err := prepareCreationPathsIn(mainRoot, branch, parentDir)
+func prepareApprovedCreationPaths(cmd *cobra.Command, repo git.Repo, branch, parentDir string, opts creationSetupOptions) (creationPaths, error) {
+	paths, err := prepareCreationPathsIn(repo, branch, parentDir)
 	if err != nil {
 		return creationPaths{}, err
 	}

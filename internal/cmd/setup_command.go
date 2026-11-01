@@ -115,11 +115,15 @@ func runSetup(cmd *cobra.Command, query string, options rerunSetupOptions) error
 	if err := options.validate(); err != nil {
 		return err
 	}
-	target, err := resolveSetupTarget(query)
+	repo, err := openCurrentRepo()
 	if err != nil {
 		return err
 	}
-	return reprovisionWorktree(cmd, target, options)
+	target, err := resolveSetupTarget(repo, query)
+	if err != nil {
+		return err
+	}
+	return reprovisionWorktree(cmd, repo, target, options)
 }
 
 // approveSetupHooks resolves consent before the lock is taken, so a prompt
@@ -138,15 +142,15 @@ func approveSetupHooks(cmd *cobra.Command, project projectPaths, options rerunSe
 // Selection is exact. There is no picker and no fuzzy match: setup runs a
 // project's own commands and can install into whatever it selects, so a near
 // miss must be an error rather than a guess.
-func resolveSetupTarget(query string) (setupTarget, error) {
-	entries, err := git.WorktreeList()
+func resolveSetupTarget(repo git.Repo, query string) (setupTarget, error) {
+	entries, err := repo.WorktreeList()
 	if err != nil {
 		return setupTarget{}, err
 	}
 
 	pathOnly := query == ""
 	if pathOnly {
-		root, err := git.CurrentWorktreeRoot()
+		root, err := repo.CurrentWorktreeRoot()
 		if err != nil {
 			return setupTarget{}, err
 		}
@@ -216,8 +220,8 @@ func validateSetupTarget(entry git.WorktreeEntry) error {
 
 // revalidateSetupTarget confirms under the lock that the registration, path,
 // branch, and Git identity chosen outside it still describe the same worktree.
-func revalidateSetupTarget(target setupTarget) error {
-	entries, err := git.WorktreeList()
+func revalidateSetupTarget(repo git.Repo, target setupTarget) error {
+	entries, err := repo.WorktreeList()
 	if err != nil {
 		return err
 	}

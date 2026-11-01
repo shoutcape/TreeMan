@@ -376,21 +376,25 @@ func finishBenchmarkIteration(runErr error, cleanup func() error) error {
 }
 
 func newBranchBenchmarkRunner(branch string) (benchmarkRunner, benchmarkSandbox, error) {
-	if git.BranchExists(branch) {
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return nil, benchmarkSandbox{}, err
+	}
+	if repo.BranchExists(branch) {
 		return nil, benchmarkSandbox{}, fmt.Errorf("cannot benchmark branch %q: it already exists locally", branch)
 	}
 
-	sandbox, err := newBenchmarkSandbox()
+	sandbox, err := newBenchmarkSandbox(repo)
 	if err != nil {
 		return nil, benchmarkSandbox{}, err
 	}
 	runner := func(runCmd *cobra.Command) (measuredRun, error) {
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
-			err := sandbox.run(func() error {
-				created, err := createBranchWorktreeIn(runCmd, branch, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
+			err := sandbox.run(func(repo git.Repo) error {
+				created, err := createBranchWorktreeIn(runCmd, repo, branch, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
 				if created.worktree.Path != "" {
-					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
+					measurement.cleanup = func() error { return repo.RemoveCreatedWorktree(created.worktree) }
 				}
 				return err
 			})
@@ -404,17 +408,21 @@ func newReviewBenchmarkRunner(prArg string) (benchmarkRunner, benchmarkSandbox, 
 	if _, err := validate.PRNumber(prArg); err != nil {
 		return nil, benchmarkSandbox{}, fmt.Errorf("benchmark target review: %w", err)
 	}
-	sandbox, err := newBenchmarkSandbox()
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return nil, benchmarkSandbox{}, err
+	}
+	sandbox, err := newBenchmarkSandbox(repo)
 	if err != nil {
 		return nil, benchmarkSandbox{}, err
 	}
 	runner := func(runCmd *cobra.Command) (measuredRun, error) {
 		return func() (benchmarkMeasurement, error) {
 			var measurement benchmarkMeasurement
-			err := sandbox.run(func() error {
-				created, err := createReviewWorktreeIn(runCmd, prArg, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
+			err := sandbox.run(func(repo git.Repo) error {
+				created, err := createReviewWorktreeIn(runCmd, repo, prArg, sandbox.worktreeDir(), creationSetupOptions{skipHooks: true})
 				if created.worktree.Path != "" {
-					measurement.cleanup = func() error { return git.RemoveCreatedWorktree(created.paths.mainRoot, created.worktree) }
+					measurement.cleanup = func() error { return repo.RemoveCreatedWorktree(created.worktree) }
 				}
 				return err
 			})
@@ -433,12 +441,12 @@ func (sandbox benchmarkSandbox) worktreeDir() string {
 	return filepath.Join(sandbox.root, "worktrees")
 }
 
-// newBenchmarkSandbox clones the current repository's origin into a temporary
-// directory so iterations never touch the user's checkout. Targets that
-// measure remote work need the real remote; a target that only creates and
-// deletes worktrees locally uses newProjectBenchmarkSandbox instead.
-func newBenchmarkSandbox() (benchmarkSandbox, error) {
-	remoteURL, err := git.OriginRemoteURL()
+// newBenchmarkSandbox clones source's origin into a temporary directory so
+// iterations never touch the user's checkout. Targets that measure remote work
+// need the real remote; a target that only creates and deletes worktrees
+// locally uses newProjectBenchmarkSandbox instead.
+func newBenchmarkSandbox(source git.Repo) (benchmarkSandbox, error) {
+	remoteURL, err := source.OriginRemoteURL()
 	if err != nil {
 		return benchmarkSandbox{}, err
 	}
@@ -469,11 +477,12 @@ func newBenchmarkSandboxFrom(source string) (benchmarkSandbox, error) {
 // worktree benchmark still means something: nothing it measures comes from the
 // remote.
 func newProjectBenchmarkSandbox() (benchmarkSandbox, error) {
-	sourceRoot, err := git.MainWorktreeRoot()
+	source, err := openCurrentRepo()
 	if err != nil {
 		return benchmarkSandbox{}, err
 	}
-	hasCommits, err := git.HasCommits(sourceRoot)
+	sourceRoot := source.MainRoot()
+	hasCommits, err := source.HasCommits()
 	if err != nil {
 		return benchmarkSandbox{}, err
 	}
@@ -494,16 +503,14 @@ func newProjectBenchmarkSandbox() (benchmarkSandbox, error) {
 	return sandbox, nil
 }
 
-func (sandbox benchmarkSandbox) run(operation func() error) error {
-	previous, err := os.Getwd()
+// run opens the sandbox's clone and hands it to operation, so the operation
+// acts on the clone rather than on the repository the command was run in.
+func (sandbox benchmarkSandbox) run(operation func(git.Repo) error) error {
+	repo, err := git.Open(sandbox.repo)
 	if err != nil {
 		return err
 	}
-	if err := os.Chdir(sandbox.repo); err != nil {
-		return err
-	}
-	operationErr := operation()
-	return errors.Join(operationErr, os.Chdir(previous))
+	return operation(repo)
 }
 
 func (sandbox benchmarkSandbox) close() error {

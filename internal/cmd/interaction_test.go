@@ -10,6 +10,7 @@ import (
 	"testing/iotest"
 
 	"github.com/shoutcape/treeman/internal/forge"
+	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/terminal"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -121,9 +122,9 @@ func TestLoadBranchPickerDataFiltersAndAssociatesConcurrently(t *testing.T) {
 		<-release
 		return []forge.PRInfo{{Number: 42, Branch: "feature/available", Title: "Available"}}, nil
 	}
-	branchPickerDefaultBranch = func() (string, error) { return "main", nil }
+	branchPickerDefaultBranch = func(git.Repo) (string, error) { return "main", nil }
 	var branchNames []string
-	branchPickerBranchSHAs = func(branches []string) (map[string]string, error) {
+	branchPickerBranchSHAs = func(_ git.Repo, branches []string) (map[string]string, error) {
 		branchNames = append([]string(nil), branches...)
 		return map[string]string{"feature/existing": "abc123"}, nil
 	}
@@ -135,7 +136,7 @@ func TestLoadBranchPickerDataFiltersAndAssociatesConcurrently(t *testing.T) {
 		err  error
 	}, 1)
 	go func() {
-		data, err := loadBranchPickerDataForForge(command, forge.GitHub, "owner/repo", "github.com")
+		data, err := loadBranchPickerDataForForge(command, git.Repo{}, forge.GitHub, "owner/repo", "github.com")
 		result <- struct {
 			data branchPickerData
 			err  error
@@ -171,13 +172,13 @@ func TestLoadBranchPickerDataKeepsPRFailuresNonFatal(t *testing.T) {
 	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) {
 		return nil, errors.New("API unavailable")
 	}
-	branchPickerDefaultBranch = func() (string, error) { return "main", nil }
-	branchPickerBranchSHAs = func([]string) (map[string]string, error) { return map[string]string{}, nil }
+	branchPickerDefaultBranch = func(git.Repo) (string, error) { return "main", nil }
+	branchPickerBranchSHAs = func(git.Repo, []string) (map[string]string, error) { return map[string]string{}, nil }
 
 	stderr := &bytes.Buffer{}
 	command := &cobra.Command{}
 	command.SetErr(stderr)
-	data, err := loadBranchPickerDataForForge(command, forge.GitHub, "owner/repo", "github.com")
+	data, err := loadBranchPickerDataForForge(command, git.Repo{}, forge.GitHub, "owner/repo", "github.com")
 
 	require.NoError(t, err)
 	assert.Equal(t, []forge.BranchInfo{{Name: "feature/available"}}, data.branches)
@@ -198,7 +199,7 @@ func TestLoadBranchPickerDataFailsWhenBranchListingFails(t *testing.T) {
 	}
 	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) { return nil, nil }
 
-	_, err := loadBranchPickerDataForForge(&cobra.Command{}, forge.GitHub, "owner/repo", "github.com")
+	_, err := loadBranchPickerDataForForge(&cobra.Command{}, git.Repo{}, forge.GitHub, "owner/repo", "github.com")
 
 	require.EqualError(t, err, "failed to list remote branches: API unavailable")
 }
@@ -217,11 +218,11 @@ func TestLoadBranchPickerDataFailsWhenLocalBranchLookupFails(t *testing.T) {
 		return []forge.BranchInfo{{Name: "feature/available"}}, nil
 	}
 	branchPickerPRList = func(context.Context, forge.Type, string, string) ([]forge.PRInfo, error) { return nil, nil }
-	branchPickerBranchSHAs = func([]string) (map[string]string, error) {
+	branchPickerBranchSHAs = func(git.Repo, []string) (map[string]string, error) {
 		return nil, errors.New("git failed")
 	}
 
-	_, err := loadBranchPickerDataForForge(&cobra.Command{}, forge.GitHub, "owner/repo", "github.com")
+	_, err := loadBranchPickerDataForForge(&cobra.Command{}, git.Repo{}, forge.GitHub, "owner/repo", "github.com")
 
 	require.EqualError(t, err, "git failed")
 }

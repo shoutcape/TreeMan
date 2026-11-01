@@ -25,7 +25,7 @@
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/git` | Git process calls and worktree data |
+| `internal/git` | Git process calls and worktree data; `git.Open` opens a repository from a directory, and its methods run Git there rather than in the current directory |
 | `internal/worktree` | Branch slugs, collision-free worktree paths, and ignore-file changes |
 | `internal/config` | Project and global TOML configuration, plus the warm-start config writer; imports `internal/deps` to validate `deps.reuse` |
 | `internal/envfile` | Root-level `.env*` file copies |
@@ -42,6 +42,7 @@
 
 | Type | Purpose |
 | --- | --- |
+| `git.Repo` | Repository opened from a directory, with its main worktree root and common directory; each command opens one and passes it down |
 | `git.WorktreeEntry` | Worktree path and branch data |
 | `config.Config` | Database, hook, and dependency reuse configuration |
 | `database.ParsedURI` | PostgreSQL URI parts |

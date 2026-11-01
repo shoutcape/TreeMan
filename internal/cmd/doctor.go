@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -83,15 +84,15 @@ func collectDiagnostics() []diagnostic {
 			status: CheckFail, id: "git", name: "Git", message: "Not installed",
 			hint: "Install Git: https://git-scm.com/downloads",
 		})
-	} else if !git.IsInsideRepo() {
+	} else if repo, openErr := openCurrentRepo(); errors.Is(openErr, errNotInRepository) {
 		diagnostics = append(diagnostics, diagnostic{
 			status: CheckFail, id: "repository", name: "Repository", message: "Not detected",
 			hint: "Run treeman doctor from a Git repository.",
 		})
 	} else {
 		diagnostics = append(diagnostics, diagnostic{status: CheckPass, id: "repository", name: "Repository", message: "Git repository detected"})
-		diagnostics = append(diagnostics, collectForgeDiagnostic())
-		diagnostics = append(diagnostics, collectConfigDiagnostics()...)
+		diagnostics = append(diagnostics, collectForgeDiagnostic(repo, openErr))
+		diagnostics = append(diagnostics, collectConfigDiagnostics(repo, openErr)...)
 	}
 
 	diagnostics = append(diagnostics, collectFzfDiagnostic())
@@ -100,8 +101,16 @@ func collectDiagnostics() []diagnostic {
 	return diagnostics
 }
 
-func collectForgeDiagnostic() diagnostic {
-	remoteURL, err := git.OriginRemoteURL()
+// collectForgeDiagnostic checks the forge CLI for repo. openErr is the error
+// from opening repo; when it is set, the repository state is unavailable.
+func collectForgeDiagnostic(repo git.Repo, openErr error) diagnostic {
+	if openErr != nil {
+		return diagnostic{
+			status: CheckFail, id: "forge_cli", name: "Forge CLI", message: "Git repository state unavailable",
+			hint: "Resolve the Git worktree state, then rerun treeman doctor.",
+		}
+	}
+	remoteURL, err := repo.OriginRemoteURL()
 	if err != nil {
 		return diagnostic{
 			status: CheckFail, id: "forge_cli", name: "Forge CLI", message: "Origin remote not found",
@@ -131,15 +140,17 @@ func collectForgeDiagnostic() diagnostic {
 	return diagnostic{status: CheckPass, id: "forge_cli", name: "Forge CLI", message: forgeName + " repository; " + cli + " installed"}
 }
 
-func collectConfigDiagnostics() []diagnostic {
-	root, err := git.MainWorktreeRoot()
-	if err != nil {
+// collectConfigDiagnostics checks repo's configuration. openErr is the error
+// from opening repo; when it is set, the worktree state is unavailable.
+func collectConfigDiagnostics(repo git.Repo, openErr error) []diagnostic {
+	if openErr != nil {
 		return []diagnostic{{
 			status: CheckFail, id: "configuration", name: "Configuration", message: "Git worktree state unavailable",
 			hint: "Resolve the Git worktree state, then rerun treeman doctor.",
 		}}
 	}
 
+	root := repo.MainRoot()
 	result := config.Load(root)
 	if result.Warning != "" {
 		return []diagnostic{{

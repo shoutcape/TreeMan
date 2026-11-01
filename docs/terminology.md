@@ -19,6 +19,7 @@ Use these terms with the specified meaning.
 | project configuration | `.treeman.toml` found at or above the main worktree |
 | reflog | Git log of the changes to one reference, such as a branch |
 | remote branch | Branch returned by the GitHub or GitLab API |
+| repository | Git repository that TreeMan opened from a directory, identified by its main worktree and common directory; `git.Repo` in code |
 | shell integration | Managed Bash, Zsh, or Fish functions from `treeman shell install` |
 | slug suffix | Six hex characters computed from the full branch name, added to a branch slug that another branch uses |
 | snapshot | Remote and forge state read for one merge classification |

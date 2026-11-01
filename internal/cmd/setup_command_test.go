@@ -256,7 +256,7 @@ func TestSetupContinuesAfterAStepFails(t *testing.T) {
 
 func TestSetupSerializesRunsForOneWorktree(t *testing.T) {
 	_, worktree := setupTestRepo(t, "feature/lock")
-	target, err := resolveSetupTarget(worktree)
+	target, err := resolveSetupTarget(currentRepoForTest(t), worktree)
 	require.NoError(t, err)
 
 	var inner error
@@ -270,7 +270,7 @@ func TestSetupSerializesRunsForOneWorktree(t *testing.T) {
 
 func TestSetupReleasesTheLockAfterAFailure(t *testing.T) {
 	_, worktree := setupTestRepo(t, "feature/lock-release")
-	target, err := resolveSetupTarget(worktree)
+	target, err := resolveSetupTarget(currentRepoForTest(t), worktree)
 	require.NoError(t, err)
 
 	require.Error(t, withSetupLock(target, func() error { return assert.AnError }))
@@ -283,7 +283,7 @@ func TestSetupAllowsConcurrentRunsInDifferentWorktrees(t *testing.T) {
 	repo, first := setupTestRepo(t, "feature/one")
 	second := filepath.Join(t.TempDir(), "second")
 	gitTest(t, repo, "worktree", "add", "-b", "feature/two", second)
-	firstTarget, err := resolveSetupTarget(first)
+	firstTarget, err := resolveSetupTarget(currentRepoForTest(t), first)
 	require.NoError(t, err)
 
 	var inner error
@@ -297,7 +297,7 @@ func TestSetupAllowsConcurrentRunsInDifferentWorktrees(t *testing.T) {
 
 func TestSetupRejectsAChangedWorktreeAdminIDBeforeRunning(t *testing.T) {
 	repo, worktree := setupTestRepo(t, "feature/identity")
-	target, err := resolveSetupTarget(worktree)
+	target, err := resolveSetupTarget(currentRepoForTest(t), worktree)
 	require.NoError(t, err)
 	capturedID := target.worktreeID
 	chdirForTest(t, repo)
@@ -308,10 +308,10 @@ func TestSetupRejectsAChangedWorktreeAdminIDBeforeRunning(t *testing.T) {
 	replacementPath := filepath.Join(t.TempDir(), "replacement")
 	gitTest(t, repo, "worktree", "remove", "--force", worktree)
 	gitTest(t, repo, "worktree", "add", replacementPath, "feature/identity")
-	replacement, err := resolveSetupTarget(replacementPath)
+	replacement, err := resolveSetupTarget(currentRepoForTest(t), replacementPath)
 	require.NoError(t, err)
 	gitTest(t, repo, "worktree", "move", replacementPath, worktree)
-	current, err := resolveSetupTarget(worktree)
+	current, err := resolveSetupTarget(currentRepoForTest(t), worktree)
 	require.NoError(t, err)
 	require.Equal(t, target.Branch, current.Branch)
 	require.True(t, samePath(target.Path, current.Path))
@@ -321,7 +321,7 @@ func TestSetupRejectsAChangedWorktreeAdminIDBeforeRunning(t *testing.T) {
 
 	ran := false
 	err = withSetupLock(target, func() error {
-		if err := revalidateSetupTarget(target); err != nil {
+		if err := revalidateSetupTarget(currentRepoForTest(t), target); err != nil {
 			return err
 		}
 		ran = true
@@ -336,13 +336,13 @@ func TestSetupRejectsAChangedWorktreeAdminIDBeforeRunning(t *testing.T) {
 
 func TestSetupRejectsAChangedCommonDirectoryBeforeRunning(t *testing.T) {
 	_, worktree := setupTestRepo(t, "feature/common-dir")
-	target, err := resolveSetupTarget(worktree)
+	target, err := resolveSetupTarget(currentRepoForTest(t), worktree)
 	require.NoError(t, err)
 	target.commonDir = t.TempDir()
 
 	ran := false
 	err = withSetupLock(target, func() error {
-		if err := revalidateSetupTarget(target); err != nil {
+		if err := revalidateSetupTarget(currentRepoForTest(t), target); err != nil {
 			return err
 		}
 		ran = true

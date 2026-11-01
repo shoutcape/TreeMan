@@ -106,7 +106,7 @@ func TestRunListReportsStaleWorktree(t *testing.T) {
 	classifier := func(string, []string) (merge.Result, error) {
 		return merge.Result{}, nil
 	}
-	require.NoError(t, runListWithClassifier(cmd, classifier, true))
+	require.NoError(t, runListWithClassifier(cmd, currentRepoForTest(t), classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
@@ -352,7 +352,7 @@ func TestRunListDetectsSquashMergedBranch(t *testing.T) {
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
-	require.NoError(t, runListWithClassifier(cmd, classifier, true))
+	require.NoError(t, runListWithClassifier(cmd, currentRepoForTest(t), classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))
@@ -372,7 +372,7 @@ func TestRunListRemoteGoneWithoutConfirmedMergeNotMarked(t *testing.T) {
 	output := &bytes.Buffer{}
 	cmd := &cobra.Command{}
 	cmd.SetOut(output)
-	require.NoError(t, runListWithClassifier(cmd, classifier, true))
+	require.NoError(t, runListWithClassifier(cmd, currentRepoForTest(t), classifier, true))
 
 	var entries []listEntry
 	require.NoError(t, json.Unmarshal(output.Bytes(), &entries))

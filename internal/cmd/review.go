@@ -46,7 +46,11 @@ the new worktree instead.`,
 }
 
 func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions, execCommand string) error {
-	selected, err := selectReviewForWorktree(cmd, prArg)
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return err
+	}
+	selected, err := selectReviewForWorktree(cmd, repo, prArg)
 	if err != nil || selected.info.Branch == "" {
 		return err
 	}
@@ -75,14 +79,14 @@ type reviewWorktreeCreation struct {
 // selectedReview is the PR or MR a review worktree is made for. An empty
 // info.Branch means the picker was cancelled.
 type selectedReview struct {
-	mainRoot string
+	repo     git.Repo
 	info     forge.PRInfo
 	fetchRef string
 }
 
 func (s selectedReview) request(parentDir string, setupOptions creationSetupOptions) provisionRequest {
 	return provisionRequest{
-		mainRoot:  s.mainRoot,
+		repo:      s.repo,
 		parentDir: parentDir,
 		source:    pullRequestHead(s.info.Branch, s.info.Number, s.fetchRef),
 		options:   setupOptions,
@@ -91,14 +95,11 @@ func (s selectedReview) request(parentDir string, setupOptions creationSetupOpti
 
 // selectReviewForWorktree resolves prArg, or the picker's choice, to a PR or
 // MR with its head branch and the ref that fetches it.
-func selectReviewForWorktree(cmd *cobra.Command, prArg string) (selectedReview, error) {
+func selectReviewForWorktree(cmd *cobra.Command, repo git.Repo, prArg string) (selectedReview, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	if !git.IsInsideRepo() {
-		return selectedReview{}, fmt.Errorf("not inside a git repository")
-	}
 
-	forgeInfo, err := resolveReviewForge()
+	forgeInfo, err := resolveReviewForge(repo)
 	if err != nil {
 		return selectedReview{}, err
 	}
@@ -130,17 +131,13 @@ func selectReviewForWorktree(cmd *cobra.Command, prArg string) (selectedReview, 
 		return selectedReview{}, fmt.Errorf("incomplete PR/MR metadata returned by %s", forgeInfo.cliTool)
 	}
 
-	mainRoot, err := git.MainWorktreeRoot()
-	if err != nil {
-		return selectedReview{}, err
-	}
-	return selectedReview{mainRoot: mainRoot, info: info, fetchRef: forge.FetchRef(forgeInfo.forgeType, info.Number)}, nil
+	return selectedReview{repo: repo, info: info, fetchRef: forge.FetchRef(forgeInfo.forgeType, info.Number)}, nil
 }
 
-// createReviewWorktreeIn selects a PR or MR and adds its worktree without
-// setup. Benchmarks time it.
-func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
-	selected, err := selectReviewForWorktree(cmd, prArg)
+// createReviewWorktreeIn selects a PR or MR of repo and adds its worktree
+// without setup. Benchmarks time it.
+func createReviewWorktreeIn(cmd *cobra.Command, repo git.Repo, prArg, parentDir string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
+	selected, err := selectReviewForWorktree(cmd, repo, prArg)
 	if err != nil || selected.info.Branch == "" {
 		return reviewWorktreeCreation{}, err
 	}
@@ -158,8 +155,8 @@ type reviewForge struct {
 	cliTool   string
 }
 
-func resolveReviewForge() (reviewForge, error) {
-	remoteURL, err := git.OriginRemoteURL()
+func resolveReviewForge(repo git.Repo) (reviewForge, error) {
+	remoteURL, err := repo.OriginRemoteURL()
 	if err != nil {
 		return reviewForge{}, err
 	}
@@ -203,11 +200,12 @@ func streamReviewRows(render ui.Renderer, forgeInfo reviewForge, prs *[]forge.PR
 // reviewPickerResults streams the whole tmmr picker payload without starting
 // fzf, returning the number of open reviews and how long the first row took.
 func reviewPickerResults(cmd *cobra.Command) (int, time.Duration, error) {
-	if !git.IsInsideRepo() {
-		return 0, 0, fmt.Errorf("not inside a git repository")
+	repo, err := openCurrentRepo()
+	if err != nil {
+		return 0, 0, err
 	}
 	writer := newPickerResultsWriter()
-	forgeInfo, err := resolveReviewForge()
+	forgeInfo, err := resolveReviewForge(repo)
 	if err != nil {
 		return 0, 0, err
 	}
