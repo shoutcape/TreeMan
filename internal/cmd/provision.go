@@ -319,21 +319,21 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 }
 
 // guard refuses a source whose branch would be created over a local branch.
+// It runs before consent and fetch, so the refusal costs nothing.
 func (s worktreeSource) guard() error {
-	switch s.kind {
-	case sourceNewFromDefault:
-		if git.BranchExists(s.branch) {
-			return fmt.Errorf("branch %q already exists locally", s.branch)
-		}
-	case sourcePullRequestHead:
-		if git.BranchExists(s.branch) {
-			if existing, _ := git.FindWorktreeForBranch(s.branch); existing != "" {
-				return fmt.Errorf("branch %q already has a worktree at %q", s.branch, existing)
-			}
-			return fmt.Errorf("PR/MR head branch %q already exists locally", s.branch)
-		}
+	if s.kind == sourceExisting || !git.BranchExists(s.branch) {
+		return nil
 	}
-	return nil
+	if s.kind == sourceNewFromDefault {
+		return fmt.Errorf("branch %q already exists locally", s.branch)
+	}
+	if existing, _ := git.FindWorktreeForBranch(s.branch); existing != "" {
+		return fmt.Errorf("branch %q already has a worktree at %q", s.branch, existing)
+	}
+	if s.kind == sourcePullRequestHead {
+		return fmt.Errorf("PR/MR head branch %q already exists locally", s.branch)
+	}
+	return fmt.Errorf("branch %q already exists locally", s.branch)
 }
 
 // fallbackStartPoint finds a start point for fetchFallBackToCached: the
