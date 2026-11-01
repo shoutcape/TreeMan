@@ -15,6 +15,10 @@ import (
 
 // captureStagedRemoval makes cleanup synchronous so filesystem assertions do
 // not race the detached process.
+//
+// It replaces a package variable, so a test that calls it must not be
+// parallel. Go resumes parallel tests only after every serial top-level test
+// has returned, so serial swaps never overlap a parallel removal.
 func captureStagedRemoval(t *testing.T) *[]string {
 	t.Helper()
 	staged := []string{}
@@ -46,7 +50,7 @@ func TestRemoveWorktreeAndBranchStagesThroughTheTrashDirectory(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("x"), 0o644))
 	staged := captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, true)
 
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
@@ -66,7 +70,7 @@ func TestRemoveWorktreeAndBranchUnregistersAMissingDirectory(t *testing.T) {
 	require.NoError(t, os.RemoveAll(worktree))
 	staged := captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
@@ -97,7 +101,7 @@ func TestRemoveWorktreeAndBranchReturnsWhileCleanupIsPending(t *testing.T) {
 	})
 
 	start := time.Now()
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, true)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -117,7 +121,7 @@ func TestRemoveWorktreeAndBranchRestoresDirtyWorktreeWithoutForce(t *testing.T) 
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("unsaved"), 0o644))
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "uncommitted or untracked changes")
@@ -136,7 +140,7 @@ func TestRemoveWorktreeAndBranchRestoresAForeignOccupant(t *testing.T) {
 	require.NoError(t, os.Rename(foreign, worktree))
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not the expected linked-worktree file")
@@ -155,7 +159,7 @@ func TestRemoveWorktreeAndBranchRestoresASiblingMovedOntoThePath(t *testing.T) {
 	require.NoError(t, os.Rename(sibling, worktree))
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "different registration")
@@ -176,7 +180,7 @@ func TestRemoveWorktreeAndBranchRejectsMainRepositoryMetadataAtLinkedPath(t *tes
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "unrelated"), []byte("keep"), 0o644))
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, true)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), ".git entry is not the expected linked-worktree file")
@@ -186,6 +190,7 @@ func TestRemoveWorktreeAndBranchRejectsMainRepositoryMetadataAtLinkedPath(t *tes
 }
 
 func TestDetachRemoveAllRefusesMatchingDirectoryNamesOutsideActualTrash(t *testing.T) {
+	t.Parallel()
 	actualTrash := filepath.Join(t.TempDir(), "repo", "treeman", "trash")
 	outsideJob := filepath.Join(t.TempDir(), "treeman", "trash", "job")
 	require.NoError(t, os.MkdirAll(actualTrash, 0o700))
@@ -199,6 +204,7 @@ func TestDetachRemoveAllRefusesMatchingDirectoryNamesOutsideActualTrash(t *testi
 }
 
 func TestDetachRemoveAllCompletesQueuedJob(t *testing.T) {
+	t.Parallel()
 	trashRoot := filepath.Join(t.TempDir(), "treeman", "trash")
 	job := filepath.Join(trashRoot, "job")
 	require.NoError(t, os.MkdirAll(job, 0o700))
@@ -230,7 +236,7 @@ func TestRemoveWorktreeAndBranchRestoresAFileAtTheRegisteredPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(worktree, []byte("unrelated data"), 0o644))
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 	require.Error(t, err)
 	assert.False(t, result.WorktreeUnregistered)
@@ -250,7 +256,7 @@ func TestRemoveWorktreeAndBranchQueuesCleanupAfterDetachFailure(t *testing.T) {
 	detachRemoval = func(string, string) error { return assert.AnError }
 	t.Cleanup(func() { detachRemoval = previous })
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
@@ -269,7 +275,7 @@ func TestRemoveWorktreeAndBranchRetriesQueuedCleanup(t *testing.T) {
 	detachRemoval = func(string, string) error { return assert.AnError }
 	t.Cleanup(func() { detachRemoval = previous })
 
-	firstResult, err := RemoveWorktreeAndBranch(repo, first, "first", firstSHA, false)
+	firstResult, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(first, "first", firstSHA, false)
 	require.NoError(t, err)
 	require.True(t, CleanupPending(firstResult.CleanupJob))
 
@@ -281,7 +287,7 @@ func TestRemoveWorktreeAndBranchRetriesQueuedCleanup(t *testing.T) {
 		return os.RemoveAll(job)
 	}
 
-	secondResult, err := RemoveWorktreeAndBranch(repo, second, "second", secondSHA, false)
+	secondResult, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(second, "second", secondSHA, false)
 
 	require.NoError(t, err)
 	assert.False(t, CleanupPending(secondResult.CleanupJob))
@@ -301,7 +307,7 @@ func TestRemoveWorktreeAndBranchReportsDurableCleanupDiagnostic(t *testing.T) {
 	expectedSHA := branchSHAForRemoval(t, repo, "feature")
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 	require.NoError(t, err)
 	require.Error(t, result.CleanupError)
@@ -416,6 +422,7 @@ func removalFailureOf(t *testing.T, err error) *RemovalError {
 // staging renames it away first. A symlinked prefix reproduces that here on
 // any platform.
 func TestCanonicalPathResolvesThroughASymlinkedPrefixWhenTheLeafIsGone(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	real := filepath.Join(root, "real")
 	link := filepath.Join(root, "link")
@@ -455,7 +462,7 @@ func TestRemoveWorktreeAndBranchFindsAVanishedWorktreeThroughASymlinkedPrefix(t 
 
 	// The caller names the worktree through the link; Git recorded the real
 	// path, and neither one exists any more.
-	result, err := RemoveWorktreeAndBranch(filepath.Join(link, "repo"), filepath.Join(link, "feature"), "feature", sha, false)
+	result, err := openTestRepo(t, filepath.Join(link, "repo")).RemoveWorktreeAndBranch(filepath.Join(link, "feature"), "feature", sha, false)
 
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
@@ -476,7 +483,7 @@ func TestRemovalReclaimsOrphanedCleanupBookkeeping(t *testing.T) {
 	require.NoError(t, os.WriteFile(cleanupErrorPath(trashRoot, orphan), []byte("rmdir: Directory not empty"), 0o600))
 	captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 	require.NoError(t, err)
 	require.Error(t, result.CleanupError)
@@ -488,6 +495,7 @@ func TestRemovalReclaimsOrphanedCleanupBookkeeping(t *testing.T) {
 // A cleanup that is running has already removed its job directory and still
 // holds its lock, which must not be mistaken for an orphan.
 func TestReclaimOrphanedCleanupFilesLeavesARunningCleanupAlone(t *testing.T) {
+	t.Parallel()
 	trashRoot := t.TempDir()
 	job := filepath.Join(trashRoot, "worktree-running")
 	lockPath := cleanupLockPath(trashRoot, job)
@@ -515,7 +523,7 @@ func TestRemovalSurvivesCaptureMetadataThatRecordsNoPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(stranded, cleanupOriginalPathFile), nil, 0o600))
 	cleaned := captureStagedRemoval(t)
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 	require.NoError(t, err, "one unreadable capture must not stop the repository")
 	assert.True(t, result.WorktreeUnregistered)
@@ -539,13 +547,15 @@ func TestRemovalDoesNotMatchAPathlessCaptureAgainstTheWorkingDirectory(t *testin
 	stranded := filepath.Join(trashRoot, "worktree-stranded")
 	require.NoError(t, os.MkdirAll(filepath.Join(stranded, stagedWorktreeName), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(stranded, cleanupOriginalPathFile), []byte("   "), 0o600))
-	restore, err := os.Getwd()
+	// The hazard: an empty path made absolute is the process's working
+	// directory. Tests in this package never change directory, so the guard
+	// itself is pinned by comparing against the directory Abs resolves to.
+	cwd, err := os.Getwd()
 	require.NoError(t, err)
-	require.NoError(t, os.Chdir(worktree))
-	t.Cleanup(func() { _ = os.Chdir(restore) })
+	require.True(t, sameRemovalPath("", cwd), "an empty path canonicalizes to the working directory")
 	captureStagedRemoval(t)
 
-	_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	_, err = openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 	require.NoError(t, err, "a capture with no recorded path belongs to no candidate")
 }
@@ -557,7 +567,7 @@ func TestRemoveWorktreeAndBranchRefusesAgainstTheRegisteredPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("unsaved"), 0o600))
 	captureStagedRemoval(t)
 
-	_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	_, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 	require.Error(t, err)
 	// Compare canonically: Git records the resolved path, and a temporary
@@ -575,7 +585,7 @@ func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(worktree, "scratch"), []byte("unsaved"), 0o644))
 		captureStagedRemoval(t)
 
-		_, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+		_, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 		failure := removalFailureOf(t, err)
 		assert.Equal(t, RemovalScopeCandidate, failure.Scope)
@@ -595,7 +605,7 @@ func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
 		// does so whoever is running: no privilege waives ENOTDIR.
 		require.NoError(t, os.WriteFile(trashRoot, []byte("not a queue"), 0o600))
 
-		_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+		_, err = openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 		failure := removalFailureOf(t, err)
 		assert.Equal(t, RemovalScopeRepository, failure.Scope)
@@ -617,7 +627,7 @@ func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
 			t.Skip("the cleanup queue is readable despite its mode; this needs an unprivileged user")
 		}
 
-		_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+		_, err = openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 		// Every candidate reads this queue, so blaming the worktree that
 		// reached it first would repeat one repository problem per worktree.
@@ -641,7 +651,7 @@ func TestRemoveWorktreeAndBranchClassifiesFailuresByWhatSurvived(t *testing.T) {
 		}
 		t.Cleanup(func() { detachRemoval = previous })
 
-		result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+		result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 		failure := removalFailureOf(t, err)
 		assert.Equal(t, RemovalScopeBranchRetained, failure.Scope)
@@ -663,7 +673,7 @@ func TestRemoveWorktreeAndBranchReportsUnregisterBeforeCompareDeleteFailure(t *t
 	}
 	t.Cleanup(func() { detachRemoval = previous })
 
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", expectedSHA, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", expectedSHA, false)
 
 	require.Error(t, err)
 	assert.True(t, result.WorktreeUnregistered)
@@ -673,6 +683,7 @@ func TestRemoveWorktreeAndBranchReportsUnregisterBeforeCompareDeleteFailure(t *t
 }
 
 func TestRestoreStagedWorktreeDoesNotReplaceARecreatedPath(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	original := filepath.Join(root, "worktree")
 	job := filepath.Join(root, "trash", "job")
@@ -725,7 +736,7 @@ func TestRemovalPreservesUnresolvedCaptureAcrossRetries(t *testing.T) {
 			}
 			cleaned := captureStagedRemoval(t)
 			for i := 0; i < 2; i++ {
-				result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, true)
+				result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, true)
 				require.ErrorContains(t, err, staged.path)
 				assert.False(t, result.WorktreeUnregistered)
 				assert.False(t, result.BranchDeleted)
@@ -761,9 +772,9 @@ func TestRemovalWithRelativeGitReferences(t *testing.T) {
 	backlink, err := filepath.Rel(registration, filepath.Join(registered, ".git"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(registration, "gitdir"), []byte(backlink+"\n"), 0o600))
-	require.NoError(t, EnsureHoldsWorktree(repo, worktree))
+	require.NoError(t, openTestRepo(t, repo).EnsureHoldsWorktree(worktree))
 	captureStagedRemoval(t)
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 	require.NoError(t, err)
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
@@ -784,7 +795,7 @@ func TestRemovalRecoversAJobThatCapturedNothing(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(worktree), 0o600))
 
 	cleaned := captureStagedRemoval(t)
-	result, err := RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	result, err := openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 	require.NoError(t, err, "an empty capture must not refuse removal of its own worktree")
 	assert.True(t, result.WorktreeUnregistered)
@@ -794,6 +805,7 @@ func TestRemovalRecoversAJobThatCapturedNothing(t *testing.T) {
 }
 
 func TestRemovalStillProtectsACaptureWhoseDirectoryExists(t *testing.T) {
+	t.Parallel()
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
 	sha := branchSHAForRemoval(t, repo, "feature")
@@ -806,13 +818,14 @@ func TestRemovalStillProtectsACaptureWhoseDirectoryExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(job, cleanupOriginalPathFile), []byte(worktree), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(job, stagedWorktreeName), 0o700))
 
-	_, err = RemoveWorktreeAndBranch(repo, worktree, "feature", sha, false)
+	_, err = openTestRepo(t, repo).RemoveWorktreeAndBranch(worktree, "feature", sha, false)
 
 	require.ErrorContains(t, err, "unresolved captured data remains")
 	assert.DirExists(t, filepath.Join(job, stagedWorktreeName))
 }
 
 func TestForcedRemovalSkipsTheUntrackedFileScan(t *testing.T) {
+	t.Parallel()
 	repo := createGitTestRepo(t)
 	worktree := addTestWorktree(t, repo, "feature")
 	commonDir, err := CommonDir(repo)

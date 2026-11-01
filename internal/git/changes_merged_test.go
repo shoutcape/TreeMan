@@ -29,11 +29,11 @@ func changesRepo(t *testing.T) (repo, topic string) {
 
 func changesMergedIn(t *testing.T, repo, target, tip string) (bool, error) {
 	t.Helper()
-	chdirAgentTest(t, repo)
-	return ChangesMerged(target, tip)
+	return openTestRepo(t, repo).ChangesMerged(target, tip)
 }
 
 func TestChangesMergedAfterASquashMerge(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	commitTestFile(t, topic, "a.txt", "a\nb\n", "b")
@@ -48,6 +48,7 @@ func TestChangesMergedAfterASquashMerge(t *testing.T) {
 }
 
 func TestChangesMergedAfterARebaseMergeWithOtherWorkOnTarget(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	commitTestFile(t, topic, "b.txt", "b\n", "b")
@@ -62,6 +63,7 @@ func TestChangesMergedAfterARebaseMergeWithOtherWorkOnTarget(t *testing.T) {
 }
 
 func TestChangesMergedAcceptsCommitIDs(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	gitTest(t, repo, "merge", "--squash", "topic")
@@ -76,6 +78,7 @@ func TestChangesMergedAcceptsCommitIDs(t *testing.T) {
 }
 
 func TestChangesMergedIsFalseForAnUnmergedBranch(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	commitTestFile(t, repo, "main.txt", "main\n", "main work")
@@ -87,6 +90,7 @@ func TestChangesMergedIsFalseForAnUnmergedBranch(t *testing.T) {
 }
 
 func TestChangesMergedIsFalseForAPartialMerge(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	commitTestFile(t, topic, "b.txt", "b\n", "b")
@@ -99,6 +103,7 @@ func TestChangesMergedIsFalseForAPartialMerge(t *testing.T) {
 }
 
 func TestChangesMergedIsFalseForOnlyEmptyCommits(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	gitTest(t, topic, "commit", "--allow-empty", "-m", "empty one")
 	gitTest(t, topic, "commit", "--allow-empty", "-m", "empty two")
@@ -111,6 +116,7 @@ func TestChangesMergedIsFalseForOnlyEmptyCommits(t *testing.T) {
 }
 
 func TestChangesMergedIsFalseForCommitsThatCancelOut(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	gitTest(t, topic, "revert", "--no-edit", "HEAD")
@@ -122,6 +128,7 @@ func TestChangesMergedIsFalseForCommitsThatCancelOut(t *testing.T) {
 }
 
 func TestChangesMergedIsFalseForAConflictAndLeavesTheCheckoutAlone(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "file", "topic\n", "topic edit")
 	commitTestFile(t, repo, "file", "main\n", "main edit")
@@ -139,6 +146,7 @@ func TestChangesMergedIsFalseForAConflictAndLeavesTheCheckoutAlone(t *testing.T)
 }
 
 func TestChangesMergedIsFalseWhenTheMergedChangeWasLaterEditedOnTarget(t *testing.T) {
+	t.Parallel()
 	repo, topic := changesRepo(t)
 	commitTestFile(t, topic, "a.txt", "a\n", "a")
 	gitTest(t, repo, "merge", "--squash", "topic")
@@ -151,6 +159,7 @@ func TestChangesMergedIsFalseWhenTheMergedChangeWasLaterEditedOnTarget(t *testin
 }
 
 func TestChangesMergedFailsForUnrelatedHistories(t *testing.T) {
+	t.Parallel()
 	repo := createGitTestRepo(t)
 	gitTest(t, repo, "checkout", "--orphan", "unrelated")
 	commitTestFile(t, repo, "file", "base\n", "same content, no shared history")
@@ -163,6 +172,7 @@ func TestChangesMergedFailsForUnrelatedHistories(t *testing.T) {
 }
 
 func TestChangesMergedFailsForAMissingRef(t *testing.T) {
+	t.Parallel()
 	repo := createGitTestRepo(t)
 
 	merged, err := changesMergedIn(t, repo, "main", "does-not-exist")
@@ -176,6 +186,7 @@ func TestChangesMergedFailsForAMissingRef(t *testing.T) {
 // already in main, but topic has work main lacks: it set f back to v0 after
 // main took v1.
 func TestChangesMergedIsFalseForACrissCrossHistory(t *testing.T) {
+	t.Parallel()
 	repo := createGitTestRepo(t)
 	commitTestFile(t, repo, "f", "v0\n", "A")
 	topic := filepath.Join(t.TempDir(), "topic")

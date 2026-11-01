@@ -116,9 +116,10 @@ type stagedWorktree struct {
 // RemoveWorktreeAndBranch validates and removes one linked worktree and its
 // branch while holding TreeMan's repository mutation lock. The directory is
 // renamed before identity and cleanliness are checked, so the checks apply to
-// the exact object that can later be unlinked.
-func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force bool) (RemoveWorktreeResult, error) {
-	return removeWorktree(mainRoot, path, branch, expectedSHA, force, false)
+// the exact object that can later be unlinked. Git runs from the main
+// worktree, which is never the one being removed.
+func (r Repo) RemoveWorktreeAndBranch(path, branch, expectedSHA string, force bool) (RemoveWorktreeResult, error) {
+	return removeWorktree(r.mainRoot, path, branch, expectedSHA, force, false)
 }
 
 // RemoveWorktreeKeepingBranch removes one linked worktree exactly as
@@ -126,8 +127,8 @@ func RemoveWorktreeAndBranch(mainRoot, path, branch, expectedSHA string, force b
 // checks -- but leaves its branch in place. A detached worktree is named with
 // an empty branch. expectedSHA, when given, still pins the branch tip, so a
 // caller that decided what to keep from one commit acts on that commit.
-func RemoveWorktreeKeepingBranch(mainRoot, path, branch, expectedSHA string, force bool) (RemoveWorktreeResult, error) {
-	return removeWorktree(mainRoot, path, branch, expectedSHA, force, true)
+func (r Repo) RemoveWorktreeKeepingBranch(path, branch, expectedSHA string, force bool) (RemoveWorktreeResult, error) {
+	return removeWorktree(r.mainRoot, path, branch, expectedSHA, force, true)
 }
 
 func removeWorktree(mainRoot, path, branch, expectedSHA string, force, keepBranch bool) (RemoveWorktreeResult, error) {
@@ -252,15 +253,15 @@ func classifiedRemovalFailure(err error) error {
 // and execution. Its result is a snapshot, not authorization: execution must
 // supply freshly read entries and call it under the repository mutation lock.
 // Directory identity and cleanliness are checked separately after staging.
-func ValidateWorktreeRemoval(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
-	return validateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA, false)
+func (r Repo) ValidateWorktreeRemoval(entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
+	return validateWorktreeRemoval(r.mainRoot, entries, path, branch, expectedSHA, false)
 }
 
 // ValidateWorktreeRemovalKeepingBranch is ValidateWorktreeRemoval for a
 // removal that leaves the branch in place. Such a removal may name a detached
 // worktree with an empty branch, which has no tip to resolve.
-func ValidateWorktreeRemovalKeepingBranch(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
-	return validateWorktreeRemoval(mainRoot, entries, path, branch, expectedSHA, true)
+func (r Repo) ValidateWorktreeRemovalKeepingBranch(entries []WorktreeEntry, path, branch, expectedSHA string) (WorktreeEntry, string, error) {
+	return validateWorktreeRemoval(r.mainRoot, entries, path, branch, expectedSHA, true)
 }
 
 func validateWorktreeRemoval(mainRoot string, entries []WorktreeEntry, path, branch, expectedSHA string, keepBranch bool) (WorktreeEntry, string, error) {
@@ -318,6 +319,10 @@ func registeredWorktreeAt(entries []WorktreeEntry, path string) (WorktreeEntry, 
 // requested path. It deliberately does not inspect the object currently at the
 // path; that object is checked against this registration only after staging.
 func linkedRegistrationDir(commonDir, worktreePath string) (string, error) {
+	// An empty common directory would resolve against the current one.
+	if commonDir == "" {
+		return "", repositoryFailure(fmt.Errorf("cannot remove worktree %q: no repository given", worktreePath))
+	}
 	registrations := filepath.Join(commonDir, "worktrees")
 	entries, err := os.ReadDir(registrations)
 	if err != nil {
@@ -848,13 +853,8 @@ func canonicalExistingPath(path string) (string, error) {
 // This is the plan-time half of the identity check: it names the problem
 // before the user is asked to confirm. validateStagedWorktree makes the same
 // guarantee about the captured directory, under the lock, after the rename.
-func EnsureHoldsWorktree(mainRoot, path string) error {
-	commonDir, err := CommonDir(mainRoot)
-	if err != nil {
-		return err
-	}
-
-	gitDir, err := linkedRegistrationDir(commonDir, path)
+func (r Repo) EnsureHoldsWorktree(path string) error {
+	gitDir, err := linkedRegistrationDir(r.commonDir, path)
 	if err != nil {
 		return err
 	}

@@ -13,7 +13,9 @@ import (
 // RENAME_NOREPLACE, and what every other platform uses outright, so its
 // guarantee is exercised here rather than only through the platform in use.
 func TestRenameCheckedNoReplace(t *testing.T) {
+	t.Parallel()
 	t.Run("moves into a free path", func(t *testing.T) {
+		t.Parallel()
 		root := t.TempDir()
 		source := filepath.Join(root, "source")
 		destination := filepath.Join(root, "destination")
@@ -28,6 +30,7 @@ func TestRenameCheckedNoReplace(t *testing.T) {
 	})
 
 	t.Run("refuses an occupied path", func(t *testing.T) {
+		t.Parallel()
 		root := t.TempDir()
 		source := filepath.Join(root, "source")
 		destination := filepath.Join(root, "destination")
@@ -47,6 +50,7 @@ func TestRenameCheckedNoReplace(t *testing.T) {
 
 // The exported behaviour must hold whichever implementation the build selects.
 func TestRenameNoReplaceRefusesAnOccupiedPath(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	destination := filepath.Join(root, "destination")
