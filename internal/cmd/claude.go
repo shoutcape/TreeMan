@@ -418,10 +418,7 @@ func (repo claudeRepository) createReview(cmd *cobra.Command, input claudeHookIn
 	if err != nil {
 		return "", err
 	}
-	if selected.info.Branch == "" {
-		return "", fmt.Errorf("no PR or MR #%s to check out", number)
-	}
-	return repo.provisionRequest(cmd, selected.request(repo.parentDir, options), func(created git.CreatedWorktree) agentworktree.Record {
+	return repo.provisionAndRecord(cmd, selected.request(repo.parentDir, options), func(created git.CreatedWorktree) agentworktree.Record {
 		return agentworktree.Record{
 			Agent:     claudeAgent,
 			Name:      input.Name,
@@ -434,7 +431,7 @@ func (repo claudeRepository) createReview(cmd *cobra.Command, input claudeHookIn
 
 // provision provisions a worktree for source in the repository.
 func (repo claudeRepository) provision(cmd *cobra.Command, source worktreeSource, options creationSetupOptions, record func(git.CreatedWorktree) agentworktree.Record) (string, error) {
-	return repo.provisionRequest(cmd, provisionRequest{
+	return repo.provisionAndRecord(cmd, provisionRequest{
 		mainRoot:  repo.mainRoot,
 		parentDir: repo.parentDir,
 		source:    source,
@@ -442,10 +439,10 @@ func (repo claudeRepository) provision(cmd *cobra.Command, source worktreeSource
 	}, record)
 }
 
-// provisionRequest provisions req and records the worktree before setup, so a
+// provisionAndRecord provisions req and records the worktree before setup, so a
 // hook that times out during a long install still leaves a worktree TreeMan
 // knows it owns.
-func (repo claudeRepository) provisionRequest(cmd *cobra.Command, req provisionRequest, record func(git.CreatedWorktree) agentworktree.Record) (string, error) {
+func (repo claudeRepository) provisionAndRecord(cmd *cobra.Command, req provisionRequest, record func(git.CreatedWorktree) agentworktree.Record) (string, error) {
 	req.afterAdd = func(created git.CreatedWorktree) error {
 		next := record(created)
 		next.WorktreePath = git.CanonicalPath(created.Path)

@@ -54,16 +54,16 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	if err != nil {
 		return err
 	}
-	created := reviewWorktreeCreation{paths: provisioned.paths, worktree: provisioned.worktree, info: selected.info}
+	created, info := provisioned.worktree, selected.info
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Review worktree ready:"))
-	fmt.Fprintf(out, "  PR/MR:  %s\n", render.PR(fmt.Sprintf("#%d", created.info.Number)))
-	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(created.info.Title, 10)))
-	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
-	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	return deliverWorktree(cmd, created.worktree.Path, execCommand)
+	fmt.Fprintf(out, "  PR/MR:  %s\n", render.PR(fmt.Sprintf("#%d", info.Number)))
+	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(info.Title, 10)))
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.Branch, 10)))
+	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.Path, 10)))
+	return deliverWorktree(cmd, created.Path, execCommand)
 }
 
 type reviewWorktreeCreation struct {

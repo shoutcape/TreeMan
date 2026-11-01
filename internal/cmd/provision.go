@@ -11,7 +11,8 @@ import (
 
 // Worktree provisioning: creating a worktree, then running its setup steps.
 //
-// Every command that makes a worktree goes through provisionWorktree, so the
+// create, branch, review, and the Claude Code hook go through
+// provisionWorktree, and `treeman setup` through reprovisionWorktree, so the
 // rules that live in the order of the steps are kept in one place:
 //
 //   - a branch that would be created must not already exist locally;
@@ -24,7 +25,8 @@ import (
 //   - the warm-start offer comes after the lock is released.
 //
 // Callers choose where the branch comes from (a worktreeSource), then print
-// their own banner and deliver the worktree.
+// their own banner and deliver the worktree. The delete benchmark builds its
+// fixture worktree by hand, outside the lock, and is the one exception.
 
 // fetchPolicy says what a new branch does when fetching its start point fails.
 type fetchPolicy int
@@ -121,7 +123,7 @@ func createdSetupTarget(created git.CreatedWorktree) (setupTarget, error) {
 	}
 	return setupTarget{
 		WorktreeEntry: git.WorktreeEntry{Path: created.Path, Branch: created.Branch},
-		commonDir:     commonDir,
+		commonDir:     git.CanonicalPath(commonDir),
 		worktreeID:    id,
 	}, nil
 }
@@ -156,9 +158,14 @@ func provisionWorktree(cmd *cobra.Command, req provisionRequest) (provisionedWor
 	if err != nil {
 		// The worktree exists and is usable, so it is still delivered. A
 		// held lock means another run is already setting it up.
-		message := fmt.Sprintf("setup skipped: %v; run `treeman setup` in the worktree to set it up", err)
-		if errors.Is(err, errSetupRunning) {
-			message = fmt.Sprintf("setup skipped: %v", err)
+		message := fmt.Sprintf("setup skipped: %v", err)
+		if !errors.Is(err, errSetupRunning) {
+			message += "; run `treeman setup` in the worktree to set it up"
+		}
+		// `treeman setup` skips hooks unless asked, so the other run, or the
+		// one suggested above, may not run the hooks approved here.
+		if len(added.paths.hooks.commands) > 0 {
+			message += "; post-create hooks did not run (`treeman setup --rerun-hooks` runs them)"
 		}
 		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", message))
 		return provisionedWorktree{addedWorktree: added, setupSkipped: true}, nil
@@ -323,9 +330,6 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 func (s worktreeSource) guard() error {
 	if s.kind == sourceExisting || !git.BranchExists(s.branch) {
 		return nil
-	}
-	if s.kind == sourceNewFromDefault {
-		return fmt.Errorf("branch %q already exists locally", s.branch)
 	}
 	if existing, _ := git.FindWorktreeForBranch(s.branch); existing != "" {
 		return fmt.Errorf("branch %q already has a worktree at %q", s.branch, existing)

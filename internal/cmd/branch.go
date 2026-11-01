@@ -62,17 +62,17 @@ func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationS
 	if err != nil {
 		return err
 	}
-	created := branchWorktreeCreation{paths: provisioned.paths, worktree: provisioned.worktree, prMap: selected.prMap}
+	created := provisioned.worktree
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
-	if pr, ok := created.prMap[created.worktree.Branch]; ok {
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.Branch, 10)))
+	if pr, ok := selected.prMap[created.Branch]; ok {
 		fmt.Fprintf(out, "  MR/PR:  #%d - %s\n", pr.Number, pr.Title)
 	}
-	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	return deliverWorktree(cmd, created.worktree.Path, execCommand)
+	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.Path, 10)))
+	return deliverWorktree(cmd, created.Path, execCommand)
 }
 
 type branchWorktreeCreation struct {
