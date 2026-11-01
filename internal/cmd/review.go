@@ -46,23 +46,24 @@ the new worktree instead.`,
 }
 
 func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions, execCommand string) error {
-	created, err := createReviewWorktree(cmd, prArg, setupOptions)
-	if err != nil || created.worktree.Path == "" {
+	selected, err := selectReviewForWorktree(cmd, prArg)
+	if err != nil || selected.info.Branch == "" {
 		return err
 	}
+	provisioned, err := provisionWorktree(cmd, selected.request("", setupOptions))
+	if err != nil {
+		return err
+	}
+	created, info := provisioned.worktree, selected.info
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
-	fmt.Fprintln(out)
-	printSetupSummary(out, render, summary)
-	offerWarmStarts(cmd, created.paths.projectPaths, setupOptions.skipDeps)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Review worktree ready:"))
-	fmt.Fprintf(out, "  PR/MR:  %s\n", render.PR(fmt.Sprintf("#%d", created.info.Number)))
-	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(created.info.Title, 10)))
-	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
-	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.worktree.Path, 10)))
-	return deliverWorktree(cmd, created.worktree.Path, execCommand)
+	fmt.Fprintf(out, "  PR/MR:  %s\n", render.PR(fmt.Sprintf("#%d", info.Number)))
+	fmt.Fprintf(out, "  Title:  %s\n", render.Muted(render.Fit(info.Title, 10)))
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.Branch, 10)))
+	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(created.Path, 10)))
+	return deliverWorktree(cmd, created.Path, execCommand)
 }
 
 type reviewWorktreeCreation struct {
@@ -71,20 +72,35 @@ type reviewWorktreeCreation struct {
 	info     forge.PRInfo
 }
 
-func createReviewWorktree(cmd *cobra.Command, prArg string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
-	return createReviewWorktreeIn(cmd, prArg, "", setupOptions)
+// selectedReview is the PR or MR a review worktree is made for. An empty
+// info.Branch means the picker was cancelled.
+type selectedReview struct {
+	mainRoot string
+	info     forge.PRInfo
+	fetchRef string
 }
 
-func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
+func (s selectedReview) request(parentDir string, setupOptions creationSetupOptions) provisionRequest {
+	return provisionRequest{
+		mainRoot:  s.mainRoot,
+		parentDir: parentDir,
+		source:    pullRequestHead(s.info.Branch, s.info.Number, s.fetchRef),
+		options:   setupOptions,
+	}
+}
+
+// selectReviewForWorktree resolves prArg, or the picker's choice, to a PR or
+// MR with its head branch and the ref that fetches it.
+func selectReviewForWorktree(cmd *cobra.Command, prArg string) (selectedReview, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
-		return reviewWorktreeCreation{}, fmt.Errorf("not inside a git repository")
+		return selectedReview{}, fmt.Errorf("not inside a git repository")
 	}
 
 	forgeInfo, err := resolveReviewForge()
 	if err != nil {
-		return reviewWorktreeCreation{}, err
+		return selectedReview{}, err
 	}
 	// Resolve PR number — prompt via fzf if not provided.
 	var prNumber int
@@ -93,71 +109,46 @@ func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string, setupOp
 		if err != nil {
 			if errors.Is(err, errPickerCancelled) {
 				fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
-				return reviewWorktreeCreation{}, nil
+				return selectedReview{}, nil
 			}
-			return reviewWorktreeCreation{}, err
+			return selectedReview{}, err
 		}
 	} else {
 		prNumber, err = validate.PRNumber(prArg)
 		if err != nil {
-			return reviewWorktreeCreation{}, fmt.Errorf("usage: treeman review [pr-number]\n%w", err)
+			return selectedReview{}, fmt.Errorf("usage: treeman review [pr-number]\n%w", err)
 		}
 	}
 
 	// Fetch PR/MR metadata.
 	info, err := forge.PRMetadata(commandContext(cmd), forgeInfo.forgeType, forgeInfo.repoSlug, forgeInfo.host, prNumber)
 	if err != nil {
-		return reviewWorktreeCreation{}, fmt.Errorf("failed to resolve PR/MR #%d with %s: %w", prNumber, forgeInfo.cliTool, err)
+		return selectedReview{}, fmt.Errorf("failed to resolve PR/MR #%d with %s: %w", prNumber, forgeInfo.cliTool, err)
 	}
 
 	if info.Branch == "" {
-		return reviewWorktreeCreation{}, fmt.Errorf("incomplete PR/MR metadata returned by %s", forgeInfo.cliTool)
+		return selectedReview{}, fmt.Errorf("incomplete PR/MR metadata returned by %s", forgeInfo.cliTool)
 	}
 
 	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
+		return selectedReview{}, err
+	}
+	return selectedReview{mainRoot: mainRoot, info: info, fetchRef: forge.FetchRef(forgeInfo.forgeType, info.Number)}, nil
+}
+
+// createReviewWorktreeIn selects a PR or MR and adds its worktree without
+// setup. Benchmarks time it.
+func createReviewWorktreeIn(cmd *cobra.Command, prArg, parentDir string, setupOptions creationSetupOptions) (reviewWorktreeCreation, error) {
+	selected, err := selectReviewForWorktree(cmd, prArg)
+	if err != nil || selected.info.Branch == "" {
 		return reviewWorktreeCreation{}, err
 	}
-	// Guard: branch must not already exist locally.
-	if git.BranchExists(info.Branch) {
-		existing, _ := git.FindWorktreeForBranch(info.Branch)
-		if existing != "" {
-			return reviewWorktreeCreation{}, fmt.Errorf("branch %q already has a worktree at %q", info.Branch, existing)
-		}
-		return reviewWorktreeCreation{}, fmt.Errorf("PR/MR head branch %q already exists locally", info.Branch)
-	}
-
-	// Settle the destination before fetching the PR/MR ref.
-	paths, err := prepareApprovedCreationPaths(cmd, mainRoot, info.Branch, parentDir, setupOptions)
+	added, err := addWorktree(cmd, selected.request(parentDir, setupOptions))
 	if err != nil {
 		return reviewWorktreeCreation{}, err
 	}
-
-	// Fetch the PR/MR ref.
-	fetchRef := forge.FetchRef(forgeInfo.forgeType, info.Number)
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching PR/MR #%d from origin...", info.Number)))
-	fetchedSHA, err := git.FetchCommit(fetchRef)
-	if err != nil {
-		return reviewWorktreeCreation{}, err
-	}
-
-	// Create the worktree.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating review worktree at %s (branch: %s)...", paths.path, info.Branch)))
-	created, err := git.CreatePlannedWorktree(paths.plan(info.Branch), info.Branch, fetchedSHA)
-	if err != nil {
-		return reviewWorktreeCreation{}, err
-	}
-
-	// Fetch the branch by name so origin/<branch> remote-tracking ref exists,
-	// then set upstream so git pull/push work without explicit remote args.
-	// Non-fatal: fork PRs may not have the branch on origin.
-	if err := git.Fetch(info.Branch); err != nil {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not fetch branch %q (upstream not set): %v", info.Branch, err)))
-	} else if err := git.SetUpstreamInDir(created.Path, info.Branch); err != nil {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", info.Branch, err)))
-	}
-
-	return reviewWorktreeCreation{paths: paths, worktree: created, info: info}, nil
+	return reviewWorktreeCreation{paths: added.paths, worktree: added.worktree, info: selected.info}, nil
 }
 
 type reviewForge struct {
