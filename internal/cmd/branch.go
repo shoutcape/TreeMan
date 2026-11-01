@@ -54,17 +54,18 @@ func runBranch(cmd *cobra.Command, query string, setupOptions creationSetupOptio
 }
 
 func runBranchWithSetup(cmd *cobra.Command, query string, setupOptions creationSetupOptions, execCommand string) error {
-	created, err := createBranchWorktree(cmd, query, setupOptions)
-	if err != nil || created.worktree.Path == "" {
+	selected, err := selectBranchForWorktree(cmd, query)
+	if err != nil || selected.branch == "" {
 		return err
 	}
+	provisioned, err := provisionWorktree(cmd, selected.request("", setupOptions))
+	if err != nil {
+		return err
+	}
+	created := branchWorktreeCreation{paths: provisioned.paths, worktree: provisioned.worktree, prMap: selected.prMap}
 
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	summary := setupCreatedWorktree(out, render, created.paths, created.worktree)
-	fmt.Fprintln(out)
-	printSetupSummary(out, render, summary)
-	offerWarmStarts(cmd, created.paths.projectPaths, setupOptions.skipDeps)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(created.worktree.Branch, 10)))
 	if pr, ok := created.prMap[created.worktree.Branch]; ok {
@@ -80,65 +81,63 @@ type branchWorktreeCreation struct {
 	prMap    map[string]forge.PRInfo
 }
 
-func createBranchWorktree(cmd *cobra.Command, query string, setupOptions creationSetupOptions) (branchWorktreeCreation, error) {
-	return createBranchWorktreeIn(cmd, query, "", setupOptions)
+// selectedBranch is the remote branch a branch worktree is made for. An empty
+// branch means the picker was cancelled.
+type selectedBranch struct {
+	mainRoot string
+	branch   string
+	prMap    map[string]forge.PRInfo
 }
 
-func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string, setupOptions creationSetupOptions) (branchWorktreeCreation, error) {
+func (s selectedBranch) request(parentDir string, setupOptions creationSetupOptions) provisionRequest {
+	return provisionRequest{
+		mainRoot:  s.mainRoot,
+		parentDir: parentDir,
+		source:    trackRemoteBranch(s.branch),
+		options:   setupOptions,
+	}
+}
+
+// selectBranchForWorktree resolves query to a remote branch: an exact name
+// directly, anything else through the forge picker.
+func selectBranchForWorktree(cmd *cobra.Command, query string) (selectedBranch, error) {
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
 	if !git.IsInsideRepo() {
-		return branchWorktreeCreation{}, fmt.Errorf("not inside a git repository")
+		return selectedBranch{}, fmt.Errorf("not inside a git repository")
 	}
 
 	mainRoot, err := git.MainWorktreeRoot()
 	if err != nil {
-		return branchWorktreeCreation{}, err
+		return selectedBranch{}, err
 	}
-	var selected forge.BranchInfo
-	prMap := make(map[string]forge.PRInfo)
 	if query != "" && git.RemoteBranchExists(query) {
 		// An exact branch name can be fetched by git without forge discovery or fzf.
-		selected.Name = query
-	} else {
-		selection, err := pickBranchForForge(cmd, query)
-		if err != nil {
-			if errors.Is(err, errPickerCancelled) {
-				fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
-				return branchWorktreeCreation{}, nil
-			}
-			return branchWorktreeCreation{}, err
+		return selectedBranch{mainRoot: mainRoot, branch: query, prMap: map[string]forge.PRInfo{}}, nil
+	}
+	selection, err := pickBranchForForge(cmd, query)
+	if err != nil {
+		if errors.Is(err, errPickerCancelled) {
+			fmt.Fprintln(out, render.Status(ui.ToneMuted, "○", "Cancelled."))
+			return selectedBranch{}, nil
 		}
-		selected, prMap = selection.branch, selection.prMap
+		return selectedBranch{}, err
 	}
+	return selectedBranch{mainRoot: mainRoot, branch: selection.branch.Name, prMap: selection.prMap}, nil
+}
 
-	branch := selected.Name
-	// Settle the destination before fetching, so an unusable one costs no
-	// network round trip and leaves no remote-tracking ref behind.
-	paths, err := prepareApprovedCreationPaths(cmd, mainRoot, branch, parentDir, setupOptions)
+// createBranchWorktreeIn selects a branch and adds its worktree without setup.
+// Benchmarks time it.
+func createBranchWorktreeIn(cmd *cobra.Command, query, parentDir string, setupOptions creationSetupOptions) (branchWorktreeCreation, error) {
+	selected, err := selectBranchForWorktree(cmd, query)
+	if err != nil || selected.branch == "" {
+		return branchWorktreeCreation{}, err
+	}
+	added, err := addWorktree(cmd, selected.request(parentDir, setupOptions))
 	if err != nil {
 		return branchWorktreeCreation{}, err
 	}
-
-	// Fetch the branch from origin.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching branch %s from origin...", branch)))
-	if err := git.FetchRemoteBranch(branch); err != nil {
-		return branchWorktreeCreation{}, fmt.Errorf("failed to fetch branch %q: %w", branch, err)
-	}
-
-	// Create the worktree tracking the remote branch.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch)))
-	created, err := git.CreatePlannedWorktree(paths.plan(branch), branch, "origin/"+branch)
-	if err != nil {
-		return branchWorktreeCreation{}, err
-	}
-
-	// Set upstream so git pull/push work.
-	if err := git.SetUpstreamInDir(created.Path, branch); err != nil {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not set upstream for %q: %v", branch, err)))
-	}
-
-	return branchWorktreeCreation{paths: paths, worktree: created, prMap: prMap}, nil
+	return branchWorktreeCreation{paths: added.paths, worktree: added.worktree, prMap: selected.prMap}, nil
 }
 
 type branchPickerData struct {

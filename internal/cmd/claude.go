@@ -363,29 +363,18 @@ func runClaudeWorktreeCreate(cmd *cobra.Command, input claudeHookInput) (string,
 
 // createBranch creates branch and its worktree. TreeMan owns the branch.
 func (repo claudeRepository) createBranch(cmd *cobra.Command, input claudeHookInput, branch string, options creationSetupOptions) (string, error) {
-	out := cmd.ErrOrStderr()
-	render := commandRenderer(cmd)
-	paths, err := prepareApprovedCreationPaths(cmd, repo.mainRoot, branch, repo.parentDir, options)
-	if err != nil {
-		return "", err
-	}
-	startPoint, err := agentStartPoint(out, render)
-	if err != nil {
-		return "", err
-	}
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch)))
-	created, err := git.CreatePlannedWorktree(paths.plan(branch), branch, startPoint)
-	if err != nil {
-		return "", err
-	}
-	return repo.finishCreation(cmd, paths, created, agentworktree.Record{
-		Agent:         claudeAgent,
-		Name:          input.Name,
-		Branch:        branch,
-		BranchCreated: true,
-		CreatedSHA:    created.SHA,
-		CreatedAt:     time.Now().UTC(),
-		SessionID:     input.SessionID,
+	// A failing hook blocks the session, so a failed fetch falls back to the
+	// cached default branch rather than stopping.
+	return repo.provision(cmd, newBranchFromDefault(branch, fetchFallBackToCached), options, func(created git.CreatedWorktree) agentworktree.Record {
+		return agentworktree.Record{
+			Agent:         claudeAgent,
+			Name:          input.Name,
+			Branch:        branch,
+			BranchCreated: true,
+			CreatedSHA:    created.SHA,
+			CreatedAt:     time.Now().UTC(),
+			SessionID:     input.SessionID,
+		}
 	})
 }
 
@@ -393,24 +382,15 @@ func (repo claudeRepository) createBranch(cmd *cobra.Command, input claudeHookIn
 // only from a record of that branch that TreeMan created, and only while it
 // is still that branch; owner is the zero record when there is none.
 func (repo claudeRepository) attachBranch(cmd *cobra.Command, input claudeHookInput, branch string, owner agentworktree.Record, options creationSetupOptions) (string, error) {
-	out := cmd.ErrOrStderr()
-	render := commandRenderer(cmd)
-	paths, err := prepareApprovedCreationPaths(cmd, repo.mainRoot, branch, repo.parentDir, options)
-	if err != nil {
-		return "", err
-	}
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Attaching existing branch %s at %s...", branch, paths.path)))
-	created, err := git.CreatePlannedWorktreeForExistingBranch(paths.plan(branch), branch)
-	if err != nil {
-		return "", err
-	}
-	next := agentworktree.Record{Agent: claudeAgent, Name: input.Name, Branch: branch, CreatedAt: time.Now().UTC(), SessionID: input.SessionID}
-	if owner.Branch == branch && agentBranchOwned(owner) {
-		next.BranchCreated = true
-		next.CreatedSHA = owner.CreatedSHA
-		next.CreatedAt = owner.CreatedAt
-	}
-	return repo.finishCreation(cmd, paths, created, next)
+	return repo.provision(cmd, existingBranch(branch), options, func(git.CreatedWorktree) agentworktree.Record {
+		next := agentworktree.Record{Agent: claudeAgent, Name: input.Name, Branch: branch, CreatedAt: time.Now().UTC(), SessionID: input.SessionID}
+		if owner.Branch == branch && agentBranchOwned(owner) {
+			next.BranchCreated = true
+			next.CreatedSHA = owner.CreatedSHA
+			next.CreatedAt = owner.CreatedAt
+		}
+		return next
+	})
 }
 
 // findClaudeRecord returns the record for a worktree name. Two names can map
@@ -434,39 +414,59 @@ func findClaudeRecord(records []agentworktree.Record, name, branch string) (agen
 // createReview checks out a PR or MR the way `treeman review` does. The
 // branch belongs to the PR, not to TreeMan, so only the worktree is recorded.
 func (repo claudeRepository) createReview(cmd *cobra.Command, input claudeHookInput, number string, options creationSetupOptions) (string, error) {
-	review, err := createReviewWorktreeIn(cmd, number, repo.parentDir, options)
+	selected, err := selectReviewForWorktree(cmd, number)
 	if err != nil {
 		return "", err
 	}
-	next := agentworktree.Record{
-		Agent:     claudeAgent,
-		Name:      input.Name,
-		Branch:    review.worktree.Branch,
-		CreatedAt: time.Now().UTC(),
-		SessionID: input.SessionID,
+	if selected.info.Branch == "" {
+		return "", fmt.Errorf("no PR or MR #%s to check out", number)
 	}
-	return repo.finishCreation(cmd, review.paths, review.worktree, next)
+	return repo.provisionRequest(cmd, selected.request(repo.parentDir, options), func(created git.CreatedWorktree) agentworktree.Record {
+		return agentworktree.Record{
+			Agent:     claudeAgent,
+			Name:      input.Name,
+			Branch:    created.Branch,
+			CreatedAt: time.Now().UTC(),
+			SessionID: input.SessionID,
+		}
+	})
 }
 
-// finishCreation records the worktree before setup, so a hook that times out
-// during a long install still leaves a worktree TreeMan knows it owns.
-func (repo claudeRepository) finishCreation(cmd *cobra.Command, paths creationPaths, created git.CreatedWorktree, record agentworktree.Record) (string, error) {
+// provision provisions a worktree for source in the repository.
+func (repo claudeRepository) provision(cmd *cobra.Command, source worktreeSource, options creationSetupOptions, record func(git.CreatedWorktree) agentworktree.Record) (string, error) {
+	return repo.provisionRequest(cmd, provisionRequest{
+		mainRoot:  repo.mainRoot,
+		parentDir: repo.parentDir,
+		source:    source,
+		options:   options,
+	}, record)
+}
+
+// provisionRequest provisions req and records the worktree before setup, so a
+// hook that times out during a long install still leaves a worktree TreeMan
+// knows it owns.
+func (repo claudeRepository) provisionRequest(cmd *cobra.Command, req provisionRequest, record func(git.CreatedWorktree) agentworktree.Record) (string, error) {
+	req.afterAdd = func(created git.CreatedWorktree) error {
+		next := record(created)
+		next.WorktreePath = git.CanonicalPath(created.Path)
+		err := markClaudeWorktree(next.WorktreePath, next.Name)
+		if err == nil {
+			err = repo.store.Put(next)
+		}
+		if err != nil {
+			return fmt.Errorf("could not record the worktree as created for Claude Code; worktree-remove will treat it as yours: %w", err)
+		}
+		return nil
+	}
+	provisioned, err := provisionWorktree(cmd, req)
+	if err != nil {
+		return "", err
+	}
 	out := cmd.ErrOrStderr()
 	render := commandRenderer(cmd)
-	path := git.CanonicalPath(created.Path)
-	record.WorktreePath = path
-	err := markClaudeWorktree(path, record.Name)
-	if err == nil {
-		err = repo.store.Put(record)
-	}
-	if err != nil {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", fmt.Sprintf("could not record the worktree as created for Claude Code; worktree-remove will treat it as yours: %v", err)))
-	}
-	summary := setupCreatedWorktree(out, render, paths, created)
-	fmt.Fprintln(out)
-	printSetupSummary(out, render, summary)
+	path := git.CanonicalPath(provisioned.worktree.Path)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
-	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(created.Branch))
+	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(provisioned.worktree.Branch))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(path))
 	return path, nil
 }
@@ -574,50 +574,6 @@ func (repo claudeRepository) dropRecordsForMissingBranches() error {
 		}
 		return kept, nil
 	})
-}
-
-// agentStartPoint picks what a new branch starts from: the freshly fetched
-// default branch, else the cached copy of it, else HEAD. Claude Code waits on
-// this hook, so being offline or having no origin is a warning, not a failure.
-func agentStartPoint(out io.Writer, render ui.Renderer) (string, error) {
-	warn := func(message string) {
-		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", message))
-	}
-	defaultBranch, known := git.LocalDefaultBranch()
-	if !known {
-		if _, err := git.OriginRemoteURL(); err == nil {
-			if branch, err := git.DetectDefaultBranch(); err == nil {
-				defaultBranch, known = branch, true
-			} else {
-				warn(fmt.Sprintf("could not detect the default branch: %v", err))
-			}
-		}
-	}
-	if known {
-		fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching latest %s from origin...", defaultBranch)))
-		fetchErr := git.Fetch(defaultBranch)
-		_, cached, err := git.RemoteTrackingBranchSHA(defaultBranch)
-		if err != nil {
-			return "", err
-		}
-		if fetchErr == nil && cached {
-			return "origin/" + defaultBranch, nil
-		}
-		if cached {
-			warn(fmt.Sprintf("could not fetch %s (%v); starting from the cached origin/%s", defaultBranch, fetchErr, defaultBranch))
-			return "origin/" + defaultBranch, nil
-		}
-		if fetchErr != nil {
-			warn(fmt.Sprintf("could not fetch %s: %v", defaultBranch, fetchErr))
-		}
-	}
-	if _, ok, err := git.ResolveCommit("HEAD"); err != nil {
-		return "", err
-	} else if !ok {
-		return "", fmt.Errorf("the repository has no commits to start a branch from")
-	}
-	warn("no origin default branch is available; starting from HEAD")
-	return "HEAD", nil
 }
 
 // agentBranchOwned reports whether record's branch is still the one TreeMan

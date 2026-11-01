@@ -60,47 +60,16 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		return err
 	}
 
-	// Resolve default branch.
-	defaultBranch, err := git.DetectDefaultBranch()
+	provisioned, err := provisionWorktree(cmd, provisionRequest{
+		mainRoot: mainRoot,
+		source:   newBranchFromDefault(branch, fetchStrict),
+		options:  setupOptions,
+	})
 	if err != nil {
 		return err
 	}
+	worktreePath := provisioned.worktree.Path
 
-	// Guard: branch must not already exist.
-	if git.BranchExists(branch) {
-		return fmt.Errorf("branch %q already exists locally", branch)
-	}
-
-	// Settle where the worktree goes before the network is touched. A
-	// destination that cannot be used is not worth a fetch, and the
-	// configuration that chooses it is the one setup will work from.
-	// Existing worktrees keep their path; a branch whose slug collides with
-	// another branch's worktree gets a suffixed path.
-	paths, err := prepareApprovedCreationPaths(cmd, mainRoot, branch, "", setupOptions)
-	if err != nil {
-		return err
-	}
-
-	// Fetch latest default branch.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Fetching latest %s from origin...", defaultBranch)))
-	if err := git.Fetch(defaultBranch); err != nil {
-		return err
-	}
-
-	// Create worktree + branch.
-	fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch)))
-	created, err := git.CreatePlannedWorktree(paths.plan(branch), branch, "origin/"+defaultBranch)
-	if err != nil {
-		return err
-	}
-	worktreePath := created.Path
-
-	summary := setupCreatedWorktree(out, render, paths, created)
-
-	// Print result to stderr for the user.
-	fmt.Fprintln(out, "")
-	printSetupSummary(out, render, summary)
-	offerWarmStarts(cmd, paths.projectPaths, setupOptions.skipDeps)
 	fmt.Fprintln(out, render.Status(ui.ToneSuccess, "✓", "Worktree ready:"))
 	fmt.Fprintf(out, "  Branch: %s\n", render.Branch(render.Fit(branch, 10)))
 	fmt.Fprintf(out, "  Path:   %s\n", render.Path(render.Fit(worktreePath, 10)))
