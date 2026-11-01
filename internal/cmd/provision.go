@@ -127,6 +127,58 @@ func provisionWorktree(cmd *cobra.Command, req provisionRequest) (provisionedWor
 	return provisionedWorktree{addedWorktree: added, summary: summary}, nil
 }
 
+// reprovisionWorktree runs setup again in an existing worktree, for
+// `treeman setup`. It never creates, removes, or switches a worktree or a
+// branch.
+func reprovisionWorktree(cmd *cobra.Command, target setupTarget, options rerunSetupOptions) error {
+	mainRoot, err := git.MainWorktreeRoot()
+	if err != nil {
+		return err
+	}
+	// From the main worktree, never the selected branch: a branch may have
+	// edited its own copy of the configuration.
+	project, err := loadProjectPaths(mainRoot)
+	if err != nil {
+		return err
+	}
+	approval, err := approveSetupHooks(cmd, project, options)
+	if err != nil {
+		return err
+	}
+
+	out := cmd.ErrOrStderr()
+	render := commandRenderer(cmd)
+	err = withSetupLock(target, func() error {
+		// The target was chosen before the lock. Confirm it still describes
+		// the same worktree before starting; external Git changes do not
+		// participate in TreeMan's setup lock.
+		if err := revalidateSetupTarget(target); err != nil {
+			return err
+		}
+		policy := envPreserve
+		if options.refreshEnv {
+			policy = envRefresh
+		}
+		summary := runWorktreeSetup(out, render, worktreeSetup{
+			mainRoot:      project.mainRoot,
+			worktreePath:  target.Path,
+			branch:        target.Branch,
+			worktreeDir:   project.parentDir,
+			projectConfig: project.config,
+			hooks:         approval,
+			options:       options.setupOptions(),
+			environment:   policy,
+			hooksSkipped:  options.hooksSkippedText(),
+		})
+		printSetupSummary(out, render, summary)
+		return nil
+	})
+	if err == nil {
+		offerWarmStarts(cmd, project, options.skipDeps)
+	}
+	return err
+}
+
 // addWorktree runs provisioning up to the add: guard, consent and destination,
 // fetch, add, and tracking. Benchmarks time this part on its own.
 func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error) {
