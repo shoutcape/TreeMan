@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,9 @@ import (
 // setupLockDirectory holds one lock file per linked worktree, beside the other
 // TreeMan subsystems under the Git common directory.
 const setupLockDirectory = "treeman/setup"
+
+// errSetupRunning means another TreeMan run holds the worktree's setup lock.
+var errSetupRunning = errors.New("another treeman setup is already running")
 
 // withSetupLock serializes TreeMan's setup runs for one worktree. It is held
 // across file copying, database work, installers, and hooks, so two runs
@@ -40,7 +44,7 @@ func withSetupLock(target setupTarget, fn func() error) error {
 		return err
 	}
 	if !acquired {
-		return fmt.Errorf("another treeman setup is already running for %q", target.Path)
+		return fmt.Errorf("%w for %q", errSetupRunning, target.Path)
 	}
 	return nil
 }

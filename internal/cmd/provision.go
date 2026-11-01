@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/shoutcape/treeman/internal/git"
@@ -18,7 +19,9 @@ import (
 //     touched, so an unusable destination costs no fetch;
 //   - afterAdd runs once the worktree exists and before setup, which can be
 //     slow;
-//   - the warm-start offer comes after the summary.
+//   - setup and its summary run under the per-worktree setup lock, the same
+//     lock `treeman setup` takes;
+//   - the warm-start offer comes after the lock is released.
 //
 // Callers choose where the branch comes from (a worktreeSource), then print
 // their own banner and deliver the worktree.
@@ -100,6 +103,27 @@ type addedWorktree struct {
 type provisionedWorktree struct {
 	addedWorktree
 	summary setupSummary
+	// setupSkipped means setup did not run here, because another run held
+	// the setup lock or the lock could not be taken.
+	setupSkipped bool
+}
+
+// createdSetupTarget identifies a newly created worktree for the setup lock,
+// the same way `treeman setup` identifies an existing one.
+func createdSetupTarget(created git.CreatedWorktree) (setupTarget, error) {
+	commonDir, err := git.CommonDir(created.Path)
+	if err != nil {
+		return setupTarget{}, err
+	}
+	id, err := git.WorktreeID(created.Path)
+	if err != nil {
+		return setupTarget{}, err
+	}
+	return setupTarget{
+		WorktreeEntry: git.WorktreeEntry{Path: created.Path, Branch: created.Branch},
+		commonDir:     commonDir,
+		worktreeID:    id,
+	}, nil
 }
 
 // provisionWorktree creates the worktree the request describes and sets it up.
@@ -117,9 +141,28 @@ func provisionWorktree(cmd *cobra.Command, req provisionRequest) (provisionedWor
 			fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", err.Error()))
 		}
 	}
-	summary := setupCreatedWorktree(out, render, added.paths, added.worktree)
-	fmt.Fprintln(out)
-	printSetupSummary(out, render, summary)
+	// Setup runs under the same per-worktree lock as `treeman setup`, so a
+	// rerun started while this one installs cannot install alongside it.
+	var summary setupSummary
+	target, err := createdSetupTarget(added.worktree)
+	if err == nil {
+		err = withSetupLock(target, func() error {
+			summary = setupCreatedWorktree(out, render, added.paths, added.worktree)
+			fmt.Fprintln(out)
+			printSetupSummary(out, render, summary)
+			return nil
+		})
+	}
+	if err != nil {
+		// The worktree exists and is usable, so it is still delivered. A
+		// held lock means another run is already setting it up.
+		message := fmt.Sprintf("setup skipped: %v; run `treeman setup` in the worktree to set it up", err)
+		if errors.Is(err, errSetupRunning) {
+			message = fmt.Sprintf("setup skipped: %v", err)
+		}
+		fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", message))
+		return provisionedWorktree{addedWorktree: added, setupSkipped: true}, nil
+	}
 	// Agents create worktrees where no one can answer a prompt.
 	if !req.options.savedApprovalOnly {
 		offerWarmStarts(cmd, added.paths.projectPaths, req.options.skipDeps)

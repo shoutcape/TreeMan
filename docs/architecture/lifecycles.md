@@ -14,8 +14,10 @@ sequenceDiagram
     CLI->>Git: detect main worktree and default branch
     CLI->>Git: fetch origin default branch
     CLI->>Git: add linked worktree and branch
+    CLI->>Setup: take the per-worktree setup lock
     CLI->>Setup: update ignore file and copy environment files
     CLI->>Setup: load config, database, dependency reuse, dependencies, and hooks
+    CLI->>Setup: summary, then release the setup lock
     CLI->>User: one-time warm-start offer (stderr, interactive only)
     CLI-->>Shell: destination path
     Shell->>Shell: cd to path
@@ -65,8 +67,13 @@ dependency, and hook steps. It resolves hook approval before the lock, therefore
 a consent prompt never waits with the lock held. Dependency reuse copies every
 configured `deps.reuse` path from the main worktree before any installer runs.
 The warm-start offer runs only after the lock is released, so its prompt never
-waits with the lock held either. `create`, `branch`, and `review` run the same
-steps and the same offer after their summary.
+waits with the lock held either.
+
+`create`, `branch`, `review`, and the Claude Code WorktreeCreate hook run the
+same steps under the same lock, taken once the worktree is added, and the same
+offer after their summary. The Claude Code hook makes no offer, because no one
+can answer it. If another run already holds the lock, creation skips setup with
+a warning and still delivers the worktree.
 
 ## Remote Branch and Review
 
