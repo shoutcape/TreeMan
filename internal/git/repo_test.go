@@ -77,8 +77,11 @@ func TestOpenFromALinkedWorktreeResolvesTheMainWorktree(t *testing.T) {
 	assert.True(t, filepath.IsAbs(repo.CommonDir()))
 
 	fromMain := openTestRepo(t, main)
-	assert.Equal(t, fromMain.MainRoot(), repo.MainRoot())
-	assert.Equal(t, fromMain.CommonDir(), repo.CommonDir())
+	// Git reports the common dir relative to the main worktree but absolute
+	// (and resolved) from a linked one, so the two name one directory through
+	// different text wherever the temporary directory has a symlinked prefix.
+	assert.Equal(t, CanonicalPath(fromMain.MainRoot()), CanonicalPath(repo.MainRoot()))
+	assert.Equal(t, CanonicalPath(fromMain.CommonDir()), CanonicalPath(repo.CommonDir()))
 }
 
 func TestOpenOfARelativeDirectoryMakesDirAbsolute(t *testing.T) {

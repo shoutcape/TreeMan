@@ -31,6 +31,17 @@ func captureStagedRemoval(t *testing.T) *[]string {
 	return &staged
 }
 
+// canonicalPaths canonicalizes each path, so paths the removal reports from
+// Git's resolved worktree list compare with paths a test built from
+// t.TempDir(), which on macOS sits under the /var -> /private/var symlink.
+func canonicalPaths(paths []string) []string {
+	canonical := make([]string, 0, len(paths))
+	for _, path := range paths {
+		canonical = append(canonical, CanonicalPath(path))
+	}
+	return canonical
+}
+
 func addTestWorktree(t *testing.T, repo, branch string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), branch)
@@ -530,7 +541,7 @@ func TestRemovalSurvivesCaptureMetadataThatRecordsNoPath(t *testing.T) {
 	assert.True(t, result.BranchDeleted)
 	// Protected, not disposed of, and reported rather than kept in silence.
 	assert.FileExists(t, filepath.Join(captured, "payload"))
-	assert.NotContains(t, *cleaned, filepath.Join(stranded, stagedWorktreeName))
+	assert.NotContains(t, canonicalPaths(*cleaned), CanonicalPath(filepath.Join(stranded, stagedWorktreeName)))
 	require.Error(t, result.CleanupError)
 	assert.Contains(t, result.CleanupError.Error(), "does not record where it came from")
 }
@@ -801,7 +812,7 @@ func TestRemovalRecoversAJobThatCapturedNothing(t *testing.T) {
 	assert.True(t, result.WorktreeUnregistered)
 	assert.True(t, result.BranchDeleted)
 	assert.NoDirExists(t, job, "metadata protecting nothing is disposable")
-	assert.Contains(t, *cleaned, filepath.Join(job, stagedWorktreeName))
+	assert.Contains(t, canonicalPaths(*cleaned), CanonicalPath(filepath.Join(job, stagedWorktreeName)))
 }
 
 func TestRemovalStillProtectsACaptureWhoseDirectoryExists(t *testing.T) {
