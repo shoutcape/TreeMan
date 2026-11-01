@@ -24,5 +24,6 @@ Use these terms with the specified meaning.
 | snapshot | Remote and forge state read for one merge classification |
 | tap | Homebrew repository that provides formulas |
 | worktree | Git checkout with its own directory and branch state |
+| worktree provisioning | Creating a worktree, or reusing an existing one, then running its setup steps under the setup lock |
 
 Do not use `workspace`, `checkout directory`, or `working tree` to mean `worktree`.
