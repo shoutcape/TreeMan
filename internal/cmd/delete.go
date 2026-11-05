@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/shoutcape/treeman/internal/agentworktree"
 	"github.com/shoutcape/treeman/internal/database"
 	"github.com/shoutcape/treeman/internal/git"
 	"github.com/shoutcape/treeman/internal/ui"
@@ -392,7 +391,6 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 		remove = removeWorktreeKeepingBranch
 	}
 	removal, err := remove(plan.repo, entry.Path, entry.Branch, plan.branchSHA, plan.guards.force)
-	forgetAgentWorktree(cmd, plan.repo, entry, removal)
 	if removal.CleanupError != nil {
 		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("pending file cleanup needs retry: %v", removal.CleanupError)))
 	}
@@ -411,27 +409,6 @@ func (plan deletionPlan) execute(cmd *cobra.Command, batch databaseCleanupPrepar
 		cleanupJob:      removal.CleanupJob,
 		cleanupStarted:  removal.CleanupStarted,
 	}, nil
-}
-
-// forgetAgentWorktree updates the agent worktree records for what a removal
-// took away, whether or not it finished: a deleted branch must not be
-// mistaken for a later one of the same name, and a removed worktree must not
-// be handed back to an agent. A record that cannot be updated is reported but
-// does not fail a removal that already happened.
-func forgetAgentWorktree(cmd *cobra.Command, repo git.Repo, entry git.WorktreeEntry, removal git.RemoveWorktreeResult) {
-	if !removal.WorktreeUnregistered && !removal.BranchDeleted {
-		return
-	}
-	store := agentworktree.Open(repo.CommonDir())
-	var err error
-	if removal.BranchDeleted {
-		err = store.ForgetBranch(entry.Branch)
-	} else {
-		err = store.ForgetWorktree(entry.Path, samePath)
-	}
-	if err != nil {
-		fmt.Fprintln(cmd.ErrOrStderr(), commandRenderer(cmd).Status(ui.ToneWarning, "!", fmt.Sprintf("could not update agent worktree records: %v", err)))
-	}
 }
 
 // removalFailure turns the removal's own account of what it left behind into
