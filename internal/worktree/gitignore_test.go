@@ -20,7 +20,7 @@ func readGitignore(t *testing.T, dir string) string {
 
 func TestEnsureIgnored_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.DefaultDir)))
+	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.LegacyDir)))
 	content := readGitignore(t, dir)
 	assert.Contains(t, content, ".worktrees/")
 }
@@ -30,7 +30,7 @@ func TestEnsureIgnored_AppendsToExisting(t *testing.T) {
 	existing := "node_modules/\ndist/\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0644))
 
-	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.DefaultDir)))
+	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.LegacyDir)))
 
 	content := readGitignore(t, dir)
 	assert.Contains(t, content, "node_modules/")
@@ -42,8 +42,8 @@ func TestEnsureIgnored_NoDuplicate(t *testing.T) {
 	existing := "node_modules/\n.worktrees/\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0644))
 
-	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.DefaultDir)))
-	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.DefaultDir)))
+	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.LegacyDir)))
+	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.LegacyDir)))
 
 	content := readGitignore(t, dir)
 	count := strings.Count(content, ".worktrees/")
@@ -56,7 +56,7 @@ func TestEnsureIgnored_NoTrailingNewlineInExisting(t *testing.T) {
 	existing := "node_modules/"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0644))
 
-	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.DefaultDir)))
+	require.NoError(t, worktree.EnsureIgnored(dir, filepath.Join(dir, worktree.LegacyDir)))
 
 	content := readGitignore(t, dir)
 	assert.Contains(t, content, "\n.worktrees/")

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -31,6 +32,11 @@ type creationSetupOptions struct {
 	// worktrees where no one can answer a prompt, and creation must not fail
 	// for want of consent. It is not a command-line flag.
 	savedApprovalOnly bool
+	// worktreeDir is the value of --worktree-dir as the user typed it. It
+	// places this one worktree and replaces the configured parent. Empty means
+	// project configuration decides. It is not a setup flag, so it is read by
+	// resolveWorktreeDirFlag and not by creationSetupFlags.
+	worktreeDir string
 }
 
 // setupCreatedWorktree performs the setup every newly created worktree gets.
@@ -93,6 +99,32 @@ func addCreationSetupFlags(cmd *cobra.Command, options *creationSetupOptions) {
 			cmd.MarkFlagsMutuallyExclusive(flag.conflictsWith, flag.name)
 		}
 	}
+}
+
+// worktreeDirFlagName is the flag that places one new worktree under a chosen
+// directory instead of the configured parent.
+const worktreeDirFlagName = "worktree-dir"
+
+// addWorktreeDirFlag registers --worktree-dir on a command that creates
+// worktrees.
+func addWorktreeDirFlag(cmd *cobra.Command, options *creationSetupOptions) {
+	cmd.Flags().StringVar(&options.worktreeDir, worktreeDirFlagName, "",
+		"Create the worktree under this directory instead of the configured one (default: beside the project)")
+}
+
+// resolveWorktreeDirFlag turns the --worktree-dir value into an absolute
+// directory, relative to the current directory. It returns "" when the flag
+// was not given, so project configuration decides. A flag given with an empty
+// value is an error, not a silent fall back to the default.
+func resolveWorktreeDirFlag(cmd *cobra.Command, repo git.Repo, options creationSetupOptions) (string, error) {
+	if !cmd.Flags().Changed(worktreeDirFlagName) {
+		return "", nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("cannot read the current directory: %w", err)
+	}
+	return worktree.ResolveFlagDir(cwd, repo.MainRoot(), options.worktreeDir)
 }
 
 func creationSetupFlagNames() []string {

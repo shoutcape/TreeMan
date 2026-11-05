@@ -120,7 +120,7 @@ func TestRunCreateKeepsCapturedStatusOffPathStdout(t *testing.T) {
 		skipEnv: true, skipDatabase: true, skipHooks: true,
 	}, ""))
 
-	assert.Equal(t, repo+"/.worktrees/captured-output\n", stdout.String())
+	assert.Equal(t, siblingWorktreePath(repo, "captured-output")+"\n", stdout.String())
 	assert.NotContains(t, stdout.String(), "\x1b")
 	assert.NotContains(t, stderr.String(), "\x1b")
 	assert.Contains(t, stderr.String(), "direnv")
@@ -142,22 +142,22 @@ func TestRunCreateSeparatesCollidingBranchSlugs(t *testing.T) {
 	tests := []struct {
 		name   string
 		branch string
-		want   string
+		slug   string
 	}{
 		{
 			name:   "first branch keeps the plain slug",
 			branch: "topic/login",
-			want:   ".worktrees/topic-login",
+			slug:   "topic-login",
 		},
 		{
 			name:   "colliding branch gets a suffixed slug",
 			branch: "topic-login",
-			want:   ".worktrees/topic-login-25de00",
+			slug:   "topic-login-25de00",
 		},
 		{
 			name:   "branch that does not collide keeps the plain slug",
 			branch: "fix/bug-123",
-			want:   ".worktrees/fix-bug-123",
+			slug:   "fix-bug-123",
 		},
 	}
 
@@ -168,7 +168,7 @@ func TestRunCreateSeparatesCollidingBranchSlugs(t *testing.T) {
 				skipEnv: true, skipDatabase: true, skipHooks: true,
 			}, ""))
 
-			want := filepath.Join(repo, tt.want)
+			want := siblingWorktreePath(repo, tt.slug)
 			assert.Equal(t, want+"\n", stdout.String())
 			assert.DirExists(t, want)
 		})
@@ -179,7 +179,7 @@ func TestRunCreateSeparatesCollidingBranchSlugs(t *testing.T) {
 		t.Run("switch "+tt.branch, func(t *testing.T) {
 			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 			require.NoError(t, runSwitch(commandWithOutput(stdout, stderr), tt.branch, ""))
-			assert.Equal(t, filepath.Join(repo, tt.want)+"\n", stdout.String())
+			assert.Equal(t, siblingWorktreePath(repo, tt.slug)+"\n", stdout.String())
 		})
 	}
 }
@@ -188,7 +188,7 @@ func TestRunCreateReportsAnOccupiedDirectory(t *testing.T) {
 	repo, _ := createMergedCleanWorktree(t)
 	changeToDir(t, repo)
 	pathWithOnlyGit(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".worktrees", "topic-login"), 0o755))
+	require.NoError(t, os.MkdirAll(siblingWorktreePath(repo, "topic-login"), 0o755))
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	err := runCreate(commandWithOutput(stdout, stderr), "topic/login", creationSetupOptions{
@@ -242,7 +242,7 @@ func TestRunCreateInvalidWorktreeDirectoryLeavesNoBranchOrWorktree(t *testing.T)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot use {branch}")
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees"))
+	assert.NoDirExists(t, siblingWorktreesDir(repo))
 	branchCheck := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/feature/invalid-path")
 	assert.Error(t, branchCheck.Run())
 }

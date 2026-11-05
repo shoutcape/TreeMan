@@ -18,7 +18,7 @@ Create a branch and worktree.
 tm feature/login
 ```
 
-TreeMan fetches the default branch. It makes `feature/login`. By default, it puts the worktree at `.worktrees/feature-login` in the main worktree. Set [`worktree_dir`](reference/configuration.md#worktree_dir) to use another location.
+TreeMan fetches the default branch. It makes `feature/login`. By default, it puts the worktree at `../my-project-worktrees/feature-login`, beside the project directory. Set [`worktree_dir`](reference/configuration.md#worktree_dir) to use another location.
 
 Both `tm` and `treeman create` change your current directory when TreeMan prints a path.
 

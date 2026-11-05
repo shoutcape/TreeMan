@@ -41,6 +41,7 @@ the new worktree instead.`,
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
+	addWorktreeDirFlag(cmd, &setupOptions)
 	addLaunchFlag(cmd, &execCommand)
 	return cmd
 }
@@ -50,11 +51,15 @@ func runReview(cmd *cobra.Command, prArg string, setupOptions creationSetupOptio
 	if err != nil {
 		return err
 	}
+	parentDir, err := resolveWorktreeDirFlag(cmd, repo, setupOptions)
+	if err != nil {
+		return err
+	}
 	selected, err := selectReviewForWorktree(cmd, repo, prArg)
 	if err != nil || selected.info.Branch == "" {
 		return err
 	}
-	provisioned, err := provisionWorktree(cmd, selected.request("", setupOptions))
+	provisioned, err := provisionWorktree(cmd, selected.request(parentDir, setupOptions))
 	if err != nil {
 		return err
 	}

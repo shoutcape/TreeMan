@@ -18,8 +18,9 @@ func newCreateCmd() *cobra.Command {
 		Short: "Create a new worktree + branch",
 		Long: `Create a new linked worktree and branch from the latest default branch.
 
-The worktree is placed under .worktrees/<branch-slug> inside the repository,
-or under the worktree_dir configured in .treeman.toml. If a different branch
+The worktree is placed in <project>-worktrees/<branch-slug>, a directory beside
+the project. Use --worktree-dir to choose another directory, or set worktree_dir
+in .treeman.toml. If a different branch
 already has a worktree at that path, the path gets a short suffix that is
 derived from the branch name.
 
@@ -35,6 +36,7 @@ the new worktree instead.`,
 		},
 	}
 	addCreationSetupFlags(cmd, &setupOptions)
+	addWorktreeDirFlag(cmd, &setupOptions)
 	addLaunchFlag(cmd, &execCommand)
 
 	return cmd
@@ -54,10 +56,15 @@ func runCreate(cmd *cobra.Command, branch string, setupOptions creationSetupOpti
 		return err
 	}
 
+	parentDir, err := resolveWorktreeDirFlag(cmd, repo, setupOptions)
+	if err != nil {
+		return err
+	}
 	provisioned, err := provisionWorktree(cmd, provisionRequest{
-		repo:    repo,
-		source:  newBranchFromDefault(branch, fetchStrict),
-		options: setupOptions,
+		repo:      repo,
+		parentDir: parentDir,
+		source:    newBranchFromDefault(branch, fetchStrict),
+		options:   setupOptions,
 	})
 	if err != nil {
 		return err

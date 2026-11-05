@@ -234,7 +234,7 @@ func ThemePickerRow(name string, current bool) string {
 		marker = "*"
 	}
 	return fmt.Sprintf("%s %-18s %s  %s  %s  %s", marker, name,
-		s.success.Render("✓ CLEAN"), s.branch.Render("feature/ui"), s.path.Render("~/.worktrees/ui"), s.pr.Render("#42"))
+		s.success.Render("✓ CLEAN"), s.branch.Render("feature/ui"), s.path.Render("~/Projects/TreeMan-worktrees/ui"), s.pr.Render("#42"))
 }
 
 // ThemePreview renders a full non-mutating theme sample for fzf's preview pane.
@@ -253,8 +253,8 @@ func ThemePreview(name string) (string, bool) {
 		s.header.Render("WORKTREES"),
 		"",
 		"  " + s.success.Render("✓ CLEAN") + "   " + s.branch.Render("main") + "                 " + s.path.Render("~/Projects/TreeMan"),
-		"  " + s.warning.Render("! DIRTY") + "   " + s.branch.Render("feature/themes") + "       " + s.path.Render("~/.worktrees/themes"),
-		"  " + s.success.Render("✓ MERGED") + "  " + s.branch.Render("fix/config") + "            " + s.path.Render("~/.worktrees/config"),
+		"  " + s.warning.Render("! DIRTY") + "   " + s.branch.Render("feature/themes") + "       " + s.path.Render("~/Projects/TreeMan-worktrees/themes"),
+		"  " + s.success.Render("✓ MERGED") + "  " + s.branch.Render("fix/config") + "            " + s.path.Render("~/Projects/TreeMan-worktrees/config"),
 		"",
 		s.header.Render("DIAGNOSTICS"),
 		"",
@@ -263,7 +263,7 @@ func ThemePreview(name string) (string, bool) {
 		"  " + s.warning.Render("! Docker") + "           " + s.failure.Render("Daemon unavailable"),
 		"",
 		"  " + s.info.Render("Branch") + "       " + s.branch.Render("feature/themes"),
-		"  " + s.info.Render("Path") + "         " + s.path.Render("~/.worktrees/themes"),
+		"  " + s.info.Render("Path") + "         " + s.path.Render("~/Projects/TreeMan-worktrees/themes"),
 		"  " + s.info.Render("Pull Request") + " " + s.pr.Render("#42") + "  " + s.muted.Render("Ready for review"),
 	}, "\n"), true
 }

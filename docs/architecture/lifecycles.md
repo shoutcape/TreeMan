@@ -69,10 +69,8 @@ configured `deps.reuse` path from the main worktree before any installer runs.
 The warm-start offer runs only after the lock is released, so its prompt never
 waits with the lock held either.
 
-`create`, `branch`, `review`, and the Claude Code WorktreeCreate hook run the
-same steps under the same lock, taken once the worktree is added, and the same
-offer after their summary. The Claude Code hook makes no offer, because no one
-can answer it. If another run already holds the lock, creation skips setup with
+`create`, `branch`, and `review` run the same steps under the same lock, taken once the worktree is added, and the same
+offer after their summary. If another run already holds the lock, creation skips setup with
 a warning and still delivers the worktree. Because the lock covers hooks, a
 post-create hook that runs `treeman setup` on its own worktree fails with
 "already running".

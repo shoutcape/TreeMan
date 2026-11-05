@@ -44,13 +44,14 @@ func SlugSuffix(branch string) string {
 //
 // Example:
 //
-//	parentDir = "/home/user/Github/my-project/.worktrees"
+//	parentDir = "/home/user/Github/my-project-worktrees"
 //	branch    = "feature/cool-thing"
-//	result    = "/home/user/Github/my-project/.worktrees/feature-cool-thing"
+//	result    = "/home/user/Github/my-project-worktrees/feature-cool-thing"
 //
 // parentDir comes from ResolveDir, which turns the project's worktree_dir
-// setting into an absolute directory. The default is ".worktrees" inside the
-// main worktree, so an unconfigured project keeps the paths it has today.
+// setting into an absolute directory. The default is a "<project>-worktrees"
+// directory beside the main worktree; worktrees that already exist keep the
+// paths Git recorded for them.
 func PathForBranch(parentDir, branch string) string {
 	slug := BranchSlug(branch)
 	return filepath.Join(parentDir, slug)

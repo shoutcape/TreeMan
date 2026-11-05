@@ -203,7 +203,7 @@ func TestBenchmarkBranchRemovesEveryCreatedWorktree(t *testing.T) {
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/benchmark-branch")
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/remotes/origin/feature/benchmark-branch")
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-benchmark-branch"))
+	assert.NoDirExists(t, siblingWorktreePath(repo, "feature-benchmark-branch"))
 }
 
 func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
@@ -225,7 +225,7 @@ func TestBenchmarkReviewRemovesEveryCreatedWorktree(t *testing.T) {
 	assert.NoFileExists(t, os.Getenv("BENCHMARK_HOOK_LOG"))
 
 	gitTestFails(t, repo, "show-ref", "--verify", "refs/heads/feature/review")
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-review"))
+	assert.NoDirExists(t, siblingWorktreePath(repo, "feature-review"))
 	afterFetchHead, err := os.ReadFile(fetchHeadPath)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("user state\n"), afterFetchHead)

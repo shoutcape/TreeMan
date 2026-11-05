@@ -45,7 +45,8 @@ type Config struct {
 	UpdateGitignore bool `toml:"update_gitignore"`
 
 	// WorktreeDir is the parent directory new worktrees are created in.
-	// Empty means the default, ".worktrees" inside the main worktree.
+	// Empty means the default, a "<project>-worktrees" directory beside the
+	// project. Set ".worktrees" to keep worktrees inside the main worktree.
 	// The value is resolved by the worktree package, which owns the
 	// placeholder, tilde, and relative-path rules.
 	WorktreeDir string `toml:"worktree_dir"`

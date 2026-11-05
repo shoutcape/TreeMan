@@ -27,7 +27,7 @@ func TestRunBranchDirectDoesNotRequireForgeCLI(t *testing.T) {
 	command := commandWithOutput(buf, stderr)
 	require.NoError(t, runBranch(command, "feature/direct", creationSetupOptions{}))
 
-	worktree := filepath.Join(repo, ".worktrees", "feature-direct")
+	worktree := siblingWorktreePath(repo, "feature-direct")
 	assert.Equal(t, worktree+"\n", buf.String())
 	assert.DirExists(t, worktree)
 	assert.Contains(t, stderr.String(), "Nested module apps/web (package-lock.json): skipped; not installed automatically.")
@@ -53,7 +53,7 @@ func TestRunReviewReportsNestedModules(t *testing.T) {
 		skipEnv: true, skipDatabase: true, skipHooks: true,
 	}, ""))
 
-	worktree := filepath.Join(repo, ".worktrees", "feature-review")
+	worktree := siblingWorktreePath(repo, "feature-review")
 	assert.Equal(t, worktree+"\n", stdout.String())
 	assert.DirExists(t, worktree)
 	assert.Contains(t, stderr.String(), "Nested module apps/web (package-lock.json): skipped; not installed automatically.")
@@ -78,7 +78,7 @@ func TestRunBranchLaunchesTheExecCommand(t *testing.T) {
 		skipEnv: true, skipDatabase: true, skipHooks: true,
 	}, "nvim ."))
 
-	worktree := filepath.Join(repo, ".worktrees", "feature-direct")
+	worktree := siblingWorktreePath(repo, "feature-direct")
 	assert.DirExists(t, worktree)
 	require.True(t, record.called, "a ready worktree is handed to the command")
 	assert.Equal(t, worktree, record.dir)
@@ -106,7 +106,7 @@ func TestRunReviewLaunchesTheExecCommand(t *testing.T) {
 		skipEnv: true, skipDatabase: true, skipHooks: true,
 	}, "nvim ."))
 
-	worktree := filepath.Join(repo, ".worktrees", "feature-review")
+	worktree := siblingWorktreePath(repo, "feature-review")
 	assert.DirExists(t, worktree)
 	require.True(t, record.called, "a ready worktree is handed to the command")
 	assert.Equal(t, worktree, record.dir)

@@ -4,7 +4,7 @@
 
 1. Go to any worktree in the repository.
 2. Run `tm feature/name`.
-3. Work in `.worktrees/feature-name`, or in the parent selected by `worktree_dir`.
+3. Work in `../<project>-worktrees/feature-name`, or in the parent selected by `worktree_dir` or `--worktree-dir`.
 4. Run `tms` to return to another worktree.
 
 TreeMan fetches the default branch before it creates the branch. It reads `refs/remotes/origin/HEAD` to find that branch. If that ref is absent, it looks for `main` or `master` on `origin`.
@@ -51,7 +51,7 @@ TreeMan replaces itself with the command after setup. The command owns the termi
 Use direct deletion only when the tool provides a trusted worktree path and branch.
 
 ```bash
-treeman delete --path /path/to/repo/.worktrees/feature-login --branch feature/login --yes
+treeman delete --path /path/to/repo-worktrees/feature-login --branch feature/login --yes
 ```
 
 The command starts a detached process. Do not remove related files until the process finishes.

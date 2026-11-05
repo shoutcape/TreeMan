@@ -235,7 +235,8 @@ func TestResolveDir(t *testing.T) {
 		configured string
 		want       string
 	}{
-		{name: "default", want: filepath.Join(root, ".worktrees")},
+		{name: "default", want: filepath.Join(filepath.Dir(root), "my project-worktrees")},
+		{name: "legacy inside", configured: ".worktrees", want: filepath.Join(root, ".worktrees")},
 		{name: "relative", configured: "../trees/{repo}", want: filepath.Join(filepath.Dir(root), "trees", "my project")},
 		{name: "absolute", configured: filepath.Join(home, "absolute trees"), want: filepath.Join(home, "absolute trees")},
 		{name: "home", configured: "~/trees/{repo}", want: filepath.Join(home, "trees", "my project")},
@@ -247,6 +248,48 @@ func TestResolveDir(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 			assert.True(t, filepath.IsAbs(got))
 		})
+	}
+}
+
+func TestSiblingDir(t *testing.T) {
+	tests := []struct {
+		name string
+		root string
+		want string
+	}{
+		{name: "project", root: "/home/u/work/my-project", want: "/home/u/work/my-project-worktrees"},
+		{name: "bare repository", root: "/home/u/work/project.git", want: "/home/u/work/project-worktrees"},
+		{name: "bare layout", root: "/home/u/work/project/.bare", want: "/home/u/work/project-worktrees"},
+		{name: "trailing separator", root: "/home/u/work/my-project/", want: "/home/u/work/my-project-worktrees"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, filepath.FromSlash(tt.want), worktree.SiblingDir(filepath.FromSlash(tt.root)))
+		})
+	}
+}
+
+func TestResolveFlagDirResolvesRelativeToCurrentDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "my project")
+	require.NoError(t, os.Mkdir(root, 0o755))
+	cwd := filepath.Join(t.TempDir(), "elsewhere")
+	t.Setenv("HOME", t.TempDir())
+
+	got, err := worktree.ResolveFlagDir(cwd, root, "trees/{repo}")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "trees", "my project"), got)
+
+	got, err = worktree.ResolveFlagDir(cwd, root, filepath.Join(cwd, "abs"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "abs"), got)
+}
+
+func TestResolveFlagDirRejectsMainRootAndEmptyValue(t *testing.T) {
+	root := t.TempDir()
+	for _, value := range []string{"", "   ", root} {
+		_, err := worktree.ResolveFlagDir(root, root, value)
+		require.Error(t, err, value)
+		assert.Contains(t, err.Error(), "--worktree-dir")
 	}
 }
 

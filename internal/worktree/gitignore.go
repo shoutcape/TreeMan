@@ -54,7 +54,7 @@ func IgnoreEntry(mainRoot, worktreeDir string) (entry string, inside bool, err e
 		return "", false, fmt.Errorf("cannot place %q inside %q: %w", worktreeDir, mainRoot, err)
 	}
 	relative = filepath.ToSlash(relative)
-	if relative == DefaultDir {
+	if relative == LegacyDir {
 		return defaultIgnoreEntry, true, nil
 	}
 	return "/" + escapeIgnorePattern(relative) + "/", true, nil

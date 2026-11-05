@@ -7,15 +7,17 @@ TreeMan has no database or daemon for its own state. It uses Git, files, Docker,
 By default, TreeMan creates worktrees under this path:
 
 ```text
-<main-worktree>/.worktrees/<branch-slug>
+<project-parent>/<project>-worktrees/<branch-slug>
 ```
+
+`<project-parent>` is the directory that holds the main worktree. For `~/src/my-project`, the default is `~/src/my-project-worktrees/<branch-slug>`.
 
 The branch slug changes `/` to `-`. Therefore, different branch names can produce the same slug. For example, `feature/login` and `feature-login` both produce `feature-login`.
 
-Set `worktree_dir` in `.treeman.toml` to choose another parent directory, including an external path. The first branch to get a worktree keeps the plain slug. If a different branch holds that path, TreeMan adds a slug suffix:
+Set `worktree_dir` in `.treeman.toml` to choose another parent directory, including an external path. `--worktree-dir` on `create`, `branch`, and `review` chooses one for a single command. The first branch to get a worktree keeps the plain slug. If a different branch holds that path, TreeMan adds a slug suffix:
 
 ```text
-<main-worktree>/.worktrees/<branch-slug>-<slug-suffix>
+<worktree-parent>/<branch-slug>-<slug-suffix>
 ```
 
 The slug suffix comes from the full branch name. Therefore, one branch always gets the same path.
@@ -80,7 +82,6 @@ The next TreeMan command prints and removes this file. Concurrent deletion proce
 | Branch databases | Docker PostgreSQL container |
 | Branch database ownership and pending cleanup | `<git-common-dir>/treeman/databases/` |
 | Setup serialization for one worktree | `<git-common-dir>/treeman/setup/` |
-| Worktrees and branches made for Claude Code | `<git-common-dir>/treeman/agent-worktrees.json` |
 | Shell directory change | Bash, Zsh, or Fish wrapper |
 | Selected theme | `$XDG_STATE_HOME/treeman/theme` or `$HOME/.local/state/treeman/theme` |
 | Warm-start suggestion already offered | `$XDG_STATE_HOME/treeman/warm-start-prompts/` or `$HOME/.local/state/treeman/warm-start-prompts/` |
@@ -99,25 +100,6 @@ declines or the session ends. No marker is created for a noninteractive run,
 eligible candidate. If TreeMan cannot record the offer, it warns and does not
 prompt. Deleting these markers resets the corresponding one-time suggestions;
 it does not enable or disable configured reuse.
-
-## Claude Code Worktree State
-
-`treeman claude worktree-create` records each worktree that it makes in this file:
-
-```text
-<git-common-dir>/treeman/agent-worktrees.json
-<git-common-dir>/treeman/agent-worktrees.lock
-```
-
-Each record has the Claude Code worktree name, the branch, the worktree path, and the Claude Code session ID. It also tells if TreeMan made the branch, with the start commit and the time.
-
-`worktree-remove`, `delete`, and `clean` update the records:
-
-- When a branch is deleted, TreeMan removes all records for that branch.
-- When TreeMan removes a worktree and keeps the branch, the record stays without a worktree path. A new request for the same name adds a worktree for that branch again.
-- `worktree-create` removes records for branches that do not exist.
-
-TreeMan writes the file with mode `0600` and replaces it in one operation. A malformed file causes `worktree-create` and `worktree-remove` to fail.
 
 ## Hook Approval State
 

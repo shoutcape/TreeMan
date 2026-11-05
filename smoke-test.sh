@@ -29,12 +29,14 @@ MOCK_BIN="$TMP_DIR/bin"
 NO_JQ_BIN="$TMP_DIR/no-jq-bin"
 REMOTE_REPO="$TMP_DIR/remote.git"
 MAIN_REPO="$TMP_DIR/project"
+# The default worktree directory is beside the project: <project>-worktrees.
+MAIN_WORKTREES="$TMP_DIR/project-worktrees"
 PR_SOURCE_REPO="$TMP_DIR/pr-source"
-WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-test"
-YARN_WORKTREE_REPO="$MAIN_REPO/.worktrees/feature-yarn-smoke"
-REVIEW_WT_ALPHA="$MAIN_REPO/.worktrees/feature-review-alpha"
-REVIEW_WT_BETA="$MAIN_REPO/.worktrees/feature-review-beta"
-SKIP_WT="$MAIN_REPO/.worktrees/feature-skip-setup"
+WORKTREE_REPO="$MAIN_WORKTREES/feature-test"
+YARN_WORKTREE_REPO="$MAIN_WORKTREES/feature-yarn-smoke"
+REVIEW_WT_ALPHA="$MAIN_WORKTREES/feature-review-alpha"
+REVIEW_WT_BETA="$MAIN_WORKTREES/feature-review-beta"
+SKIP_WT="$MAIN_WORKTREES/feature-skip-setup"
 NPM_CALLS="$TMP_DIR/npm-calls"
 COREPACK_CALLS="$TMP_DIR/corepack-calls"
 DOCKER_CALLS="$TMP_DIR/docker-calls"
@@ -463,7 +465,7 @@ if tm feature/unapproved </dev/null >"$TMP_DIR/unapproved-output" 2>&1; then
   fail "tm should require hook approval"
 fi
 assert_file_contains "$TMP_DIR/unapproved-output" "hook approval required"
-assert_missing "$MAIN_REPO/.worktrees/feature-unapproved"
+assert_missing "$MAIN_WORKTREES/feature-unapproved"
 if git -C "$MAIN_REPO" show-ref --verify --quiet refs/heads/feature/unapproved; then
   fail "Unapproved creation must not create a branch"
 fi
@@ -540,9 +542,10 @@ echo "==> GitLab mock setup"
 
 GITLAB_REMOTE_REPO="$TMP_DIR/gl-remote.git"
 GITLAB_MAIN_REPO="$TMP_DIR/gl-project"
+GITLAB_WORKTREES="$TMP_DIR/gl-project-worktrees"
 GITLAB_MR_SOURCE="$TMP_DIR/gl-mr-source"
-GITLAB_REVIEW_WT="$GITLAB_MAIN_REPO/.worktrees/feature-mr-gamma"
-GITLAB_BRANCH_WT="$GITLAB_MAIN_REPO/.worktrees/feature-gitlab-remote-only"
+GITLAB_REVIEW_WT="$GITLAB_WORKTREES/feature-mr-gamma"
+GITLAB_BRANCH_WT="$GITLAB_WORKTREES/feature-gitlab-remote-only"
 
 git init --bare "$GITLAB_REMOTE_REPO" >/dev/null
 git clone "$GITLAB_REMOTE_REPO" "$GITLAB_MAIN_REPO" >/dev/null
@@ -651,7 +654,7 @@ cd "$MAIN_REPO"
 echo "==> branch worktree (exact match)"
 
 # Create a branch on remote that doesn't exist locally.
-BRANCH_WT="$MAIN_REPO/.worktrees/feature-remote-only"
+BRANCH_WT="$MAIN_WORKTREES/feature-remote-only"
 git -C "$PR_SOURCE_REPO" switch main >/dev/null
 git -C "$PR_SOURCE_REPO" switch -c feature/remote-only >/dev/null
 printf 'remote only content\n' > "$PR_SOURCE_REPO/remote-only.txt"
@@ -689,7 +692,7 @@ fi
 echo "==> branch worktree (fzf picker)"
 
 # Create another remote branch.
-BRANCH_WT_PICKER="$MAIN_REPO/.worktrees/feature-picker-test"
+BRANCH_WT_PICKER="$MAIN_WORKTREES/feature-picker-test"
 git -C "$PR_SOURCE_REPO" switch main >/dev/null
 git -C "$PR_SOURCE_REPO" switch -c feature/picker-test >/dev/null
 printf 'picker test\n' > "$PR_SOURCE_REPO/picker-test.txt"
@@ -718,7 +721,7 @@ unset MOCK_GH_GRAPHQL
 
 echo "==> branch worktree (streaming picker, early selection)"
 
-BRANCH_WT_EARLY="$MAIN_REPO/.worktrees/feature-picker-early"
+BRANCH_WT_EARLY="$MAIN_WORKTREES/feature-picker-early"
 git -C "$PR_SOURCE_REPO" switch main >/dev/null
 git -C "$PR_SOURCE_REPO" switch -c feature/picker-early >/dev/null
 printf 'picker early\n' > "$PR_SOURCE_REPO/picker-early.txt"
@@ -842,7 +845,7 @@ fi
 echo "==> wt* compatibility shortcuts"
 
 cd "$MAIN_REPO"
-COMPAT_WT="$MAIN_REPO/.worktrees/feature-wt-compat"
+COMPAT_WT="$MAIN_WORKTREES/feature-wt-compat"
 wt feature/wt-compat --skip-env --skip-database --skip-deps --skip-hooks
 assert_exists "$COMPAT_WT"
 [[ "$(pwd)" == "$COMPAT_WT" ]] || fail "Expected wt to cd into created worktree"
@@ -886,7 +889,7 @@ assert_file_contains "$COREPACK_CALLS" "yarn install"
 echo "==> worktree exec (-x)"
 
 cd "$MAIN_REPO"
-EXEC_WT="$MAIN_REPO/.worktrees/feature-exec-smoke"
+EXEC_WT="$MAIN_WORKTREES/feature-exec-smoke"
 tm feature/exec-smoke --skip-env --skip-database --skip-deps --skip-hooks -x 'pwd > exec-marker; pwd'
 assert_exists "$EXEC_WT/exec-marker"
 assert_file_contains "$EXEC_WT/exec-marker" "$EXEC_WT"
@@ -901,21 +904,21 @@ assert_eq "shell directory after tms -x" "$MAIN_REPO" "$(pwd)"
 if tm feature/exec-empty -x '' 2>/dev/null; then
   fail "Expected an empty --exec to fail"
 fi
-assert_missing "$MAIN_REPO/.worktrees/feature-exec-empty"
+assert_missing "$MAIN_WORKTREES/feature-exec-empty"
 
 # Without shell integration there is no destination file, so the path falls
 # back to stdout. Scripts and pipes keep the original contract.
 EXEC_BARE_PATH="$(command treeman create feature/bare-stdout --skip-env --skip-database --skip-deps --skip-hooks)"
-assert_eq "bare treeman prints the path" "$MAIN_REPO/.worktrees/feature-bare-stdout" "$EXEC_BARE_PATH"
+assert_eq "bare treeman prints the path" "$MAIN_WORKTREES/feature-bare-stdout" "$EXEC_BARE_PATH"
 assert_eq "shell directory after a bare run" "$MAIN_REPO" "$(pwd)"
 
 # A TreeMan started by --exec is a plain bare run: it never inherits the
 # destination file, so it prints its path to stdout and the outer shell is not
 # steered anywhere when the launched command exits.
-NESTED_WT="$MAIN_REPO/.worktrees/feature-exec-nested"
+NESTED_WT="$MAIN_WORKTREES/feature-exec-nested"
 tm feature/exec-outer --skip-env --skip-database --skip-deps --skip-hooks \
   -x 'treeman create feature/exec-nested --skip-env --skip-database --skip-deps --skip-hooks > nested-stdout'
-assert_file_contains "$MAIN_REPO/.worktrees/feature-exec-outer/nested-stdout" "$NESTED_WT"
+assert_file_contains "$MAIN_WORKTREES/feature-exec-outer/nested-stdout" "$NESTED_WT"
 assert_eq "shell directory after a nested treeman" "$MAIN_REPO" "$(pwd)"
 
 # ---------------------------------------------------------------------------

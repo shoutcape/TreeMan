@@ -38,7 +38,7 @@ func TestPreflightCommandReportsSetupCompatibilityWithoutCreatingWorktree(t *tes
 
 	require.NoError(t, command.Execute())
 	assert.Empty(t, stdout.String())
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees"))
+	assert.NoDirExists(t, siblingWorktreesDir(repo))
 	assert.Equal(t, worktreesBefore, gitTestOutput(t, repo, "worktree", "list", "--porcelain"))
 	assert.Equal(t, refsBefore, gitTestOutput(t, repo, "show-ref"))
 	envAfter, err := os.ReadFile(filepath.Join(repo, ".env"))
@@ -77,7 +77,7 @@ func TestPreflightCommandReportsNestedModulesWithoutRootDependencySetup(t *testi
 
 	require.NoError(t, command.Execute())
 	assert.Empty(t, stdout.String())
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees"))
+	assert.NoDirExists(t, siblingWorktreesDir(repo))
 
 	out := ui.StripANSI(stderr.String())
 	assert.Contains(t, out, "○  Dependencies   not configured at repository root")
@@ -139,7 +139,7 @@ func TestPreflightDoesNotMutateSetupStateInEitherOutputMode(t *testing.T) {
 			assert.Equal(t, refsBefore, gitTestOutput(t, repo, "show-ref"))
 			assert.Equal(t, envBefore, readTestFile(t, filepath.Join(repo, ".env")))
 			assert.Equal(t, lockBefore, readTestFile(t, filepath.Join(repo, "package-lock.json")))
-			assert.NoDirExists(t, filepath.Join(repo, ".worktrees"))
+			assert.NoDirExists(t, siblingWorktreesDir(repo))
 			assert.NoDirExists(t, filepath.Join(repo, ".treeman"))
 			assert.NoDirExists(t, filepath.Join(repo, "node_modules"))
 			assert.NoDirExists(t, filepath.Join(stateHome, "treeman"))
@@ -185,7 +185,7 @@ func TestPreflightCommandWritesJSONReportWithoutCreatingWorktree(t *testing.T) {
 
 	require.NoError(t, command.Execute())
 	assert.Empty(t, stderr.String())
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees"))
+	assert.NoDirExists(t, siblingWorktreesDir(repo))
 	assert.Equal(t, worktreesBefore, gitTestOutput(t, repo, "worktree", "list", "--porcelain"))
 	assert.Equal(t, refsBefore, gitTestOutput(t, repo, "show-ref"))
 

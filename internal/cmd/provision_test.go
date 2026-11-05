@@ -18,11 +18,103 @@ import (
 
 // --- fixtures ----------------------------------------------------------------
 
+// isolateTestEnv keeps git and TreeMan away from the user's state and
+// configuration for the rest of the test, and restores the working directory.
+func isolateTestEnv(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "TreeMan Test")
+	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "TreeMan Test")
+	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+	for _, key := range []string{"GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "GCM_INTERACTIVE", "GIT_SSH_COMMAND", "TREEMAN_CD_FILE"} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+}
+
+func canonicalTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+// cloneWithOrigin is a clone of a local bare origin whose origin/HEAD names
+// main.
+func cloneWithOrigin(t *testing.T) (repo, origin string) {
+	t.Helper()
+	isolateTestEnv(t)
+	parent := canonicalTestDir(t)
+	origin = filepath.Join(parent, "origin.git")
+	seed := filepath.Join(parent, "seed")
+	repo = filepath.Join(parent, "repo")
+	gitTest(t, parent, "init", "--bare", "--initial-branch=main", origin)
+	gitTest(t, parent, "init", "-b", "main", seed)
+	require.NoError(t, os.WriteFile(filepath.Join(seed, "README.md"), []byte("initial\n"), 0o644))
+	gitTest(t, seed, "add", "README.md")
+	gitTest(t, seed, "commit", "-m", "initial")
+	gitTest(t, seed, "remote", "add", "origin", origin)
+	gitTest(t, seed, "push", "origin", "main")
+	gitTest(t, parent, "clone", origin, repo)
+	gitTest(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	return repo, origin
+}
+
+// repoWithoutOrigin has commits but no remote.
+func repoWithoutOrigin(t *testing.T) string {
+	t.Helper()
+	isolateTestEnv(t)
+	repo := filepath.Join(canonicalTestDir(t), "local")
+	gitTest(t, filepath.Dir(repo), "init", "-b", "main", repo)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("initial\n"), 0o644))
+	gitTest(t, repo, "add", "README.md")
+	gitTest(t, repo, "commit", "-m", "initial")
+	return repo
+}
+
+func commonDirOf(t *testing.T, dir string) string {
+	t.Helper()
+	return strings.TrimSpace(gitTestOutput(t, dir, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+}
+
+func hasBranch(dir, branch string) bool {
+	return exec.Command("git", "-C", dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+}
+
+func currentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	return strings.TrimSpace(gitTestOutput(t, dir, "branch", "--show-current"))
+}
+
+func revParse(t *testing.T, dir, rev string) string {
+	t.Helper()
+	return strings.TrimSpace(gitTestOutput(t, dir, "rev-parse", rev))
+}
+
+func assertNoUpstream(t *testing.T, dir, branch string) {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "config", "--get", "branch."+branch+".merge").CombinedOutput()
+	assert.Errorf(t, err, "branch %s must have no upstream, has %s", branch, out)
+}
+
+func worktreeCount(t *testing.T, dir string) int {
+	t.Helper()
+	return strings.Count(gitTestOutput(t, dir, "worktree", "list", "--porcelain"), "worktree ")
+}
+
 // provisionRepo is a clone of a local bare origin whose origin/HEAD names main,
 // with the process working directory inside the clone.
 func provisionRepo(t *testing.T) (repo, origin string) {
 	t.Helper()
-	repo, origin = claudeRepoWithOrigin(t)
+	repo, origin = cloneWithOrigin(t)
 	chdirForTest(t, repo)
 	return repo, origin
 }
@@ -99,7 +191,7 @@ func TestProvisionNewBranchFromDefaultStartsFromLatestOrigin(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	want := filepath.Join(repo, ".worktrees", "feature-fresh")
+	want := siblingWorktreePath(repo, "feature-fresh")
 	assert.Equal(t, want, got.worktree.Path)
 	assert.Equal(t, "feature/fresh", got.worktree.Branch)
 	assert.False(t, got.setupSkipped)
@@ -120,76 +212,17 @@ func TestProvisionStrictFetchFailureCreatesNothing(t *testing.T) {
 
 	require.Error(t, err)
 	assert.False(t, hasBranch(repo, "feature/strict"))
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-strict"))
+	assert.NoDirExists(t, siblingWorktreePath(repo, "feature-strict"))
 	assert.Equal(t, 1, worktreeCount(t, repo))
-}
-
-func TestProvisionFallbackFetchFailureStartsFromCachedOrigin(t *testing.T) {
-	repo, _ := provisionRepo(t)
-	cached := revParse(t, repo, "origin/main")
-	// Move local HEAD away from origin/main so the two start points differ.
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "local.txt"), []byte("local\n"), 0o644))
-	gitTest(t, repo, "add", "local.txt")
-	gitTest(t, repo, "commit", "-m", "local only")
-	require.NotEqual(t, cached, revParse(t, repo, "HEAD"))
-	breakOrigin(t, repo)
-	cmd, _, stderr := provisionCommand()
-
-	got, err := provisionWorktree(cmd, provisionRequest{
-		repo:    openRepoForTest(t, repo),
-		source:  newBranchFromDefault("feature/cached", fetchFallBackToCached),
-		options: noSetup(),
-	})
-	require.NoError(t, err)
-
-	assert.Equal(t, cached, revParse(t, got.worktree.Path, "HEAD"))
-	assert.Contains(t, plain(stderr), "!", "a failed fetch is reported as a warning")
-	assert.Contains(t, plain(stderr), "cached")
-}
-
-func TestProvisionFallbackWithoutOriginStartsFromHEAD(t *testing.T) {
-	repo := claudeRepoWithoutOrigin(t)
-	chdirForTest(t, repo)
-	head := revParse(t, repo, "HEAD")
-	cmd, _, stderr := provisionCommand()
-
-	got, err := provisionWorktree(cmd, provisionRequest{
-		repo:    openRepoForTest(t, repo),
-		source:  newBranchFromDefault("feature/from-head", fetchFallBackToCached),
-		options: noSetup(),
-	})
-	require.NoError(t, err)
-
-	assert.Equal(t, head, revParse(t, got.worktree.Path, "HEAD"))
-	assert.Contains(t, plain(stderr), "HEAD", "starting from HEAD is warned about")
-}
-
-func TestProvisionFallbackWithNoCommitsFails(t *testing.T) {
-	isolateClaudeHookEnv(t)
-	repo := filepath.Join(canonicalTestDir(t), "empty")
-	gitTest(t, filepath.Dir(repo), "init", "-b", "main", repo)
-	chdirForTest(t, repo)
-	cmd, _, _ := provisionCommand()
-
-	_, err := provisionWorktree(cmd, provisionRequest{
-		repo:    openRepoForTest(t, repo),
-		source:  newBranchFromDefault("feature/nothing", fetchFallBackToCached),
-		options: noSetup(),
-	})
-
-	require.Error(t, err)
-	assert.False(t, hasBranch(repo, "feature/nothing"))
-	assert.NoDirExists(t, filepath.Join(repo, ".worktrees", "feature-nothing"))
 }
 
 // --- guard: existing local branch --------------------------------------------
 
 func TestProvisionRefusesExistingLocalBranchBeforeConsentAndFetch(t *testing.T) {
 	sources := map[string]func(branch string) worktreeSource{
-		"newBranchFromDefault/strict":   func(b string) worktreeSource { return newBranchFromDefault(b, fetchStrict) },
-		"newBranchFromDefault/fallback": func(b string) worktreeSource { return newBranchFromDefault(b, fetchFallBackToCached) },
-		"trackRemoteBranch":             trackRemoteBranch,
-		"pullRequestHead":               func(b string) worktreeSource { return pullRequestHead(b, 7, "refs/pull/7/head") },
+		"newBranchFromDefault/strict": func(b string) worktreeSource { return newBranchFromDefault(b, fetchStrict) },
+		"trackRemoteBranch":           trackRemoteBranch,
+		"pullRequestHead":             func(b string) worktreeSource { return pullRequestHead(b, 7, "refs/pull/7/head") },
 	}
 	for name, source := range sources {
 		t.Run(name, func(t *testing.T) {
@@ -223,10 +256,9 @@ func TestProvisionRefusesExistingLocalBranchBeforeConsentAndFetch(t *testing.T) 
 
 func TestProvisionRefusalNamesTheExistingWorktree(t *testing.T) {
 	sources := map[string]func(branch string) worktreeSource{
-		"newBranchFromDefault/strict":   func(b string) worktreeSource { return newBranchFromDefault(b, fetchStrict) },
-		"newBranchFromDefault/fallback": func(b string) worktreeSource { return newBranchFromDefault(b, fetchFallBackToCached) },
-		"trackRemoteBranch":             trackRemoteBranch,
-		"pullRequestHead":               func(b string) worktreeSource { return pullRequestHead(b, 7, "refs/pull/7/head") },
+		"newBranchFromDefault/strict": func(b string) worktreeSource { return newBranchFromDefault(b, fetchStrict) },
+		"trackRemoteBranch":           trackRemoteBranch,
+		"pullRequestHead":             func(b string) worktreeSource { return pullRequestHead(b, 7, "refs/pull/7/head") },
 	}
 	for name, source := range sources {
 		t.Run(name, func(t *testing.T) {
@@ -316,7 +348,7 @@ func TestProvisionTrackRemoteBranchSetsUpstream(t *testing.T) {
 	got, err := provisionWorktree(cmd, provisionRequest{repo: openRepoForTest(t, repo), source: trackRemoteBranch(branch), options: noSetup()})
 	require.NoError(t, err)
 
-	assert.Equal(t, filepath.Join(repo, ".worktrees", "feature-remote"), got.worktree.Path)
+	assert.Equal(t, siblingWorktreePath(repo, "feature-remote"), got.worktree.Path)
 	assert.Equal(t, sha, revParse(t, got.worktree.Path, "HEAD"))
 	assert.Equal(t, branch, currentBranch(t, got.worktree.Path))
 	assert.Equal(t, "origin/"+branch, upstreamOf(t, repo, branch))
@@ -454,7 +486,7 @@ func TestProvisionSkipsSetupWhenTheLockIsHeld(t *testing.T) {
 	const branch = "feature/held"
 	// Git names a linked worktree's administration after its directory, so
 	// the lock for the worktree about to be created can be held up front.
-	path := filepath.Join(repo, ".worktrees", "feature-held")
+	path := siblingWorktreePath(repo, "feature-held")
 	held := setupTarget{
 		WorktreeEntry: git.WorktreeEntry{Path: path, Branch: branch},
 		commonDir:     commonDirOf(t, repo),
@@ -538,7 +570,7 @@ func TestProvisionOffersWarmStartsOnlyWhenPromptsCanBeAnswered(t *testing.T) {
 			options := creationSetupOptions{skipEnv: true, skipDatabase: true, skipHooks: true, savedApprovalOnly: agent}
 
 			_, err := provisionWorktree(cmd, provisionRequest{
-				repo: openRepoForTest(t, repo), source: newBranchFromDefault("feature/warm", fetchFallBackToCached), options: options,
+				repo: openRepoForTest(t, repo), source: newBranchFromDefault("feature/warm", fetchStrict), options: options,
 			})
 			require.NoError(t, err)
 

@@ -11,7 +11,7 @@ import (
 
 // Worktree provisioning: creating a worktree, then running its setup steps.
 //
-// create, branch, review, and the Claude Code hook go through
+// create, branch, and review go through
 // provisionWorktree, and `treeman setup` through reprovisionWorktree, so the
 // rules that live in the order of the steps are kept in one place:
 //
@@ -34,10 +34,6 @@ type fetchPolicy int
 const (
 	// fetchStrict stops creation when the fetch fails.
 	fetchStrict fetchPolicy = iota
-	// fetchFallBackToCached warns and starts from the cached origin default
-	// branch, or from HEAD when there is none. A failing Claude Code hook
-	// blocks the session, so agent creation prefers a stale start to none.
-	fetchFallBackToCached
 )
 
 type sourceKind int
@@ -236,11 +232,11 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 	progress := func(message string) { fmt.Fprintln(out, render.Status(ui.ToneInfo, "→", message)) }
 	warn := func(message string) { fmt.Fprintln(out, render.Status(ui.ToneWarning, "!", message)) }
 
-	// A strict new branch settles its default branch before consent, as
+	// A new branch settles its default branch before consent, as
 	// create always has: detection may ask the remote, and a repository
 	// without a default branch has nothing to offer.
 	var defaultBranch string
-	if source.kind == sourceNewFromDefault && source.fetch == fetchStrict {
+	if source.kind == sourceNewFromDefault {
 		var err error
 		if defaultBranch, err = repo.DetectDefaultBranch(); err != nil {
 			return addedWorktree{}, err
@@ -265,12 +261,8 @@ func addWorktree(cmd *cobra.Command, req provisionRequest) (addedWorktree, error
 	switch source.kind {
 	case sourceNewFromDefault:
 		startPoint := "origin/" + defaultBranch
-		if source.fetch == fetchStrict {
-			progress(fmt.Sprintf("Fetching latest %s from origin...", defaultBranch))
-			if err := repo.Fetch(defaultBranch); err != nil {
-				return addedWorktree{}, err
-			}
-		} else if startPoint, err = fallbackStartPoint(repo, progress, warn); err != nil {
+		progress(fmt.Sprintf("Fetching latest %s from origin...", defaultBranch))
+		if err := repo.Fetch(defaultBranch); err != nil {
 			return addedWorktree{}, err
 		}
 		progress(fmt.Sprintf("Creating worktree at %s (branch: %s)...", paths.path, branch))
@@ -335,44 +327,4 @@ func (s worktreeSource) guard(repo git.Repo) error {
 		return fmt.Errorf("PR/MR head branch %q already exists locally", s.branch)
 	}
 	return fmt.Errorf("branch %q already exists locally", s.branch)
-}
-
-// fallbackStartPoint finds a start point for fetchFallBackToCached: the
-// freshly fetched origin default branch, else the cached one, else HEAD.
-func fallbackStartPoint(repo git.Repo, progress, warn func(string)) (string, error) {
-	defaultBranch, known := repo.LocalDefaultBranch()
-	if !known {
-		if _, err := repo.OriginRemoteURL(); err == nil {
-			if branch, err := repo.DetectDefaultBranch(); err == nil {
-				defaultBranch, known = branch, true
-			} else {
-				warn(fmt.Sprintf("could not detect the default branch: %v", err))
-			}
-		}
-	}
-	if known {
-		progress(fmt.Sprintf("Fetching latest %s from origin...", defaultBranch))
-		fetchErr := repo.Fetch(defaultBranch)
-		_, cached, err := repo.RemoteTrackingBranchSHA(defaultBranch)
-		if err != nil {
-			return "", err
-		}
-		if fetchErr == nil && cached {
-			return "origin/" + defaultBranch, nil
-		}
-		if cached {
-			warn(fmt.Sprintf("could not fetch %s (%v); starting from the cached origin/%s", defaultBranch, fetchErr, defaultBranch))
-			return "origin/" + defaultBranch, nil
-		}
-		if fetchErr != nil {
-			warn(fmt.Sprintf("could not fetch %s: %v", defaultBranch, fetchErr))
-		}
-	}
-	if _, ok, err := repo.ResolveCommit("HEAD"); err != nil {
-		return "", err
-	} else if !ok {
-		return "", fmt.Errorf("the repository has no commits to start a branch from")
-	}
-	warn("no origin default branch is available; starting from HEAD")
-	return "HEAD", nil
 }

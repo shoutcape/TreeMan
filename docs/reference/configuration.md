@@ -24,7 +24,7 @@ post_create = ["pnpm generate", "git status --short"]
 update_gitignore = true
 ```
 
-When `true`, TreeMan appends the resolved internal worktree directory to the root `.gitignore` the first time a worktree is created (idempotent - no duplicate entries). The default entry remains `.worktrees/`. External directories need no repository ignore entry, so TreeMan does not add one. Defaults to `false`.
+When `true`, TreeMan appends the resolved internal worktree directory to the root `.gitignore` the first time a worktree is created (idempotent - no duplicate entries). An internal directory named `.worktrees` gets the entry `.worktrees/`. The default directory is outside the repository, so it gets no entry. External directories need no repository ignore entry, so TreeMan does not add one. Defaults to `false`.
 
 ## `worktree_dir`
 
@@ -32,7 +32,9 @@ When `true`, TreeMan appends the resolved internal worktree directory to the roo
 worktree_dir = "~/worktrees/{repo}"
 ```
 
-`worktree_dir` selects the parent directory for newly created worktrees. TreeMan appends the branch slug, and a collision suffix when needed. The default is `.worktrees` inside the main worktree.
+`worktree_dir` selects the parent directory for newly created worktrees. TreeMan appends the branch slug, and a collision suffix when needed. The default is a `<project>-worktrees` directory beside the main worktree, for example `../my-project-worktrees`. Set `worktree_dir = ".worktrees"` to keep worktrees inside the main worktree.
+
+The `--worktree-dir <dir>` flag on `create`, `branch`, and `review` overrides this value for one command. A relative flag value resolves from the current directory, not from the main worktree root. The flag wins over `worktree_dir`.
 
 Relative values resolve from the main worktree root, including when TreeMan is run from a linked worktree. Absolute paths and a leading `~/` are supported. `{repo}` expands to the main worktree directory name. No other placeholder is supported; `{branch}`, unknown placeholders, malformed braces, and forms such as `~other/path` are rejected.
 

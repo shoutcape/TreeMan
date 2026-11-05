@@ -47,7 +47,7 @@ TreeMan keeps Git worktrees as the foundation. It can run the project setup that
 tm feature/login
 ```
 
-TreeMan fetches the default branch, creates `feature/login`, and creates its worktree at `.worktrees/feature-login` under the main worktree. Set `worktree_dir` in `.treeman.toml` to use another internal or external parent directory.
+TreeMan fetches the default branch, creates `feature/login`, and creates its worktree at `../my-project-worktrees/feature-login`, beside the project directory. Set `worktree_dir` in `.treeman.toml` to use another parent directory, or pass `--worktree-dir <dir>` to `create`, `branch`, or `review` to choose one for a single command. Existing worktrees keep their paths.
 
 After creation, TreeMan performs these steps in order:
 
@@ -187,7 +187,6 @@ Use `treeman list --json` for machine-readable worktree state and `treeman docto
 | `treeman hooks approvals list`      | None                             | List saved post-create hook approvals        |
 | `treeman hooks approvals revoke <id>` | None                           | Revoke one exact hook approval ID             |
 | `treeman theme`                     | None                             | Select a terminal color theme                |
-| `treeman claude install`            | None                             | Add TreeMan worktree hooks to Claude Code    |
 | `treeman version`                   | None                             | Print build data                             |
 
 Shell integration uses paths printed by native commands to change the current shell directory.
@@ -196,13 +195,11 @@ Read [Getting Started](docs/getting-started.md) and the [Command Reference](docs
 
 ## Agents
 
-Install the TreeMan Agent Skill for OpenCode, Claude Code, Codex, and other supported agents:
+Install the TreeMan Agent Skill for OpenCode, Codex, and other supported agents:
 
 ```bash
 npx skills add shoutcape/TreeMan --skill treeman -g -a opencode
 ```
-
-Run `treeman claude install` to let Claude Code make its worktrees with TreeMan. This includes worktrees for `claude --worktree` and for subagents.
 
 Read [Use TreeMan with agents](docs/integrations/agents.md) for installation and safety rules.
 
